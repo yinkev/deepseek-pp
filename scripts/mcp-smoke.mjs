@@ -76,9 +76,9 @@ try {
   assert.deepEqual(injectable.map((tool) => tool.name), ['echo']);
 
   const rendered = renderToolSchemas(injectable);
-  assert.match(rendered, /mcp_mock_echo/);
-  assert.match(rendered, /<mcp_mock_echo>/);
-  assert.match(rendered, /Invalid formats: <invoke name="mcp_mock_echo">/);
+  assert.match(rendered, /Accepted tag names: mcp_mock_echo, echo/);
+  assert.match(rendered, /<echo>/);
+  assert.match(rendered, /Invalid formats: <invoke name="echo">/);
   assert.doesNotMatch(rendered, /mcp_mock_blocked/);
   assert.doesNotMatch(rendered, /"type":"function"/);
 
@@ -88,6 +88,18 @@ try {
   assert.equal(calls[0].name, 'echo');
   assert.deepEqual(calls[0].payload, { text: 'hello' });
   assert.equal(stripToolCalls(responseText, injectable).trim(), 'Before  After');
+
+  const shortResponseText = 'Before <echo>{"text":"short"}</echo> After';
+  const shortCalls = extractToolCalls(shortResponseText, injectable);
+  assert.equal(shortCalls.length, 1);
+  assert.equal(shortCalls[0].name, 'echo');
+  assert.deepEqual(shortCalls[0].payload, { text: 'short' });
+  assert.equal(stripToolCalls(shortResponseText, injectable).trim(), 'Before  After');
+
+  const badPathText = String.raw`<echo>{"path":"D:\ai project\deepseek-pp-main"}</echo>`;
+  const badPathCalls = extractToolCalls(badPathText, injectable);
+  assert.equal(badPathCalls.length, 1);
+  assert.equal(badPathCalls[0].parseError.code, 'tool_call_json_invalid');
 
   const genericWrapperText = '<tool_call>{"name":"mcp_mock_echo","arguments":{"text":"hello"}}</tool_call>';
   assert.equal(extractToolCalls(genericWrapperText, injectable).length, 0);
@@ -333,17 +345,24 @@ function applyMcpToolPolicy(tools, config) {
 }
 
 function renderToolSchemas(descriptors) {
-  return descriptors.map((descriptor) => [
-    `### Tool ${descriptor.invocationName}`,
-    `Title: ${descriptor.title}`,
-    `Description: ${descriptor.description}`,
-    `Valid call format for ${descriptor.invocationName}:`,
-    `<${descriptor.invocationName}>`,
-    JSON.stringify(createExamplePayload(descriptor), null, 2),
-    `</${descriptor.invocationName}>`,
-    `Invalid formats: <invoke name="${descriptor.invocationName}">...</invoke>, <tool_call>...</tool_call>`,
-    `Parameters JSON Schema: ${JSON.stringify(descriptor.inputSchema)}`,
-  ].join('\n')).join('\n\n');
+  const catalog = createToolInvocationCatalog(descriptors);
+  return descriptors.map((descriptor) => {
+    const names = catalog.namesById.get(descriptor.id) ?? [descriptor.invocationName];
+    const trimmedName = descriptor.name.trim();
+    const preferred = (trimmedName && names.includes(trimmedName)) ? trimmedName : (names[0] ?? descriptor.invocationName);
+    return [
+      `### Tool ${preferred}`,
+      `Title: ${descriptor.title}`,
+      `Description: ${descriptor.description}`,
+      names.length > 1 ? `Accepted tag names: ${names.join(', ')}` : '',
+      `Valid call format for ${preferred}:`,
+      `<${preferred}>`,
+      JSON.stringify(createExamplePayload(descriptor), null, 2),
+      `</${preferred}>`,
+      `Invalid formats: <invoke name="${preferred}">...</invoke>, <tool_call>...</tool_call>`,
+      `Parameters JSON Schema: ${JSON.stringify(descriptor.inputSchema)}`,
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
 }
 
 function createExamplePayload(descriptor) {
@@ -373,27 +392,40 @@ function exampleValue(schema) {
 }
 
 function extractToolCalls(text, descriptors) {
-  const catalog = new Map(descriptors.map((descriptor) => [descriptor.invocationName, descriptor]));
-  const names = [...catalog.keys()].map(escapeRegExp).join('|');
+  const catalog = createToolInvocationCatalog(descriptors);
+  if (catalog.byName.size === 0) return [];
+  const names = [...catalog.byName.keys()].map(escapeRegExp).join('|');
   const regex = new RegExp(`<(${names})>\\s*([\\s\\S]*?)\\s*<\\/\\1>`, 'g');
   const calls = [];
   let match;
   while ((match = regex.exec(text))) {
-    const descriptor = catalog.get(match[1]);
+    const descriptor = catalog.byName.get(match[1]);
+    let payload = {};
+    let parseError;
+    try {
+      payload = JSON.parse(match[2]);
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        parseError = { code: 'tool_call_payload_invalid', message: 'Tool call body must be a JSON object.', retryable: false };
+        payload = {};
+      }
+    } catch (error) {
+      parseError = { code: 'tool_call_json_invalid', message: error instanceof Error ? error.message : String(error), retryable: false };
+    }
     calls.push({
       descriptorId: descriptor.id,
       provider: descriptor.provider,
       name: descriptor.name,
       invocationName: descriptor.invocationName,
-      payload: JSON.parse(match[2]),
+      payload,
       raw: match[0],
+      parseError,
     });
   }
   return calls;
 }
 
 function stripToolCalls(text, descriptors) {
-  const names = descriptors.map((descriptor) => escapeRegExp(descriptor.invocationName)).join('|');
+  const names = createToolInvocationCatalog(descriptors).names.map(escapeRegExp).join('|');
   return text.replace(new RegExp(`<(${names})>\\s*[\\s\\S]*?\\s*<\\/\\1>`, 'g'), '');
 }
 
@@ -414,6 +446,42 @@ function renderToolBlockSnapshot(executions) {
 
 function createMcpInvocationName(serverId, toolName) {
   return `mcp_${sanitizeName(serverId)}_${sanitizeName(toolName)}`.slice(0, 96);
+}
+
+function createToolInvocationCatalog(descriptors) {
+  const byName = new Map();
+  const namesById = new Map();
+  const toolNameCounts = new Map();
+  for (const descriptor of descriptors) {
+    const name = descriptor.name.trim();
+    if (!isValidToolTagName(name)) continue;
+    toolNameCounts.set(name, (toolNameCounts.get(name) ?? 0) + 1);
+  }
+  for (const descriptor of descriptors) {
+    const invocationName = descriptor.invocationName.trim();
+    const name = descriptor.name.trim();
+    const accepted = [];
+    addAcceptedName(byName, accepted, invocationName, descriptor);
+    if (
+      name !== invocationName &&
+      isValidToolTagName(name) &&
+      toolNameCounts.get(name) === 1
+    ) {
+      addAcceptedName(byName, accepted, name, descriptor);
+    }
+    namesById.set(descriptor.id, accepted);
+  }
+  return { byName, names: [...byName.keys()], namesById };
+}
+
+function addAcceptedName(byName, accepted, name, descriptor) {
+  if (!isValidToolTagName(name) || byName.has(name)) return;
+  byName.set(name, descriptor);
+  accepted.push(name);
+}
+
+function isValidToolTagName(value) {
+  return /^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(value);
 }
 
 function sanitizeName(value) {

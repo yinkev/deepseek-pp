@@ -1,4 +1,4 @@
-import type { ToolCall } from '../types';
+import type { ToolCall, ToolError } from '../types';
 import {
   createToolCallFromInvocation,
   createToolInvocationCatalog,
@@ -28,17 +28,36 @@ function extractXmlToolCalls(text: string, catalog: ToolInvocationCatalog): Tool
   while ((match = regex.exec(text)) !== null) {
     const invocationName = match[1];
     const body = match[2].trim();
-    let payload: Record<string, unknown> = {};
+    const raw = match[0];
+    let payload: Record<string, unknown>;
     try {
       const parsed = JSON.parse(body);
-      if (parsed && typeof parsed === 'object') {
-        payload = parsed;
+      if (!isToolPayload(parsed)) {
+        calls.push(createToolCallFromInvocation(invocationName, {}, raw, catalog, {
+          parseError: createToolParseError(
+            'tool_call_payload_invalid',
+            invocationName,
+            'Tool call body must be a JSON object.',
+          ),
+        }));
+        continue;
       }
-    } catch {
-      // body wasn't JSON; skip
+      payload = parsed;
+    } catch (err) {
+      calls.push(createToolCallFromInvocation(invocationName, {}, raw, catalog, {
+        parseError: createToolParseError(
+          'tool_call_json_invalid',
+          invocationName,
+          [
+            'Tool call body is not valid JSON.',
+            'Use double quotes for strings and escape backslashes in local file paths, for example "D:\\\\project\\\\file.txt" or "D:/project/file.txt".',
+            err instanceof Error ? err.message : String(err),
+          ].join(' '),
+        ),
+      }));
       continue;
     }
-    calls.push(createToolCallFromInvocation(invocationName, payload, match[0], catalog));
+    calls.push(createToolCallFromInvocation(invocationName, payload, raw, catalog));
   }
 
   return calls;
@@ -104,8 +123,26 @@ function replaceMatchWithSummary(match: string, catalog: ToolInvocationCatalog):
   if (calls.length === 0) return '';
   const lines = calls.map(call => {
     const name = call.name;
+    if (call.parseError) return `• ${getToolInvocationLabel(name, catalog)}：格式错误`;
     const detail = (call.payload as any).name || (call.payload as any).content || (call.payload as any).id || '';
     return `• ${getToolInvocationLabel(name, catalog)}${detail ? '：' + detail : ''}`;
   });
-  return '\n\n---\n🔧 已执行工具（' + calls.length + '次）\n' + lines.join('\n') + '\n---';
+  const executedCount = calls.filter(call => !call.parseError).length;
+  const header = executedCount === calls.length
+    ? `🔧 已执行工具（${calls.length}次）`
+    : `🔧 已执行工具（${executedCount}次，${calls.length - executedCount}次格式错误）`;
+  return '\n\n---\n' + header + '\n' + lines.join('\n') + '\n---';
+}
+
+function isToolPayload(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function createToolParseError(code: string, invocationName: string, message: string): ToolError {
+  return {
+    code,
+    message,
+    retryable: false,
+    details: { invocationName },
+  };
 }
