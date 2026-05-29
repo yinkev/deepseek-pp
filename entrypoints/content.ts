@@ -14,6 +14,7 @@ import type {
   ToolExecutionRecord,
 } from '../core/types';
 import { normalizePetConfig } from '../core/pet/config';
+import { pickPetLine, type PetState } from '../core/pet/lines';
 import { DEFAULT_TOOL_DESCRIPTORS, createToolInvocationCatalog } from '../core/tool/invocation';
 import { normalizeBackgroundConfig } from '../core/background/config';
 import { stripToolCalls } from '../core/interceptor/tool-parser';
@@ -64,8 +65,18 @@ const PET_HEIGHT_RATIO = 1;
 const PET_FEEDBACK_DELAY_MS = 1400;
 const PET_SLEEP_DELAY_MS = 12000;
 const PET_SPRITE_PATH = 'pet/deepseek-whale-pet-states.png';
-
-type PetState = 'idle' | 'thinking' | 'speaking' | 'working' | 'confused' | 'success' | 'error' | 'sleepy';
+const DEEPSEEK_POW_WASM_PATH = 'deepseek/sha3_wasm_bg.wasm';
+const PET_BUBBLE_VISIBLE_MS = 6000;
+const PET_BUBBLE_REPEAT_MIN_MS = 8000;
+const PET_BUBBLE_REPEAT_MAX_MS = 12000;
+const PET_BUBBLE_RECENT_LIMIT = 3;
+// 这些状态会在长时间停留时周期性地轮播台词；其余状态只在进入时说一句。
+const PET_BUBBLE_LOOPING_STATES: ReadonlySet<PetState> = new Set<PetState>([
+  'idle',
+  'thinking',
+  'speaking',
+  'working',
+]);
 
 interface PetDragState {
   pointerId: number;
@@ -112,6 +123,12 @@ let petIdleTimer: ReturnType<typeof setTimeout> | null = null;
 let petSleepTimer: ReturnType<typeof setTimeout> | null = null;
 let petDragState: PetDragState | null = null;
 let petResizeListenerInstalled = false;
+let petBubbleEl: HTMLElement | null = null;
+let petBubbleTextEl: HTMLElement | null = null;
+let petBubbleHideTimer: ReturnType<typeof setTimeout> | null = null;
+let petBubbleRepeatTimer: ReturnType<typeof setTimeout> | null = null;
+let petBubbleState: PetState | null = null;
+const petRecentLines: string[] = [];
 let inlineAgentContainer: HTMLElement | null = null;
 let inlineAgentCurrentStep: HTMLElement | null = null;
 let inlineAgentLoopId: string | null = null;
@@ -632,6 +649,7 @@ function startInlineAgentIfNeeded(
       refFileIds: complete.promptOptions.refFileIds,
     },
     toolDescriptors: currentToolDescriptors.filter((d) => d.provider?.kind === 'mcp'),
+    powWasmUrl: chrome.runtime.getURL(DEEPSEEK_POW_WASM_PATH),
   };
 
   injectInlineAgentStyles();
@@ -704,9 +722,11 @@ function handleAgentStepStarted(data: { loopId: string; stepIndex: number }): vo
 
 function handleAgentStreamChunk(msg: InlineAgentStreamChunkMsg): void {
   if (msg.loopId !== inlineAgentLoopId || !inlineAgentCurrentStep) return;
-  updateStepStreamText(inlineAgentCurrentStep, msg.fullText);
+  const previousText = getInlineAgentStepText(inlineAgentCurrentStep);
+  const nextText = msg.fullText.trim() || previousText;
+  updateStepStreamText(inlineAgentCurrentStep, nextText);
   updateActiveInlineAgentTrace((trace) => updateInlineAgentTraceStep(trace, msg.stepIndex, {
-    text: msg.fullText,
+    text: nextText,
     status: 'streaming',
     collapsed: false,
   }));
@@ -767,7 +787,7 @@ function handleAgentLoopError(msg: InlineAgentLoopErrorMsg): void {
     updateStepStatus(inlineAgentCurrentStep, 'error', msg.error);
   }
 
-  const footer = createAgentFooter(msg.stepIndex, 0, true);
+  const footer = createAgentFooter(msg.stepIndex, msg.totalTools, true, msg.error);
   inlineAgentContainer.appendChild(footer);
   updateActiveInlineAgentTrace((trace) => ({
     ...trace,
@@ -1441,27 +1461,19 @@ async function executeToolCall(call: ToolCall): Promise<ToolCardResult> {
   }
 
   const result = await sendRuntimeToolCallMessage(call);
-  if (result && typeof result.ok === 'boolean' && typeof result.summary === 'string') {
-    return {
-      ok: result.ok,
-      summary: result.summary,
-      detail: result.detail,
-      output: result.output,
-      truncated: result.truncated,
-      error: result.error,
-    };
-  }
+  const normalized = normalizeRuntimeToolCallResult(result);
+  if (normalized) return normalized;
   if (!extensionContextValid) {
     return { ok: false, summary: '执行失败', detail: '扩展已重新加载，请刷新当前 DeepSeek 页面后重试。' };
   }
-  return { ok: false, summary: '执行失败', detail: '后台工具执行返回无效结果' };
+  return createInvalidRuntimeToolResult(result);
 }
 
-async function sendRuntimeToolCallMessage(call: ToolCall): Promise<ToolCardResult | undefined> {
+async function sendRuntimeToolCallMessage(call: ToolCall): Promise<unknown> {
   if (!hasLiveExtensionContext()) return undefined;
 
   try {
-    return await chrome.runtime.sendMessage({ type: 'EXECUTE_TOOL_CALL', payload: call }) as ToolCardResult;
+    return await chrome.runtime.sendMessage({ type: 'EXECUTE_TOOL_CALL', payload: call });
   } catch (error) {
     if (isExtensionInvalidatedError(error)) {
       invalidateExtensionContext();
@@ -1479,6 +1491,50 @@ async function sendRuntimeToolCallMessage(call: ToolCall): Promise<ToolCardResul
       },
     };
   }
+}
+
+function normalizeRuntimeToolCallResult(value: unknown): ToolCardResult | null {
+  if (!value || typeof value !== 'object') return null;
+  const result = value as Partial<ToolCardResult>;
+  if (typeof result.ok !== 'boolean' || typeof result.summary !== 'string') return null;
+  return {
+    ok: result.ok,
+    summary: result.summary,
+    detail: result.detail,
+    output: result.output,
+    truncated: result.truncated,
+    error: result.error,
+  };
+}
+
+function createInvalidRuntimeToolResult(value: unknown): ToolCardResult {
+  const missing = value === undefined || value === null;
+  const message = missing
+    ? 'Background did not return a tool result.'
+    : `Background returned an invalid tool result: ${previewUnknown(value)}`;
+  return {
+    ok: false,
+    summary: '后台工具执行失败',
+    detail: missing
+      ? '后台没有返回工具执行结果。请刷新当前 DeepSeek 页面后重试；如果仍失败，在 MCP 页重新测试 Shell Local。'
+      : `后台返回的工具结果结构无效：${previewUnknown(value)}`,
+    error: {
+      code: missing ? 'runtime_tool_result_missing' : 'runtime_tool_result_invalid',
+      message,
+      retryable: true,
+    },
+  };
+}
+
+function previewUnknown(value: unknown): string {
+  try {
+    const text = JSON.stringify(value);
+    if (text) return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+  } catch {
+    // Fall through to String(value).
+  }
+  const text = String(value);
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
 }
 
 // --- Tool execution collapsible block (matches official "已思考" style) ---
@@ -2372,17 +2428,25 @@ function ensurePet(): HTMLElement {
   host.addEventListener('pointermove', handlePetPointerMove);
   host.addEventListener('pointerup', handlePetPointerUp);
   host.addEventListener('pointercancel', handlePetPointerCancel);
+  host.addEventListener('pointerenter', handlePetPointerEnter);
   document.body.appendChild(host);
   petHostEl = host;
+  petBubbleEl = host.querySelector<HTMLElement>('.dpp-pet-bubble');
+  petBubbleTextEl = host.querySelector<HTMLElement>('.dpp-pet-bubble-text');
   return host;
 }
 
 function removePet() {
   clearPetIdleTimer();
   clearPetSleepTimer();
+  hidePetBubble();
   petDragState = null;
+  petBubbleState = null;
+  petRecentLines.length = 0;
   petHostEl?.remove();
   petHostEl = null;
+  petBubbleEl = null;
+  petBubbleTextEl = null;
   uninstallPetResizeListener();
 }
 
@@ -2390,7 +2454,19 @@ function setPetState(state: PetState) {
   if (!currentPetConfig?.enabled || !petHostEl?.isConnected) return;
   clearPetIdleTimer();
   clearPetSleepTimer();
+  applyPetState(state);
+}
+
+// 所有状态切换的唯一出口：写 dataset 并在状态真正变化时冒一句台词。
+// （updatePetFromTokenSpeed 会在流式输出时高频调用 setPetState，
+//  靠这里的变化检测避免气泡被反复重置。）
+function applyPetState(state: PetState) {
+  if (!petHostEl?.isConnected) return;
+  const previous = petHostEl.dataset.state as PetState | undefined;
   petHostEl.dataset.state = state;
+  if (state !== previous) {
+    triggerPetBubble(state);
+  }
 }
 
 function schedulePetIdle(delay = PET_IDLE_DELAY_MS) {
@@ -2399,7 +2475,7 @@ function schedulePetIdle(delay = PET_IDLE_DELAY_MS) {
   clearPetSleepTimer();
   petIdleTimer = setTimeout(() => {
     if (petHostEl?.isConnected) {
-      petHostEl.dataset.state = 'idle';
+      applyPetState('idle');
       schedulePetSleep();
     }
     petIdleTimer = null;
@@ -2411,7 +2487,7 @@ function schedulePetSleep() {
   clearPetSleepTimer();
   petSleepTimer = setTimeout(() => {
     if (petHostEl?.isConnected && petHostEl.dataset.state === 'idle') {
-      petHostEl.dataset.state = 'sleepy';
+      applyPetState('sleepy');
     }
     petSleepTimer = null;
   }, PET_SLEEP_DELAY_MS);
@@ -2428,6 +2504,68 @@ function clearPetSleepTimer() {
   if (petSleepTimer) {
     clearTimeout(petSleepTimer);
     petSleepTimer = null;
+  }
+}
+
+// 进入某状态时冒一句台词；对会轮播的状态再排程下一句。
+function triggerPetBubble(state: PetState) {
+  if (!currentPetConfig?.enabled || !petHostEl?.isConnected) return;
+  if (petDragState) return; // 拖动期间保持安静
+  clearPetBubbleRepeatTimer();
+  petBubbleState = state;
+  showPetBubble(pickPetLine(state, petRecentLines));
+  if (PET_BUBBLE_LOOPING_STATES.has(state)) {
+    armPetBubbleRepeat();
+  }
+}
+
+function armPetBubbleRepeat() {
+  clearPetBubbleRepeatTimer();
+  const span = PET_BUBBLE_REPEAT_MAX_MS - PET_BUBBLE_REPEAT_MIN_MS;
+  const delay = PET_BUBBLE_REPEAT_MIN_MS + Math.floor(Math.random() * (span + 1));
+  petBubbleRepeatTimer = setTimeout(() => {
+    petBubbleRepeatTimer = null;
+    const state = petBubbleState;
+    if (!state || !petHostEl?.isConnected || petDragState) return;
+    if (petHostEl.dataset.state !== state) return; // 状态已变，交给新状态接管
+    showPetBubble(pickPetLine(state, petRecentLines));
+    armPetBubbleRepeat();
+  }, delay);
+}
+
+function showPetBubble(line: string) {
+  if (!line || !petBubbleEl || !petBubbleTextEl) return;
+  rememberPetLine(line);
+  petBubbleTextEl.textContent = line;
+  petBubbleEl.dataset.visible = 'true';
+  if (petBubbleHideTimer) clearTimeout(petBubbleHideTimer);
+  petBubbleHideTimer = setTimeout(() => {
+    petBubbleHideTimer = null;
+    if (petBubbleEl) petBubbleEl.dataset.visible = 'false';
+  }, PET_BUBBLE_VISIBLE_MS);
+}
+
+// 立刻收起气泡并停止轮播（拖动 / 悬停 / 移除时调用）。
+function hidePetBubble() {
+  clearPetBubbleRepeatTimer();
+  if (petBubbleHideTimer) {
+    clearTimeout(petBubbleHideTimer);
+    petBubbleHideTimer = null;
+  }
+  if (petBubbleEl) petBubbleEl.dataset.visible = 'false';
+}
+
+function clearPetBubbleRepeatTimer() {
+  if (petBubbleRepeatTimer) {
+    clearTimeout(petBubbleRepeatTimer);
+    petBubbleRepeatTimer = null;
+  }
+}
+
+function rememberPetLine(line: string) {
+  petRecentLines.push(line);
+  while (petRecentLines.length > PET_BUBBLE_RECENT_LIMIT) {
+    petRecentLines.shift();
   }
 }
 
@@ -2506,6 +2644,7 @@ function handlePetPointerDown(event: PointerEvent) {
     moved: false,
   };
   petHostEl.dataset.dragging = 'true';
+  hidePetBubble();
   petHostEl.setPointerCapture(event.pointerId);
   event.preventDefault();
   event.stopPropagation();
@@ -2537,6 +2676,11 @@ function handlePetPointerCancel(event: PointerEvent) {
   finishPetDrag(event);
 }
 
+// 鼠标移入宠物时收起气泡，让位给可能的悬停交互，且避免遮挡。
+function handlePetPointerEnter() {
+  hidePetBubble();
+}
+
 function finishPetDrag(event: PointerEvent) {
   if (!petDragState || event.pointerId !== petDragState.pointerId || !petHostEl?.isConnected) return;
 
@@ -2555,6 +2699,13 @@ function finishPetDrag(event: PointerEvent) {
     });
     currentPetConfig = config;
     void sendRuntimeMessage({ type: 'SAVE_PET', payload: config });
+  }
+
+  // 拖动结束后，为会轮播的状态重新排程台词（拖动期间已被 hidePetBubble 静音）。
+  const state = petHostEl.dataset.state as PetState | undefined;
+  if (state && PET_BUBBLE_LOOPING_STATES.has(state)) {
+    petBubbleState = state;
+    armPetBubbleRepeat();
   }
 
   event.preventDefault();
@@ -2735,6 +2886,82 @@ function injectPetStyles() {
       75% { transform: translateX(4px); }
     }
 
+    #${PET_HOST_ID} .dpp-pet-bubble {
+      position: absolute;
+      bottom: calc(100% - 24px);
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      z-index: 1;
+      max-width: 200px;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-bubble-text {
+      display: inline-block;
+      position: relative;
+      max-width: 200px;
+      box-sizing: border-box;
+      padding: 5px 11px;
+      border-radius: 13px;
+      border: 1px solid rgba(64, 110, 240, 0.45);
+      background: rgba(255, 255, 255, 0.94);
+      -webkit-backdrop-filter: blur(8px);
+      backdrop-filter: blur(8px);
+      box-shadow: 0 8px 18px rgba(39, 78, 180, 0.18);
+      color: #1d2433;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.4;
+      letter-spacing: 0.2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      opacity: 0;
+      transform: translateY(6px) scale(0.94);
+      transition: opacity 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.3, 0.64, 1);
+      will-change: opacity, transform;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-bubble-text::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: rgba(255, 255, 255, 0.94);
+      filter: drop-shadow(0 2px 1px rgba(39, 78, 180, 0.12));
+    }
+
+    #${PET_HOST_ID} .dpp-pet-bubble[data-visible='true'] .dpp-pet-bubble-text {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    #${PET_HOST_ID}[data-motion='true'] .dpp-pet-bubble[data-visible='true'] .dpp-pet-bubble-text {
+      animation: dpp-pet-bubble-float 3.6s ease-in-out infinite;
+    }
+
+    @keyframes dpp-pet-bubble-float {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-2.5px) scale(1); }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      #${PET_HOST_ID} .dpp-pet-bubble-text {
+        border-color: rgba(120, 156, 255, 0.5);
+        background: rgba(32, 38, 56, 0.92);
+        color: #eef2ff;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+      }
+
+      #${PET_HOST_ID} .dpp-pet-bubble-text::after {
+        border-top-color: rgba(32, 38, 56, 0.92);
+        filter: none;
+      }
+    }
+
     @media (max-width: 720px) {
       #${PET_HOST_ID}:not([data-position='custom']) {
         bottom: 76px !important;
@@ -2756,6 +2983,9 @@ function injectPetStyles() {
 
 function createPetMarkup(): string {
   return `
+    <div class="dpp-pet-bubble" data-visible="false">
+      <span class="dpp-pet-bubble-text"></span>
+    </div>
     <div class="dpp-pet-motion">
       <div class="dpp-pet-sprite"></div>
     </div>

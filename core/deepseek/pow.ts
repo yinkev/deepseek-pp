@@ -1,5 +1,3 @@
-import { sha3_256 } from 'js-sha3';
-
 export interface PowChallenge {
   algorithm: string;
   challenge: string;
@@ -19,31 +17,51 @@ export interface PowAnswer {
 }
 
 const SUPPORTED_ALGORITHM = 'DeepSeekHashV1';
-const POW_YIELD_INTERVAL = 2_000;
+export const DEEPSEEK_POW_WASM_PATH = 'deepseek/sha3_wasm_bg.wasm';
 
-export async function solvePowChallengeLocally(challenge: PowChallenge): Promise<PowAnswer> {
+interface DeepSeekPowWasmExports {
+  memory: WebAssembly.Memory;
+  wasm_solve(
+    retPtr: number,
+    challengePtr: number,
+    challengeLen: number,
+    prefixPtr: number,
+    prefixLen: number,
+    difficulty: number,
+  ): void;
+  __wbindgen_add_to_stack_pointer(offset: number): number;
+  __wbindgen_export_0(size: number, align: number): number;
+}
+
+interface WasmStringAllocation {
+  ptr: number;
+  len: number;
+}
+
+let powWasmPromise: Promise<DeepSeekPowWasmExports> | null = null;
+const textEncoder = new TextEncoder();
+
+export async function solvePowChallengeLocally(
+  challenge: PowChallenge,
+  wasmUrl?: string,
+): Promise<PowAnswer> {
   validatePowChallenge(challenge);
 
-  const target = challenge.challenge.toLowerCase();
   const prefix = `${challenge.salt}_${challenge.expireAt}_`;
+  const answer = solvePowWithWasm(
+    await loadDeepSeekPowWasm(wasmUrl),
+    challenge.challenge.toLowerCase(),
+    prefix,
+    challenge.difficulty,
+  );
 
-  for (let answer = 0; answer < challenge.difficulty; answer++) {
-    if (sha3_256(`${prefix}${answer}`) === target) {
-      return {
-        algorithm: challenge.algorithm,
-        challenge: challenge.challenge,
-        salt: challenge.salt,
-        answer,
-        signature: challenge.signature,
-      };
-    }
-
-    if (answer > 0 && answer % POW_YIELD_INTERVAL === 0) {
-      await yieldToBrowser();
-    }
-  }
-
-  throw new Error(`No DeepSeek PoW solution found before difficulty ${challenge.difficulty}.`);
+  return {
+    algorithm: challenge.algorithm,
+    challenge: challenge.challenge,
+    salt: challenge.salt,
+    answer,
+    signature: challenge.signature,
+  };
 }
 
 function validatePowChallenge(challenge: PowChallenge) {
@@ -51,7 +69,7 @@ function validatePowChallenge(challenge: PowChallenge) {
     throw new Error(`Unsupported DeepSeek PoW algorithm: ${challenge.algorithm}`);
   }
 
-  if (!/^[0-9a-f]+$/i.test(challenge.challenge) || challenge.challenge.length % 2 !== 0) {
+  if (!/^[0-9a-f]{64}$/i.test(challenge.challenge)) {
     throw new Error('Invalid DeepSeek PoW challenge digest.');
   }
 
@@ -64,6 +82,67 @@ function validatePowChallenge(challenge: PowChallenge) {
   }
 }
 
-function yieldToBrowser(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
+function solvePowWithWasm(
+  wasm: DeepSeekPowWasmExports,
+  target: string,
+  prefix: string,
+  difficulty: number,
+): number {
+  const retPtr = wasm.__wbindgen_add_to_stack_pointer(-16);
+  const challengeAllocation = writeWasmString(wasm, target);
+  const prefixAllocation = writeWasmString(wasm, prefix);
+  // wasm_solve is generated from owned Rust String parameters; the callee releases these inputs.
+
+  try {
+    wasm.wasm_solve(
+      retPtr,
+      challengeAllocation.ptr,
+      challengeAllocation.len,
+      prefixAllocation.ptr,
+      prefixAllocation.len,
+      difficulty,
+    );
+
+    const view = new DataView(wasm.memory.buffer);
+    const status = view.getInt32(retPtr, true);
+    const answer = view.getFloat64(retPtr + 8, true);
+    if (status !== 1 || !Number.isSafeInteger(answer) || answer < 0) {
+      throw new Error(`No DeepSeek PoW solution found before difficulty ${difficulty}.`);
+    }
+
+    return answer;
+  } finally {
+    wasm.__wbindgen_add_to_stack_pointer(16);
+  }
+}
+
+async function loadDeepSeekPowWasm(wasmUrl?: string): Promise<DeepSeekPowWasmExports> {
+  powWasmPromise ??= (async () => {
+    const response = await fetch(getDeepSeekPowWasmUrl(wasmUrl));
+    if (!response.ok) {
+      throw new Error(`Failed to load DeepSeek PoW WASM: ${response.status} ${response.statusText}`);
+    }
+
+    const { instance } = await WebAssembly.instantiate(await response.arrayBuffer(), {});
+    return instance.exports as unknown as DeepSeekPowWasmExports;
+  })();
+
+  return powWasmPromise;
+}
+
+function getDeepSeekPowWasmUrl(wasmUrl?: string): string {
+  if (wasmUrl) return wasmUrl;
+
+  if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+    return chrome.runtime.getURL(DEEPSEEK_POW_WASM_PATH);
+  }
+
+  throw new Error('Chrome runtime URL resolver is unavailable for DeepSeek PoW WASM.');
+}
+
+function writeWasmString(wasm: DeepSeekPowWasmExports, value: string): WasmStringAllocation {
+  const bytes = textEncoder.encode(value);
+  const ptr = wasm.__wbindgen_export_0(bytes.length, 1);
+  new Uint8Array(wasm.memory.buffer).set(bytes, ptr);
+  return { ptr, len: bytes.length };
 }

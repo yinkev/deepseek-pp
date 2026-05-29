@@ -18,6 +18,8 @@ import {
 import {
   INLINE_AGENT_MAX_NUDGES,
   INLINE_AGENT_MAX_STEPS,
+  INLINE_AGENT_REQUEST_DELAY_MAX_MS,
+  INLINE_AGENT_REQUEST_DELAY_MIN_MS,
   INLINE_AGENT_STEP_TIMEOUT_MS,
   type InlineAgentLoopCompleteMsg,
   type InlineAgentLoopErrorMsg,
@@ -42,6 +44,7 @@ export async function runInlineAgentLoop(
 ): Promise<void> {
   const { post, executeTool, signal } = deps;
   const { loopId, chatSessionId, toolDescriptors, promptOptions } = payload;
+  const { powWasmUrl } = payload;
   const parsingInput: ToolParsingInput = { descriptors: toolDescriptors };
 
   let parentMessageId: number | null = payload.parentMessageId;
@@ -52,12 +55,16 @@ export async function runInlineAgentLoop(
 
   try {
     const clientHeaders = createClientHeaders();
-    let powHeaders = await createPowHeaders(clientHeaders);
 
     for (let step = 0; step < INLINE_AGENT_MAX_STEPS; step++) {
       if (signal.aborted) break;
+      if (step > 0) {
+        await waitBetweenDeepSeekRequests(signal);
+        if (signal.aborted) break;
+      }
 
       const prompt = buildContinuationPrompt(payload.originalPrompt, allExecutions);
+      const powHeaders = await createPowHeaders(clientHeaders, powWasmUrl);
 
       post('AGENT_STEP_STARTED', { loopId, stepIndex: step });
 
@@ -151,8 +158,11 @@ export async function runInlineAgentLoop(
           parentMessageId: turn.responseMessageId,
         };
 
-        powHeaders = await createPowHeaders(clientHeaders);
-        nudgeInput.powHeaders = powHeaders;
+        await waitBetweenDeepSeekRequests(signal);
+        if (signal.aborted) break;
+
+        const nudgePowHeaders = await createPowHeaders(clientHeaders, powWasmUrl);
+        nudgeInput.powHeaders = nudgePowHeaders;
 
         const nudgeTimeout = createStepSignal(signal);
         const nudgeTurn = await submitPromptStreaming(nudgeInput, {
@@ -162,7 +172,7 @@ export async function runInlineAgentLoop(
               loopId,
               stepIndex: step,
               text,
-              fullText: stripped,
+              fullText: stripped || visibleText,
             } satisfies InlineAgentStreamChunkMsg);
           },
         }, nudgeTimeout.signal);
@@ -172,8 +182,13 @@ export async function runInlineAgentLoop(
 
         parentMessageId = nudgeTurn.responseMessageId;
         const nudgeToolCalls = extractToolCalls(nudgeTurn.assistantText, parsingInput);
+        const nudgeVisibleText = stripToolCalls(nudgeTurn.assistantText, parsingInput);
 
         if (nudgeToolCalls.length === 0) {
+          if (!visibleText.trim() && !nudgeVisibleText.trim()) {
+            throw new Error('DeepSeek returned an empty agent continuation after a delayed retry.');
+          }
+
           post('AGENT_STEP_COMPLETE', {
             loopId,
             stepIndex: step,
@@ -197,7 +212,6 @@ export async function runInlineAgentLoop(
         totalSteps = step + 1;
         nudgeCount = 0;
 
-        powHeaders = await createPowHeaders(clientHeaders);
         continue;
       }
 
@@ -215,13 +229,23 @@ export async function runInlineAgentLoop(
       totalSteps = step + 1;
 
       if (signal.aborted) break;
-      powHeaders = await createPowHeaders(clientHeaders);
     }
 
     let finalText = '';
     if (!signal.aborted && totalTools > 0 && totalSteps > 0) {
       try {
-        powHeaders = await createPowHeaders(clientHeaders);
+        await waitBetweenDeepSeekRequests(signal);
+        if (signal.aborted) {
+          post('AGENT_LOOP_COMPLETE', {
+            loopId,
+            totalSteps,
+            totalTools,
+            finalText,
+          } satisfies InlineAgentLoopCompleteMsg);
+          return;
+        }
+
+        const powHeaders = await createPowHeaders(clientHeaders, powWasmUrl);
         const finalizationPrompt = buildFinalizationPrompt(payload.originalPrompt, allExecutions);
         const finalInput: SubmitPromptInput = {
           chatSessionId,
@@ -235,9 +259,14 @@ export async function runInlineAgentLoop(
           powHeaders,
         };
 
-        post('AGENT_STEP_STARTED', { loopId, stepIndex: totalSteps });
+        let finalStepStarted = false;
         const finalTurn = await submitPromptStreaming(finalInput, {
           onTextChunk(_text, fullText) {
+            if (!fullText.trim()) return;
+            if (!finalStepStarted) {
+              post('AGENT_STEP_STARTED', { loopId, stepIndex: totalSteps });
+              finalStepStarted = true;
+            }
             post('AGENT_STREAM_CHUNK', {
               loopId,
               stepIndex: totalSteps,
@@ -248,13 +277,24 @@ export async function runInlineAgentLoop(
         }, signal);
 
         finalText = finalTurn.assistantText;
-        post('AGENT_STEP_COMPLETE', {
-          loopId,
-          stepIndex: totalSteps,
-          responseMessageId: finalTurn.responseMessageId,
-          toolExecutions: [],
-        } satisfies InlineAgentStepCompleteMsg);
-        totalSteps++;
+        if (finalText.trim()) {
+          if (!finalStepStarted) {
+            post('AGENT_STEP_STARTED', { loopId, stepIndex: totalSteps });
+            post('AGENT_STREAM_CHUNK', {
+              loopId,
+              stepIndex: totalSteps,
+              text: finalText,
+              fullText: finalText,
+            } satisfies InlineAgentStreamChunkMsg);
+          }
+          post('AGENT_STEP_COMPLETE', {
+            loopId,
+            stepIndex: totalSteps,
+            responseMessageId: finalTurn.responseMessageId,
+            toolExecutions: [],
+          } satisfies InlineAgentStepCompleteMsg);
+          totalSteps++;
+        }
       } catch {
         // Finalization is best-effort; loop still completes
       }
@@ -280,6 +320,7 @@ export async function runInlineAgentLoop(
     post('AGENT_LOOP_ERROR', {
       loopId,
       stepIndex: totalSteps,
+      totalTools,
       error: err instanceof Error ? err.message : String(err),
     } satisfies InlineAgentLoopErrorMsg);
   }
@@ -297,6 +338,27 @@ async function executeToolCalls(
     results.push(record);
   }
   return results;
+}
+
+function waitBetweenDeepSeekRequests(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  const delay = randomInt(INLINE_AGENT_REQUEST_DELAY_MIN_MS, INLINE_AGENT_REQUEST_DELAY_MAX_MS);
+  return new Promise((resolve) => {
+    const timeout = setTimeout(cleanup, delay);
+    const onAbort = () => cleanup();
+
+    function cleanup() {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function randomInt(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function createStepSignal(parentSignal: AbortSignal): { signal: AbortSignal; clear: () => void } {

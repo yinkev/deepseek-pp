@@ -21,6 +21,7 @@
     "submit:chrome": "wxt submit --chrome-zip dist/deepseek-plus-plus-$npm_package_version-chrome.zip --chrome-publish-target default",
     "compile": "tsc --noEmit",
     "shell:install": "node scripts/install-shell-host.mjs",
+    "smoke:pow": "node scripts/pow-smoke.mjs",
     "smoke:shell": "node scripts/shell-smoke.mjs",
     "smoke:mcp": "node scripts/mcp-smoke.mjs",
     "verify:automation": "node scripts/automation-contract-smoke.mjs",
@@ -30,7 +31,6 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",
     "dexie": "^4.4.2",
-    "js-sha3": "^0.9.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "tailwindcss": "^4.2.4"

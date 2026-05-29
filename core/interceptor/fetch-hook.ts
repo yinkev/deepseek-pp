@@ -1,4 +1,5 @@
 import { DEEPSEEK_API_URL, DPP_MANAGED_AGENT_PROMPT_MARKER, PRESET_REINJECTION_INTERVAL } from '../constants';
+import { rememberDeepSeekClientHeaders } from '../deepseek/adapter';
 import type { Memory, ModelType, SystemPromptPreset, ToolCall, ToolCallRestoreRecord, ToolDescriptor } from '../types';
 import { buildPromptAugmentation, sanitizeInternalPromptText } from '../prompt';
 import { parseSkillCommand } from '../skill/parser';
@@ -123,6 +124,7 @@ function hookFetch() {
       return originalFetch.call(this, input, { ...init, headers: stripBypassHookHeader(init.headers) });
     }
 
+    rememberDeepSeekClientHeaders(init.headers);
     const originalContext = createRequestContext(init.body);
     const modified = modifyRequestBody(init.body);
     const requestBody = modified?.body ?? init.body;
@@ -137,17 +139,27 @@ function hookFetch() {
 
 function hookXHR() {
   const xhrUrls = new WeakMap<XMLHttpRequest, string>();
+  const xhrHeaders = new WeakMap<XMLHttpRequest, Record<string, string>>();
   const origOpen = XMLHttpRequest.prototype.open;
+  const origSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
   const origSend = XMLHttpRequest.prototype.send;
 
   XMLHttpRequest.prototype.open = function (method: string, url: string | URL, ...rest: any[]) {
     xhrUrls.set(this, typeof url === 'string' ? url : url.href);
+    xhrHeaders.set(this, {});
     return origOpen.apply(this, [method, url, ...rest] as any);
+  };
+
+  XMLHttpRequest.prototype.setRequestHeader = function (name: string, value: string) {
+    const headers = xhrHeaders.get(this);
+    if (headers) headers[name] = value;
+    return origSetRequestHeader.call(this, name, value);
   };
 
   XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
     const url = xhrUrls.get(this);
     if (url && isChatStreamURL(url) && typeof body === 'string') {
+      rememberDeepSeekClientHeaders(xhrHeaders.get(this));
       const originalContext = createRequestContext(body);
       const modified = modifyRequestBody(body);
       const requestBody = modified?.body ?? body;

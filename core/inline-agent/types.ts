@@ -9,6 +9,7 @@ export interface InlineAgentStartPayload {
   toolExecutions: ToolExecutionRecord[];
   promptOptions: InlineAgentPromptOptions;
   toolDescriptors: ToolDescriptor[];
+  powWasmUrl?: string;
 }
 
 export interface InlineAgentPromptOptions {
@@ -98,9 +99,12 @@ export interface InlineAgentLoopCompleteMsg {
 export interface InlineAgentLoopErrorMsg {
   loopId: string;
   stepIndex: number;
+  totalTools: number;
   error: string;
 }
 
 export const INLINE_AGENT_MAX_STEPS = 25;
 export const INLINE_AGENT_MAX_NUDGES = 8;
 export const INLINE_AGENT_STEP_TIMEOUT_MS = 120_000;
+export const INLINE_AGENT_REQUEST_DELAY_MIN_MS = 2_500;
+export const INLINE_AGENT_REQUEST_DELAY_MAX_MS = 6_500;

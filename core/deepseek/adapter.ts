@@ -21,6 +21,8 @@ const USER_TOKEN_STORAGE_KEY = 'userToken';
 const SUPPORTED_MODEL_TYPES = new Set(['DEFAULT', 'default', 'expert', 'vision']);
 export const BYPASS_HOOK_HEADER = 'X-DPP-Bypass-Hook';
 
+let rememberedClientHeaders: Record<string, string> | null = null;
+
 export interface ModelTurn {
   assistantText: string;
   responseMessageId: number | null;
@@ -98,10 +100,13 @@ export async function createChatSession(clientHeaders: Record<string, string>): 
   return chatSessionId;
 }
 
-export async function createPowHeaders(clientHeaders: Record<string, string>): Promise<Record<string, string>> {
+export async function createPowHeaders(
+  clientHeaders: Record<string, string>,
+  wasmUrl?: string,
+): Promise<Record<string, string>> {
   try {
     const challenge = await createPowChallenge(clientHeaders);
-    const answer = await solvePowChallenge(challenge);
+    const answer = await solvePowChallenge(challenge, wasmUrl);
     return {
       'X-DS-PoW-Response': base64EncodeUtf8(JSON.stringify({
         algorithm: answer.algorithm,
@@ -120,6 +125,8 @@ export async function createPowHeaders(clientHeaders: Record<string, string>): P
 }
 
 export function createClientHeaders(): Record<string, string> {
+  if (rememberedClientHeaders) return { ...rememberedClientHeaders };
+
   const token = readDeepSeekUserToken();
   if (!token) {
     throw new DeepSeekAuthError('DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again.');
@@ -132,6 +139,23 @@ export function createClientHeaders(): Record<string, string> {
     'x-client-version': getDeepSeekAppVersion(),
     'x-client-locale': getDeepSeekLocale(),
     'x-client-timezone-offset': String(-new Date().getTimezoneOffset() * 60),
+  };
+}
+
+export function rememberDeepSeekClientHeaders(headersInit: HeadersInit | undefined): void {
+  const headers = normalizeHeaders(headersInit);
+  if (!headers) return;
+
+  const authorization = headers.get('authorization');
+  if (!authorization) return;
+
+  rememberedClientHeaders = {
+    Authorization: authorization,
+    'X-App-Version': headers.get('x-app-version') || getDeepSeekAppVersion(),
+    'x-client-platform': headers.get('x-client-platform') || DEEPSEEK_CLIENT_PLATFORM,
+    'x-client-version': headers.get('x-client-version') || getDeepSeekAppVersion(),
+    'x-client-locale': headers.get('x-client-locale') || getDeepSeekLocale(),
+    'x-client-timezone-offset': headers.get('x-client-timezone-offset') || String(-new Date().getTimezoneOffset() * 60),
   };
 }
 
@@ -339,6 +363,15 @@ function readDeepSeekUserToken(): string | null {
   }
 }
 
+function normalizeHeaders(headersInit: HeadersInit | undefined): Headers | null {
+  if (!headersInit) return null;
+  try {
+    return new Headers(headersInit);
+  } catch {
+    return null;
+  }
+}
+
 function getDeepSeekAppVersion(): string {
   return DEFAULT_APP_VERSION;
 }
@@ -385,9 +418,9 @@ async function createPowChallenge(clientHeaders: Record<string, string>): Promis
   };
 }
 
-async function solvePowChallenge(challenge: PowChallenge): Promise<PowAnswer> {
+async function solvePowChallenge(challenge: PowChallenge, wasmUrl?: string): Promise<PowAnswer> {
   try {
-    return await solvePowChallengeLocally(challenge);
+    return await solvePowChallengeLocally(challenge, wasmUrl);
   } catch (err) {
     const localMessage = err instanceof Error ? err.message : String(err);
     throw new DeepSeekPowError(`DeepSeek PoW challenge failed: ${localMessage}`);
