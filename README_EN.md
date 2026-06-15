@@ -29,7 +29,7 @@
   <a href="#feature-overview">Feature Overview</a> ·
   <a href="#use-cases">Use Cases</a> ·
   <a href="#installation">Installation</a> ·
-  <a href="#070-release-highlights">0.7.0 Highlights</a>
+  <a href="#072-release-highlights">0.7.2 Highlights</a>
 </p>
 
 ## Product Positioning
@@ -46,7 +46,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - [Feature Overview](#feature-overview)
 - [Use Cases](#use-cases)
 - [Core Features](#core-features)
-- [0.7.0 Release Highlights](#070-release-highlights)
+- [0.7.2 Release Highlights](#072-release-highlights)
 - [Installation](#installation)
 - [Friendly Links](#friendly-links)
 
@@ -58,6 +58,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 | DeepSeek browser extension / DeepSeek Chrome extension | Adds side-panel chat, right-click text sending, tool-result rendering, and Chrome / Edge / Firefox support for DeepSeek Web. |
 | Multilingual DeepSeek extension | Switches between English and Simplified Chinese, keeping UI, built-in tool descriptions, and model continuation behavior in the same language. |
 | DeepSeek MCP tools | Lets you manage MCP services, tool permissions, and execution status in the side panel, then sends tool results back into the same conversation. |
+| DeepSeek browser control | Lets DeepSeek++ operate a user-selected browser tab after the user enables the feature and chooses the target. |
 | DeepSeek memory | Automatically saves, filters, and injects long-term memory so different conversations can reuse user preferences, project context, and common facts. |
 | DeepSeek Skills / `/skill` workflows | Switches quickly between built-in, custom, and GitHub-imported Skills for expert modes and task templates. |
 | DeepSeek project context | Organizes project materials, pages, local files, or repository content as reusable context that can be attached when needed. |
@@ -73,6 +74,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - Turn DeepSeek Web into an AI agent workspace with tool execution, MCP, memory, and automation.
 - Use DeepSeek++ in an English or Simplified Chinese workflow with matching UI, tool guidance, and model continuation prompts.
 - Use DeepSeek side-panel chat, selected-text actions, and reusable prompt scenarios directly in Chrome, Edge, or Firefox.
+- Let AI work in a user-selected Chrome or Edge tab while keeping explicit enable, target switching, and detach controls.
 - Save project context, personal preferences, common workflows, and document-processing routines as long-term memory and reusable Skills.
 - Back up your own DeepSeek conversation history locally as readable files for archive, migration, or later search.
 - Let DeepSeek handle tasks that require multi-step tool execution, web search, page reading, or scheduled follow-up.
@@ -157,6 +159,14 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 <p align="center">
   <img src="assets/screenshot-inline-tools.svg" width="720" alt="Tool continuation and speed display">
 </p>
+
+### Browser Control
+
+- **Opt-in control** - Enable Browser Control from Capabilities > Browser, then select a target tab before browser tools are added to new conversations.
+- **Visible web actions** - Supports navigation, click, hover, fill, key press, waiting for page content, dialog handling, and file attachment workflows.
+- **Text snapshots** - The model receives page structure and visible-text summaries, not screenshots; node and text budgets can be adjusted.
+- **Target control** - Review the attached state, refresh target tabs, switch the controlled tab, or detach Browser Control at any time.
+- **Platform boundary** - Browser Control is available only on Chrome / Edge environments that support the required browser APIs, and disabled control does not inject browser tools into new conversations.
 
 ### Interactive Tools and Prompt Controls
 
@@ -265,7 +275,41 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
   <img src="assets/screenshot-sidepanel-automation.svg" width="300" alt="Automation task side panel">
 </p>
 
-## 0.7.0 Release Highlights
+## 0.7.2 Release Highlights
+
+0.7.2 adds Browser Control and tightens the side-panel experience, so DeepSeek++ can operate a user-selected tab while keeping permission boundaries, third-party Skill management, and user feedback clearer.
+
+| Area | Main changes |
+|------|--------------|
+| Browser Control | Enable Browser Control from the side panel, choose a target tab, and let the model run navigation, click, fill, wait, upload, and dialog actions. |
+| Permission and privacy boundaries | Chrome / Edge packages add the permissions needed for Browser Control; the feature stays off by default and only sends text snapshots and browser actions after the user enables it and selects a tab. |
+| Side-panel feedback | Saved items, project material, and prompt controls now show clearer success, failure, and unavailable-state messages. |
+| Skill management | Third-party Skills are grouped by source, with independent enablement, disablement, update checks, and sync. |
+| Platform capabilities | The Capabilities page distinguishes browser extension, Android WebView, and unsupported-platform boundaries so unavailable features are not presented as available. |
+| Regression coverage | Adds coverage for Browser Control, side-panel interactions, runtime broadcast, platform capabilities, and Skill localization while keeping multi-browser build and asset checks in the release gate. |
+
+<details>
+<summary>Show 0.7.1 release highlights</summary>
+
+### 0.7.1 Release Highlights
+
+0.7.1 focuses on tool-call and context-injection stability, helping long replies, downloadable artifacts, memory, and Skills work together more reliably in the same task chain.
+
+| Area | Main changes |
+|------|--------------|
+| Tool execution stability | Tool calls inside long replies are detected and executed earlier and more reliably, reducing visible tool markup, duplicate execution, and delayed handling. |
+| Downloadable artifacts | Single-file and project-bundle artifact generation works better during streaming, keeping long output flows more interactive. |
+| Memory and Skills | Memory, Skills, and system prompts enter multi-step continuation and history cleanup more reliably, reducing missing or duplicated context. |
+| Cleaner output | Tool-call content and normal Markdown are separated more clearly, so users see cleaner answers and tool results. |
+| Regression coverage | Adds and strengthens coverage for tool parsing, streamed text, history cleanup, page execution, and product surfaces. |
+| Release quality | Build-only dependencies are back in dev dependencies; production audit is clean, and release asset checks still cover Chrome, Edge, Firefox, and source packages. |
+
+</details>
+
+<details>
+<summary>Show 0.7.0 release highlights</summary>
+
+### 0.7.0 Release Highlights
 
 0.7.0 moves DeepSeek++ from a DeepSeek web-page enhancement toward a sustained browser-based AI agent workspace: context can be reused, outputs can become downloadable files, and tool execution can be reviewed, steered, and resumed.
 
@@ -278,6 +322,8 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
 | Agent feedback | Agent step output now streams with Markdown rendering, so tables, headings, and emphasis take shape while the answer is generated, and long outputs follow the newest progress automatically. |
 | Review and reuse | Saved items, history tags/search, code-block downloads, single-message export, and image attachment manifests make conversation material easier to organize and reuse. |
 | Release quality | Update notices stay dismissed per version; release checks continue to cover bilingual runtime, local tools, MCP, automation, multi-browser packages, and release assets. |
+
+</details>
 
 <details>
 <summary>Show 0.6.5 release highlights</summary>

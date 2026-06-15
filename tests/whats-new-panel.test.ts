@@ -23,7 +23,7 @@ beforeEach(() => {
 
   vi.stubGlobal('chrome', {
     runtime: {
-      getManifest: vi.fn(() => ({ version: '0.7.0' })),
+      getManifest: vi.fn(() => ({ version: '0.7.2' })),
       sendMessage,
     },
     storage: {
@@ -65,14 +65,14 @@ afterEach(() => {
 
 describe('WhatsNewPanel', () => {
   it('shows current release notes and dismisses the current version', async () => {
-    storage[PENDING_UPDATE_VERSION_KEY] = '0.7.0';
+    storage[PENDING_UPDATE_VERSION_KEY] = '0.7.2';
 
     await renderPanel();
 
     expect(container.textContent).toContain('版本更新内容');
-    expect(container.textContent).toContain('v0.7.0');
-    expect(container.textContent).toContain('项目上下文可整理仓库');
-    expect(container.textContent).toContain('新版本会在侧边栏提示更新内容');
+    expect(container.textContent).toContain('v0.7.2');
+    expect(container.textContent).toContain('浏览器控制可在侧边栏选择目标标签页');
+    expect(container.textContent).toContain('第三方 Skill 会按来源分组展示');
 
     const button = container.querySelector('button');
     expect(button?.textContent).toBe('知道了');
@@ -84,7 +84,7 @@ describe('WhatsNewPanel', () => {
     });
 
     expect(container.textContent).not.toContain('版本更新内容');
-    expect(storage[LAST_SEEN_VERSION_KEY]).toBe('0.7.0');
+    expect(storage[LAST_SEEN_VERSION_KEY]).toBe('0.7.2');
     expect(storage[PENDING_UPDATE_VERSION_KEY]).toBeUndefined();
     expect(sendMessage).toHaveBeenCalledWith({ type: 'WHATS_NEW_DISMISSED' });
   });

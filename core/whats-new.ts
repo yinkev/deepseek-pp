@@ -13,10 +13,10 @@ export interface WhatsNewState {
 }
 
 export const WHATS_NEW_ITEMS: WhatsNewItem[] = [
-  { id: 'project-context', titleKey: 'sidepanel.whatsNew.items.projectContext' },
-  { id: 'interactive-tools', titleKey: 'sidepanel.whatsNew.items.interactiveTools' },
-  { id: 'sidepanel-chat', titleKey: 'sidepanel.whatsNew.items.sidepanelChat' },
-  { id: 'update-notice', titleKey: 'sidepanel.whatsNew.items.updateNotice' },
+  { id: 'browser-control', titleKey: 'sidepanel.whatsNew.items.browserControl' },
+  { id: 'browser-control-boundary', titleKey: 'sidepanel.whatsNew.items.browserControlBoundary' },
+  { id: 'sidepanel-feedback', titleKey: 'sidepanel.whatsNew.items.sidepanelFeedback' },
+  { id: 'third-party-skills', titleKey: 'sidepanel.whatsNew.items.thirdPartySkills' },
 ];
 
 const LAST_SEEN_VERSION_KEY = 'deepseek_pp_whats_new_dismissed_version';

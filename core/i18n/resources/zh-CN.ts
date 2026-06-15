@@ -208,14 +208,14 @@ export const zhCN = {
     },
     whatsNew: {
       title: '版本更新内容',
-      subtitle: '本次重点增强项目上下文、可下载产物、交互式工具和更新可发现性。',
+      subtitle: '本次重点新增浏览器控制，并继续收紧侧边栏反馈、第三方 Skill 管理和权限说明。',
       versionBadge: 'v{version}',
       dismiss: '知道了',
       items: {
-        projectContext: '项目上下文可整理仓库、网页、本地文件和手工说明，并按需加入对话。',
-        interactiveTools: '沙箱确认、Skill 草稿、记忆导入、保存片段和提示词控制让多步任务更可控。',
-        sidepanelChat: '侧边栏对话、右键场景和工具结果恢复继续收敛，刷新后也能保留更完整的执行反馈。',
-        updateNotice: '新版本会在侧边栏提示更新内容，关闭后不再重复打扰。',
+        browserControl: '浏览器控制可在侧边栏选择目标标签页，让 DeepSeek++ 执行可见网页操作。',
+        browserControlBoundary: '浏览器控制默认关闭，启用后只向新会话提供文本快照和浏览器动作工具。',
+        sidepanelFeedback: '保存项、项目和提示词控制增加更明确的成功、失败和不可用状态反馈。',
+        thirdPartySkills: '第三方 Skill 会按来源分组展示，可单独启用、停用、检查更新或同步。',
       },
     },
     memoryPage: {

@@ -1,6 +1,6 @@
 # DeepSeek++ Privacy Policy
 
-Effective date: 2026-06-11
+Effective date: 2026-06-15
 
 DeepSeek++ is a browser extension that enhances DeepSeek chat workflows with user-controlled memory, skills, project context, saved items, prompt presets, MCP tools, browser control tools, inline tool execution, local exports, downloadable artifacts, automation, and optional side-panel chat.
 
@@ -136,7 +136,7 @@ For privacy or support questions, open an issue at:
 
 # DeepSeek++ 隐私政策（中文参考）
 
-生效日期：2026-06-11
+生效日期：2026-06-15
 
 DeepSeek++ 是一个浏览器扩展，用于增强 DeepSeek 对话工作流，提供用户可控的长期记忆、技能、项目上下文、保存项、提示词预设、MCP 工具、浏览器控制工具、内联工具执行、本地导出、可下载产物、自动化任务和可选侧边栏对话。
 
