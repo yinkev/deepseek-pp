@@ -29,7 +29,7 @@
   <a href="#feature-overview">Feature Overview</a> ·
   <a href="#use-cases">Use Cases</a> ·
   <a href="#installation">Installation</a> ·
-  <a href="#072-release-highlights">0.7.2 Highlights</a>
+  <a href="#073-release-highlights">0.7.3 Highlights</a>
 </p>
 
 ## Product Positioning
@@ -46,7 +46,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - [Feature Overview](#feature-overview)
 - [Use Cases](#use-cases)
 - [Core Features](#core-features)
-- [0.7.2 Release Highlights](#072-release-highlights)
+- [0.7.3 Release Highlights](#073-release-highlights)
 - [Installation](#installation)
 - [Friendly Links](#friendly-links)
 
@@ -275,7 +275,23 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
   <img src="assets/screenshot-sidepanel-automation.svg" width="300" alt="Automation task side panel">
 </p>
 
-## 0.7.2 Release Highlights
+## 0.7.3 Release Highlights
+
+0.7.3 focuses on project context and permission cleanup, helping project instructions, project memories, and related DeepSeek conversations work together more reliably while reducing the Browser Control permission footprint and strengthening memory, automation, and long-task continuation coverage.
+
+| Area | Main changes |
+|------|--------------|
+| Project context | Project instructions, project memories, and linked conversations are used more reliably, reducing repeated background pasting during project work. |
+| Browser Control permissions | Browser Control no longer depends on an extra tab-group permission; text snapshots and visible browser actions are still available only after the user enables the feature and selects a target tab. |
+| Memory and context | Memory selection, project memories, and prompt preparation are tightened to reduce missing, duplicated, or wrong-scope context. |
+| Automation and continuation | Automation task state, long-task continuation, and tool-result handoff are more stable for multi-step or scheduled workflows. |
+| Streaming output | Tool-call handling and context injection during long replies are cleaner, reducing visible technical markers and output interruptions. |
+| Regression coverage | Adds and strengthens tests for project context, project memory scope, Browser Control permissions, sync data, automation state, and streamed tool text. |
+
+<details>
+<summary>Show 0.7.2 release highlights</summary>
+
+### 0.7.2 Release Highlights
 
 0.7.2 adds Browser Control and tightens the side-panel experience, so DeepSeek++ can operate a user-selected tab while keeping permission boundaries, third-party Skill management, and user feedback clearer.
 
@@ -287,6 +303,8 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
 | Skill management | Third-party Skills are grouped by source, with independent enablement, disablement, update checks, and sync. |
 | Platform capabilities | The Capabilities page distinguishes browser extension, Android WebView, and unsupported-platform boundaries so unavailable features are not presented as available. |
 | Regression coverage | Adds coverage for Browser Control, side-panel interactions, runtime broadcast, platform capabilities, and Skill localization while keeping multi-browser build and asset checks in the release gate. |
+
+</details>
 
 <details>
 <summary>Show 0.7.1 release highlights</summary>

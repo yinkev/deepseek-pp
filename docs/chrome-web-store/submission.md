@@ -14,7 +14,7 @@ Official references:
 
 ## Current Status
 
-- Chrome MV3 package exists at `dist/deepseek-plus-plus-0.7.2-chrome.zip`.
+- Chrome MV3 package exists at `dist/deepseek-plus-plus-0.7.3-chrome.zip`.
 - Package root contains `manifest.json`.
 - Package size is below the Chrome Web Store package limit.
 - Required icon exists at `public/icon/128.png`.
@@ -47,7 +47,7 @@ npm run zip:chrome
 Upload:
 
 ```text
-dist/deepseek-plus-plus-0.7.2-chrome.zip
+dist/deepseek-plus-plus-0.7.3-chrome.zip
 ```
 
 ## Store Listing Fields
