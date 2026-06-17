@@ -227,7 +227,7 @@ export default function SkillPage() {
   const enabledCount = skills.filter((s) => s.enabled !== false).length;
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.skillPage.title')}
         description={t('sidepanel.skillPage.description')}
@@ -363,9 +363,9 @@ function SkillGroupsPanel({
   if (groups.length === 0) return null;
 
   return (
-    <section className="space-y-2">
+    <section className="ds-section">
       {sectionLabel && (
-        <h3 className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
+        <h3 className="ds-section-title text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
           {sectionLabel}
         </h3>
       )}
@@ -377,8 +377,8 @@ function SkillGroupsPanel({
           : t('sidepanel.skillPage.enableSourceSkills');
 
         return (
-          <div key={group.id} className="ds-surface-panel rounded-xl overflow-hidden">
-            <div className="flex items-center gap-2 p-3">
+          <div key={group.id} className="ds-surface-panel">
+            <div className="ds-list-row">
               <button
                 type="button"
                 aria-expanded={expanded}
@@ -429,7 +429,7 @@ function SkillGroupsPanel({
             </div>
             {expanded && (
               <div
-                className="space-y-2 p-3 pt-2 animate-slide-down"
+                className="ds-section ds-panel-block pt-0 animate-slide-down"
                 style={{ borderTop: '1px solid var(--ds-border)' }}
               >
                 {group.skills.map((skill) => (

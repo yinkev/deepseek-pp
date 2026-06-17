@@ -197,7 +197,7 @@ export default function AutomationPage() {
   };
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.automationPage.title')}
         description={t('sidepanel.automationPage.description')}

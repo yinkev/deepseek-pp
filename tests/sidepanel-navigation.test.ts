@@ -96,6 +96,10 @@ describe('sidepanel navigation', () => {
     expect(css).toContain('.ds-metric-strip');
     expect(css).toContain('.ds-shell-setup-steps');
     expect(css).toContain('.ds-command-block');
+    expect(css).toContain('.ds-page');
+    expect(css).toContain('.ds-section');
+    expect(css).toContain('--ds-surface-2');
+    expect(css).toContain('--ds-space-3');
   });
 
   it('uses role=switch toggles in settings scenarios instead of raw checkboxes', async () => {

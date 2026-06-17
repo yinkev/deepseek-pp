@@ -309,7 +309,7 @@ export default function McpPage() {
   };
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.mcpPage.title')}
         description={t('sidepanel.mcpPage.description')}

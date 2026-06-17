@@ -68,30 +68,26 @@ export default function ScenarioManager() {
   const custom = scenarios.filter((scenario) => !scenario.builtIn);
 
   return (
-    <div className="space-y-3">
+    <div className="ds-section">
       <div>
-        <h3 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
-          {t('sidepanel.scenario.title')}
-        </h3>
-        <p className="text-xs mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {t('sidepanel.scenario.description')}
-        </p>
+        <h3 className="ds-section-title">{t('sidepanel.scenario.title')}</h3>
+        <p className="ds-section-desc mt-1">{t('sidepanel.scenario.description')}</p>
       </div>
 
-      <div className="ds-surface-panel rounded-xl divide-y" style={{ borderColor: 'var(--ds-border)' }}>
+      <div className="ds-surface-panel divide-y" style={{ borderColor: 'var(--ds-border)' }}>
         {builtIn.map((scenario) => {
           const display = localizeScenario(scenario, locale);
           const editing = editingId === scenario.id;
 
           return (
-            <div key={scenario.id} className="p-3 space-y-2">
-              <div className="flex items-center gap-3">
+            <div key={scenario.id} className="ds-panel-block">
+              <div className="ds-control-row">
                 <ToggleSwitch
                   checked={scenario.enabled}
                   onChange={() => toggleEnabled(scenario)}
                   aria-label={display.label}
                 />
-                <span className="text-sm flex-1 min-w-0" style={{ color: 'var(--ds-text)' }}>
+                <span className="text-xs flex-1 min-w-0" style={{ color: 'var(--ds-text)' }}>
                   {display.label}
                 </span>
                 {!editing && (
@@ -105,7 +101,7 @@ export default function ScenarioManager() {
                 )}
               </div>
               {editing && (
-                <div className="space-y-2 pl-[52px]">
+                <div className="ds-section pl-[52px]">
                   <textarea
                     value={editTemplate}
                     onChange={(event) => setEditTemplate(event.target.value)}
@@ -135,21 +131,21 @@ export default function ScenarioManager() {
         })}
       </div>
 
-      <div className="space-y-2">
-        <span className="text-xs font-medium" style={{ color: 'var(--ds-text-secondary)' }}>
+      <div className="ds-section">
+        <span className="ds-section-title text-xs font-medium" style={{ color: 'var(--ds-text-secondary)' }}>
           {t('sidepanel.scenario.customTitle')}
         </span>
 
         {custom.length > 0 && (
-          <div className="ds-surface-panel rounded-xl divide-y" style={{ borderColor: 'var(--ds-border)' }}>
+          <div className="ds-surface-panel divide-y" style={{ borderColor: 'var(--ds-border)' }}>
             {custom.map((scenario) => (
-              <div key={scenario.id} className="flex items-center gap-3 p-3">
+              <div key={scenario.id} className="ds-list-row">
                 <ToggleSwitch
                   checked={scenario.enabled}
                   onChange={() => toggleEnabled(scenario)}
                   aria-label={scenario.label}
                 />
-                <span className="text-sm flex-1 min-w-0 truncate" style={{ color: 'var(--ds-text)' }}>
+                <span className="text-xs flex-1 min-w-0 truncate" style={{ color: 'var(--ds-text)' }}>
                   {scenario.label}
                 </span>
                 <button
@@ -164,7 +160,7 @@ export default function ScenarioManager() {
           </div>
         )}
 
-        <div className="ds-surface-panel rounded-xl p-3 space-y-2">
+        <div className="ds-surface-panel ds-panel-block">
           <input
             value={newLabel}
             onChange={(event) => setNewLabel(event.target.value)}

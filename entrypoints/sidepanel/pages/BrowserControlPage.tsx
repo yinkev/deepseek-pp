@@ -128,7 +128,7 @@ export default function BrowserControlPage() {
   const activeTarget = targets.find((target) => target.id === settings.targetTabId) ?? null;
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.browserControlPage.title')}
         description={t('sidepanel.browserControlPage.description')}

@@ -34,7 +34,7 @@ export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: 
 
   return (
     <div
-      className="ds-card rounded-xl p-3.5 group"
+      className="ds-card rounded-xl p-3 group"
       style={{
         border: statusBorder,
         opacity: enabled ? 1 : 0.82,

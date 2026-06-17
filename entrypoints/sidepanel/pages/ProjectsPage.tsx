@@ -287,7 +287,7 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.projectsPage.title')}
         description={t('sidepanel.projectsPage.description')}

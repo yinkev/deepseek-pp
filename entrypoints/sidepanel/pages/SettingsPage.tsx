@@ -508,19 +508,19 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div className="p-4 space-y-5">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.settings.title')}
         description={t('sidepanel.settings.description')}
         meta={version ? `v${version}` : undefined}
       />
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.interfaceSection')}
         </h2>
 
-        <div className="ds-surface-panel rounded-xl p-4 space-y-3">
+        <div className="ds-surface-panel ds-panel-block">
           <div>
             <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
               {t('sidepanel.settings.interfaceLanguage')}
@@ -558,12 +558,12 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.modelSection')}
         </h2>
 
-        <div className="ds-surface-panel rounded-xl p-4 space-y-3">
+        <div className="ds-surface-panel ds-panel-block">
           <div className="flex justify-between items-center">
             <div>
               <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
@@ -694,12 +694,12 @@ export default function SettingsPage() {
 
       <VoiceSettingsPanel />
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.backgroundSection')}
         </h2>
 
-        <div className="ds-surface-panel rounded-xl p-4 space-y-3">
+        <div className="ds-surface-panel ds-panel-block">
           <div className="flex justify-between items-center">
             <div>
               <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
@@ -824,16 +824,16 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3">
+      <section className="ds-section">
         <ScenarioManager />
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.floatingPetSection')}
         </h2>
 
-        <div className="ds-surface-panel rounded-xl p-4 space-y-3">
+        <div className="ds-surface-panel ds-panel-block">
           <div className="flex justify-between items-center pb-3 border-b" style={{ borderColor: 'var(--ds-border)' }}>
             <div>
               <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
@@ -954,12 +954,12 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.cloudSyncSection')}
         </h2>
 
-        <div className="ds-surface-panel rounded-xl p-4 space-y-3">
+        <div className="ds-surface-panel ds-panel-block">
           <div>
             <label className="block text-[11px] mb-1" style={{ color: 'var(--ds-text-secondary)' }}>
               {t('sidepanel.settings.webDavUrl')}
@@ -1082,8 +1082,8 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.dataSection')}
         </h2>
 
@@ -1125,8 +1125,8 @@ export default function SettingsPage() {
         </button>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+      <section className="ds-section">
+        <h2 className="ds-section-title">
           {t('sidepanel.settings.aboutSection')}
         </h2>
         <div className="ds-surface-panel rounded-xl p-4 space-y-2">
