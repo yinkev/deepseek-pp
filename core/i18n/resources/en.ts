@@ -131,6 +131,20 @@ export const en = {
       customTitle: 'Custom scenarios',
       namePlaceholder: 'Scenario name',
       templatePlaceholder: 'Prompt template with {text}',
+      builtIn: {
+        summarize: {
+          label: 'Summarize',
+          template: 'Summarize the following content concisely:\n\n{text}',
+        },
+        explain: {
+          label: 'Explain',
+          template: 'Explain the following content:\n\n{text}',
+        },
+        translate: {
+          label: 'Translate',
+          template: 'Translate the following content into Chinese:\n\n{text}',
+        },
+      },
     },
     githubSkillImport: {
       title: 'Import Skill from GitHub',
@@ -425,7 +439,8 @@ export const en = {
         tools: 'Tools',
         browser: 'Browser',
         preset: 'Presets',
-        automation: 'Automation',
+        automation: 'Auto',
+        automationFull: 'Automation',
       },
     },
     browserControlPage: {
@@ -571,6 +586,12 @@ export const en = {
         command: 'command',
       },
       shellSetup: {
+        title: 'Shell Native Host setup',
+        stepInstall: 'Install or update the native host',
+        stepFallback: 'Published extension fallback',
+        stepAfter: 'After install',
+        copyCommand: 'Copy command',
+        copiedCommand: 'Copied',
         localIntro: 'Open a terminal in the project root and run:',
         publishedIntro: 'Open a terminal and run this command once:',
         fallbackIntro: 'If you are using the published extension instead of a local source build, run:',

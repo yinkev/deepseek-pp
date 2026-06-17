@@ -111,7 +111,7 @@ export default function SkillPage() {
   };
 
   const handleToggleGroupEnabled = async (group: ThirdPartySkillGroup) => {
-    const shouldEnable = group.skills.some((skill) => skill.enabled === false);
+    const shouldEnable = !group.skills.every((skill) => skill.enabled !== false);
     await Promise.all(group.skills.map((skill) => chrome.runtime.sendMessage({
       type: 'SET_SKILL_ENABLED',
       payload: { name: skill.name, enabled: shouldEnable },
@@ -349,9 +349,8 @@ function ThirdPartySkillSection({ groups, expandedGroups, onToggleGroup, onToggl
       </h3>
       {groups.map((group) => {
         const expanded = expandedGroups[group.id] === true;
-        const enabledCount = group.skills.filter((skill) => skill.enabled !== false).length;
-        const shouldDisableAll = enabledCount === group.skills.length;
-        const toggleAllLabel = shouldDisableAll
+        const allEnabled = group.skills.every((skill) => skill.enabled !== false);
+        const toggleAllLabel = allEnabled
           ? t('sidepanel.skillPage.disableSourceSkills')
           : t('sidepanel.skillPage.enableSourceSkills');
 
@@ -388,7 +387,7 @@ function ThirdPartySkillSection({ groups, expandedGroups, onToggleGroup, onToggl
                   </span>
                   <span className="block text-[11px] mt-0.5 truncate" style={{ color: 'var(--ds-text-tertiary)' }}>
                     {group.subtitle} · {t('sidepanel.skillPage.enabledSkillCount', {
-                      enabled: enabledCount,
+                      enabled: group.skills.filter((skill) => skill.enabled !== false).length,
                       total: group.skills.length,
                     })}
                   </span>

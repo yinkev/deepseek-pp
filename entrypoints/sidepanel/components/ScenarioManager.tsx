@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { ScenarioConfig } from '../../../core/types';
+import { localizeScenario } from '../../../core/scenario/localization';
 import {
   getAllScenarios,
   saveScenario,
@@ -9,7 +10,7 @@ import {
 import { useI18n } from '../i18n';
 
 export default function ScenarioManager() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [scenarios, setScenarios] = useState<ScenarioConfig[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTemplate, setEditTemplate] = useState('');
@@ -18,7 +19,7 @@ export default function ScenarioManager() {
 
   useEffect(() => {
     getAllScenarios().then(setScenarios);
-  }, []);
+  }, [locale]);
 
   const refresh = async () => {
     const updated = await getAllScenarios();
@@ -64,13 +65,15 @@ export default function ScenarioManager() {
         {t('sidepanel.scenario.description')}
       </p>
 
-      {scenarios.filter((s) => s.builtIn).map((s) => (
+      {scenarios.filter((s) => s.builtIn).map((s) => {
+        const display = localizeScenario(s, locale);
+        return (
         <div key={s.id} className="flex items-center gap-2 py-1.5">
           <label className="switch">
             <input type="checkbox" checked={s.enabled} onChange={() => toggleEnabled(s)} />
             <span className="slider" />
           </label>
-          <span className="text-sm flex-1" style={{ color: 'var(--ds-text)' }}>{s.label}</span>
+          <span className="text-sm flex-1" style={{ color: 'var(--ds-text)' }}>{display.label}</span>
           {editingId === s.id ? (
             <div className="flex gap-1">
               <input
@@ -85,7 +88,8 @@ export default function ScenarioManager() {
             <button onClick={() => startEdit(s)} className="text-xs" style={{ color: 'var(--ds-text-tertiary)' }}>{t('common.edit')}</button>
           )}
         </div>
-      ))}
+        );
+      })}
 
       <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--ds-border)' }}>
         <span className="text-xs font-medium" style={{ color: 'var(--ds-text-secondary)' }}>{t('sidepanel.scenario.customTitle')}</span>

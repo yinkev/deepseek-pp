@@ -4,6 +4,7 @@ import { getChatEnabled } from '../../core/chat/store';
 import WhatsNewPanel from './components/WhatsNewPanel';
 import { useI18n } from './i18n';
 import { setPendingText } from './pending-text';
+import { useHorizontalScrollHints } from './use-horizontal-scroll-hints';
 
 type Tab = 'chat' | 'library' | 'projects' | 'capabilities' | 'settings';
 
@@ -25,6 +26,7 @@ export default function App() {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>('chat');
   const [chatEnabled, setChatEnabledState] = useState<boolean | null>(null);
+  const sideTabs = useHorizontalScrollHints<HTMLElement>();
 
   useEffect(() => {
     getChatEnabled().then(setChatEnabledState);
@@ -69,7 +71,11 @@ export default function App() {
 
   return (
     <div className="ds-app-shell">
-      <nav className="side-tabs" aria-label={t('app.sideNavLabel')}>
+      <nav
+        ref={sideTabs.ref}
+        className={`side-tabs${sideTabs.className ? ` ${sideTabs.className}` : ''}`}
+        aria-label={t('app.sideNavLabel')}
+      >
         {TABS.filter((tabConfig) =>
           chatEnabled !== false || tabConfig.key !== 'chat'
         ).map((tabConfig) => {

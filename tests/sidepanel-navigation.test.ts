@@ -88,6 +88,15 @@ describe('sidepanel navigation', () => {
     expect(navBlock).toContain('min-height: 44px');
     expect(mainBlock).toContain('flex: 1 1 0');
   });
+
+  it('defines scroll-hint and MCP polish utility classes', () => {
+    const css = readFileSync('entrypoints/sidepanel/style.css', 'utf8');
+
+    expect(css).toContain('.side-tabs.ds-scroll-compact .side-tab-label');
+    expect(css).toContain('.ds-metric-strip');
+    expect(css).toContain('.ds-shell-setup-steps');
+    expect(css).toContain('.ds-command-block');
+  });
 });
 
 async function renderApp() {

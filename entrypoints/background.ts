@@ -127,6 +127,7 @@ import { refreshMcpServerDiscovery } from '../core/mcp/discovery';
 import { getMcpOriginPattern, requestMcpServerOriginPermission } from '../core/mcp/transports';
 import { SHELL_MCP_NATIVE_HOST, SHELL_MCP_SERVER_NAME, createShellMcpPresetInput } from '../core/shell';
 import { getWebToolSettings, setWebToolEnabled } from '../core/tool/web-settings';
+import { localizeScenario } from '../core/scenario/localization';
 import { getAllScenarios, applyScenarioTemplate } from '../core/scenario/store';
 import { getChatEnabled } from '../core/chat/store';
 import {
@@ -343,7 +344,7 @@ async function createContextMenus() {
   const menuScope = apiKeyConfigured
     ? {}
     : { documentUrlPatterns: [DEEPSEEK_TAB_URL_PATTERN] };
-  const scenarios = await getAllScenarios();
+  const scenarios = (await getAllScenarios()).map((scenario) => localizeScenario(scenario, currentBackgroundLocale));
   const enabledScenarios = scenarios.filter((s) => s.enabled);
 
   chrome.contextMenus.create({
@@ -398,7 +399,8 @@ try {
         .then((scenarios) => {
           const scenario = scenarios.find((s) => s.id === scenarioId);
           if (!scenario) return;
-          const processed = applyScenarioTemplate(scenario.template, selectedText);
+          const localized = localizeScenario(scenario, currentBackgroundLocale);
+          const processed = applyScenarioTemplate(localized.template, selectedText);
           openSidePanelAndSendText(processed, tab);
         })
         .catch(() => {});

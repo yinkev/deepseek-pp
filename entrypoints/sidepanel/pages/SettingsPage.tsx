@@ -491,8 +491,8 @@ export default function SettingsPage() {
   };
 
   const petPositionItems: Array<{ key: PetPosition; label: string }> = [
-    { key: 'bottom-right', label: t('sidepanel.settings.positionBottomRight') },
     { key: 'bottom-left', label: t('sidepanel.settings.positionBottomLeft') },
+    { key: 'bottom-right', label: t('sidepanel.settings.positionBottomRight') },
   ];
   if (petPosition === 'custom') {
     petPositionItems.push({ key: 'custom', label: t('sidepanel.settings.positionCustom') });
@@ -687,33 +687,6 @@ export default function SettingsPage() {
             )}
           </div>
 
-          <div
-            className="flex justify-between items-center pt-3 border-t"
-            style={{ borderColor: 'var(--ds-border)' }}
-          >
-            <div>
-              <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
-                {t('sidepanel.settings.petWhale')}
-              </div>
-              <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
-                {t('sidepanel.settings.petWhaleDescription')}
-              </div>
-            </div>
-            <button
-              onClick={() => handlePetToggle(!petEnabled)}
-              className="relative shrink-0 w-10 h-[22px] rounded-full transition-colors duration-200"
-              style={{
-                background: petEnabled ? 'var(--ds-blue)' : 'var(--ds-border)',
-              }}
-            >
-              <span
-                className="ds-switch-thumb absolute top-[3px] left-[3px] w-4 h-4 rounded-full transition-transform duration-200"
-                style={{
-                  transform: petEnabled ? 'translateX(18px)' : 'translateX(0)',
-                }}
-              />
-            </button>
-          </div>
         </div>
       </section>
 
@@ -861,6 +834,31 @@ export default function SettingsPage() {
         </h2>
 
         <div className="ds-surface-panel rounded-xl p-4 space-y-3">
+          <div className="flex justify-between items-center pb-3 border-b" style={{ borderColor: 'var(--ds-border)' }}>
+            <div>
+              <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+                {t('sidepanel.settings.petWhale')}
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
+                {t('sidepanel.settings.petWhaleDescription')}
+              </div>
+            </div>
+            <button
+              onClick={() => handlePetToggle(!petEnabled)}
+              className="relative shrink-0 w-10 h-[22px] rounded-full transition-colors duration-200"
+              style={{
+                background: petEnabled ? 'var(--ds-blue)' : 'var(--ds-border)',
+              }}
+            >
+              <span
+                className="ds-switch-thumb absolute top-[3px] left-[3px] w-4 h-4 rounded-full transition-transform duration-200"
+                style={{
+                  transform: petEnabled ? 'translateX(18px)' : 'translateX(0)',
+                }}
+              />
+            </button>
+          </div>
+
           <div className={petPositionGridClass}>
             {petPositionItems.map((item) => (
               <button

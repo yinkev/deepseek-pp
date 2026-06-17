@@ -831,7 +831,7 @@ function ServerDetail({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
+      <div className="ds-metric-strip">
         <Metric label={t('sidepanel.mcpPage.detail.status')} value={statusMeta(cache?.health.status ?? server.status, t).label} />
         <Metric label={t('sidepanel.mcpPage.detail.latency')} value={formatMs(cache?.health.latencyMs ?? null)} />
         <Metric label={t('sidepanel.mcpPage.detail.lastConnected')} value={formatTime(server.lastConnectedAt ?? cache?.health.checkedAt ?? null, locale)} />
@@ -995,9 +995,36 @@ function NumberField({ label, value, onChange }: { label: string; value: string;
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: 'var(--ds-bg)', border: '1px solid var(--ds-border)' }}>
-      <div style={{ color: 'var(--ds-text-tertiary)' }}>{label}</div>
-      <div className="mt-0.5 truncate" style={{ color: 'var(--ds-text)' }}>{value}</div>
+    <div className="ds-metric-chip">
+      <span className="ds-metric-chip-label">{label}</span>
+      <span className="ds-metric-chip-value">{value}</span>
+    </div>
+  );
+}
+
+function CopyableCommand({ command, copyLabel, copiedLabel }: {
+  command: string;
+  copyLabel: string;
+  copiedLabel: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="ds-command-block">
+      <code className="ds-command-block-text">{command}</code>
+      <button type="button" onClick={handleCopy} className="ds-btn-secondary px-2 py-1 text-[10px] rounded-md shrink-0">
+        {copied ? copiedLabel : copyLabel}
+      </button>
     </div>
   );
 }
@@ -1292,46 +1319,56 @@ function ShellSetupHint({
   const { message, isError } = shellSetupMessage(server, cache, t);
   const setup = shellInstallCommand();
   return (
-    <div className="ds-card rounded-lg px-3 py-2 text-[11px] leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
-      <div className="font-medium mb-1" style={{ color: 'var(--ds-text)' }}>Shell Native Host</div>
+    <div className="ds-shell-setup text-[11px] leading-5" style={{ color: 'var(--ds-text-secondary)' }}>
+      <div className="text-xs font-medium mb-2" style={{ color: 'var(--ds-text)' }}>
+        {t('sidepanel.mcpPage.shellSetup.title')}
+      </div>
       {isError ? (
-        <div className="rounded px-2 py-1 mb-1.5" style={{ color: 'var(--ds-danger)', background: 'var(--ds-danger-bg)', border: '1px solid var(--ds-danger)' }}>
+        <div className="rounded-lg px-2.5 py-1.5 mb-2" style={{ color: 'var(--ds-danger)', background: 'var(--ds-danger-bg)', border: '1px solid var(--ds-danger)' }}>
           {message}
         </div>
       ) : (
-        <div>{message}</div>
+        <div className="mb-2" style={{ color: 'var(--ds-text)' }}>{message}</div>
       )}
-      <div className="mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {setup.mode === 'local'
-          ? t('sidepanel.mcpPage.shellSetup.localIntro')
-          : t('sidepanel.mcpPage.shellSetup.publishedIntro')}
-      </div>
-      <div className="mt-1 font-mono break-all select-all rounded px-2 py-1" style={{ color: 'var(--ds-text)', background: 'var(--ds-surface)' }}>
-        {setup.command}
-      </div>
-      {setup.fallbackCommand && (
-        <>
-          <div className="mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-            {t('sidepanel.mcpPage.shellSetup.fallbackIntro')}
-          </div>
-          <div className="mt-1 font-mono break-all select-all rounded px-2 py-1" style={{ color: 'var(--ds-text)', background: 'var(--ds-surface)' }}>
-            {setup.fallbackCommand}
-          </div>
-        </>
-      )}
-      <div className="mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {setup.usesExtensionId
-          ? t('sidepanel.mcpPage.shellSetup.detectedExtensionId', { browser: browserLabel(setup.browser) })
-          : t('sidepanel.mcpPage.shellSetup.firefoxFixedId')}
-      </div>
-      <div className="mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {t('sidepanel.mcpPage.shellSetup.installNote')}
-      </div>
-      <div className="mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {!server.enabled
-          ? t('sidepanel.mcpPage.shellSetup.enableAndTest')
-          : t('sidepanel.mcpPage.shellSetup.restartAndTest')}
-      </div>
+
+      <ol className="ds-shell-setup-steps">
+        <li>
+          <div className="ds-shell-setup-step-title">{t('sidepanel.mcpPage.shellSetup.stepInstall')}</div>
+          <p>{setup.mode === 'local'
+            ? t('sidepanel.mcpPage.shellSetup.localIntro')
+            : t('sidepanel.mcpPage.shellSetup.publishedIntro')}</p>
+          <CopyableCommand
+            command={setup.command}
+            copyLabel={t('sidepanel.mcpPage.shellSetup.copyCommand')}
+            copiedLabel={t('sidepanel.mcpPage.shellSetup.copiedCommand')}
+          />
+        </li>
+        {setup.fallbackCommand && (
+          <li>
+            <div className="ds-shell-setup-step-title">{t('sidepanel.mcpPage.shellSetup.stepFallback')}</div>
+            <p>{t('sidepanel.mcpPage.shellSetup.fallbackIntro')}</p>
+            <CopyableCommand
+              command={setup.fallbackCommand}
+              copyLabel={t('sidepanel.mcpPage.shellSetup.copyCommand')}
+              copiedLabel={t('sidepanel.mcpPage.shellSetup.copiedCommand')}
+            />
+          </li>
+        )}
+        <li>
+          <div className="ds-shell-setup-step-title">{t('sidepanel.mcpPage.shellSetup.stepAfter')}</div>
+          <p>
+            {setup.usesExtensionId
+              ? t('sidepanel.mcpPage.shellSetup.detectedExtensionId', { browser: browserLabel(setup.browser) })
+              : t('sidepanel.mcpPage.shellSetup.firefoxFixedId')}
+          </p>
+          <p>{t('sidepanel.mcpPage.shellSetup.installNote')}</p>
+          <p>
+            {!server.enabled
+              ? t('sidepanel.mcpPage.shellSetup.enableAndTest')
+              : t('sidepanel.mcpPage.shellSetup.restartAndTest')}
+          </p>
+        </li>
+      </ol>
     </div>
   );
 }

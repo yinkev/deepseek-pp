@@ -28,21 +28,33 @@ export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: 
   const toggleLabel = enabled
     ? t('sidepanel.skill.actions.disableSkill', { name: skill.name })
     : t('sidepanel.skill.actions.enableSkill', { name: skill.name });
+  const statusBorder = enabled
+    ? '1px solid color-mix(in srgb, var(--ds-success) 28%, var(--ds-border))'
+    : '1px solid color-mix(in srgb, var(--ds-danger) 24%, var(--ds-border))';
 
   return (
-    <div className="ds-card rounded-xl p-3.5 group" style={!enabled ? { opacity: 0.68 } : undefined}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
+    <div
+      className="ds-card rounded-xl p-3.5 group"
+      style={{
+        border: statusBorder,
+        opacity: enabled ? 1 : 0.82,
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <code className="ds-trigger text-[12px] font-mono font-semibold px-1.5 py-0.5 rounded">
             /{skill.name}
           </code>
           {badge && (
-            <span className={`${badge.className} inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium`}>
+            <span className={`${badge.className} inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0`}>
               {t(badge.labelKey)}
             </span>
           )}
           {!enabled && (
-            <span className="ds-badge-warning inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium">
+            <span
+              className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
+              style={{ color: 'var(--ds-text-tertiary)', background: 'var(--ds-surface)' }}
+            >
               {t('sidepanel.skill.disabledBadge')}
             </span>
           )}

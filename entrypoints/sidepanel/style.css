@@ -399,6 +399,46 @@ input[type='range'] {
   word-break: keep-all;
 }
 
+.side-tabs.ds-scroll-compact .side-tab-label {
+  display: none;
+}
+
+.side-tabs.ds-scroll-compact .side-tab {
+  min-width: 40px;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.side-tabs.ds-scroll-hint-end::after,
+.sub-tabs.ds-scroll-hint-end::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, color-mix(in srgb, var(--ds-card) 88%, transparent));
+  content: '';
+}
+
+.side-tabs.ds-scroll-hint-start::before,
+.sub-tabs.ds-scroll-hint-start::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  width: 20px;
+  pointer-events: none;
+  background: linear-gradient(to left, transparent, color-mix(in srgb, var(--ds-card) 88%, transparent));
+  content: '';
+}
+
+.side-tabs,
+.sub-tabs {
+  position: relative;
+}
+
 .side-tab-indicator {
   position: absolute;
   right: 10px;
@@ -1146,7 +1186,7 @@ input[type='range'] {
   justify-content: center;
   min-width: 54px;
   height: 42px;
-  padding: 0 12px;
+  padding: 0 9px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -1190,4 +1230,99 @@ input[type='range'] {
 .ds-switch-thumb {
   background: var(--ds-switch-thumb);
   box-shadow: var(--ds-shadow-sm);
+}
+
+/* MCP server detail — compact metrics + shell setup */
+.ds-metric-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ds-metric-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  background: var(--ds-surface-2);
+}
+
+.ds-metric-chip-label {
+  font-size: 11px;
+  color: var(--ds-text-tertiary);
+  white-space: nowrap;
+}
+
+.ds-metric-chip-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ds-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-shell-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+  background: var(--ds-surface-2);
+  font-size: 12px;
+  color: var(--ds-text-secondary);
+  line-height: 1.5;
+}
+
+.ds-shell-setup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ds-shell-setup-steps > li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ds-shell-setup-step-title {
+  margin-bottom: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ds-text);
+}
+
+.ds-shell-setup code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--ds-surface-3);
+  color: var(--ds-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.ds-command-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--ds-border);
+  border-radius: 8px;
+  background: var(--ds-surface-3);
+}
+
+.ds-command-block-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--ds-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
 }
