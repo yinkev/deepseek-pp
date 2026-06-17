@@ -30,15 +30,26 @@ export function useHorizontalScrollHints<T extends HTMLElement>(options: Horizon
     const update = () => setState(readOverflowState(node));
     update();
 
-    const observer = typeof ResizeObserver !== 'undefined'
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(update)
       : null;
-    observer?.observe(node);
+    resizeObserver?.observe(node);
+
+    const mutationObserver = typeof MutationObserver !== 'undefined'
+      ? new MutationObserver(update)
+      : null;
+    mutationObserver?.observe(node, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
     node.addEventListener('scroll', update, { passive: true });
     window.addEventListener('resize', update);
 
     return () => {
-      observer?.disconnect();
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
       node.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
     };

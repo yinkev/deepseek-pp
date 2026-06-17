@@ -568,7 +568,7 @@ function McpServerForm({
         <NumberField label={t('sidepanel.mcpPage.form.discoveryMs')} value={form.discoveryMs} onChange={(value) => update('discoveryMs', value)} />
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-wrap gap-2">
         <NumberField label={t('sidepanel.mcpPage.form.resultBytes')} value={form.maxResultBytes} onChange={(value) => update('maxResultBytes', value)} />
         <NumberField label={t('sidepanel.mcpPage.form.toolLimit')} value={form.maxToolCount} onChange={(value) => update('maxToolCount', value)} />
       </div>
@@ -978,14 +978,16 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function NumberField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <Field label={label}>
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="ds-input w-full rounded-lg px-2 py-1.5 text-xs"
-        inputMode="numeric"
-      />
-    </Field>
+    <div className="min-w-[7.5rem] flex-1">
+      <Field label={label}>
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="ds-input w-full rounded-lg px-2 py-1.5 text-xs"
+          inputMode="numeric"
+        />
+      </Field>
+    </div>
   );
 }
 
