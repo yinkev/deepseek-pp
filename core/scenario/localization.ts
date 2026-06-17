@@ -32,3 +32,23 @@ export function localizeScenario(scenario: ScenarioConfig, locale: SupportedLoca
 export function localizeScenarios(scenarios: ScenarioConfig[], locale: SupportedLocale): ScenarioConfig[] {
   return scenarios.map((scenario) => localizeScenario(scenario, locale));
 }
+
+export function resolveBuiltInTemplateForSave(
+  scenario: ScenarioConfig,
+  editedTemplate: string,
+  locale: SupportedLocale,
+): string {
+  if (!scenario.builtIn || !isBuiltInScenarioId(scenario.id)) return editedTemplate;
+
+  const canonical = getBuiltInScenarioCanonical(scenario.id);
+  if (!canonical) return editedTemplate;
+
+  const localizedDefault = translate(locale, builtInTemplateKey(scenario.id)).trim();
+  const edited = editedTemplate.trim();
+
+  if (edited === localizedDefault || edited === canonical.template.trim()) {
+    return canonical.template;
+  }
+
+  return editedTemplate;
+}

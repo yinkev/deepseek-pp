@@ -11,17 +11,17 @@ interface Props {
 }
 
 const SOURCE_LABELS: Record<string, { labelKey: LocaleMessageKey; className: string }> = {
-  builtin: { labelKey: 'sidepanel.skill.sources.builtin', className: 'ds-badge-info' },
-  official: { labelKey: 'sidepanel.skill.sources.official', className: 'ds-badge-warning' },
-  'third-party': { labelKey: 'sidepanel.skill.sources.thirdParty', className: 'ds-badge-warning' },
-  custom: { labelKey: 'sidepanel.skill.sources.custom', className: 'ds-badge-warning' },
-  remote: { labelKey: 'sidepanel.skill.sources.remote', className: 'ds-badge-info' },
+  builtin: { labelKey: 'sidepanel.skill.sources.builtin', className: 'ds-tag' },
+  official: { labelKey: 'sidepanel.skill.sources.official', className: 'ds-tag' },
+  'third-party': { labelKey: 'sidepanel.skill.sources.thirdParty', className: 'ds-tag' },
+  custom: { labelKey: 'sidepanel.skill.sources.custom', className: 'ds-tag' },
+  remote: { labelKey: 'sidepanel.skill.sources.remote', className: 'ds-tag' },
 };
 
 export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: Props) {
   const { t } = useI18n();
   const badge = skill.remote?.provider === 'local'
-    ? { labelKey: 'sidepanel.skill.sources.local' as LocaleMessageKey, className: 'ds-badge-success' }
+    ? { labelKey: 'sidepanel.skill.sources.local' as LocaleMessageKey, className: 'ds-tag' }
     : SOURCE_LABELS[skill.source];
   const enabled = skill.enabled !== false;
   const hasActions = Boolean(onEdit || onDelete || onToggleEnabled);

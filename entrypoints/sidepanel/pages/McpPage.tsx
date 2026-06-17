@@ -24,6 +24,7 @@ import type {
   PlatformEnvironment,
 } from '../../../core/types';
 import PageIntro from '../components/PageIntro';
+import ToggleSwitch from '../components/ToggleSwitch';
 import { useI18n } from '../i18n';
 
 type McpTransportKind = McpServerTransportConfig['kind'];
@@ -761,10 +762,13 @@ function ServerRow({
             })}
           </div>
         </div>
-        <label className="flex items-center gap-1 text-[11px]" style={{ color: 'var(--ds-text-secondary)' }} onClick={(event) => event.stopPropagation()}>
-          <input type="checkbox" checked={server.enabled} onChange={onToggle} />
-          {t('sidepanel.mcpPage.enabled')}
-        </label>
+        <div onClick={(event) => event.stopPropagation()}>
+          <ToggleSwitch
+            checked={server.enabled}
+            onChange={() => onToggle()}
+            label={t('sidepanel.mcpPage.enabled')}
+          />
+        </div>
       </div>
       <div className="flex items-center gap-1.5 mt-2" onClick={(event) => event.stopPropagation()}>
         <button onClick={onTest} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>

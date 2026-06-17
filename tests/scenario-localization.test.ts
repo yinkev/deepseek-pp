@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { localizeScenario } from '../core/scenario/localization';
+import {
+  localizeScenario,
+  resolveBuiltInTemplateForSave,
+} from '../core/scenario/localization';
 import { getBuiltInScenarioCanonical } from '../core/scenario/store';
 
 describe('scenario localization', () => {
@@ -19,6 +22,18 @@ describe('scenario localization', () => {
     const localized = localizeScenario(customized, 'en');
     expect(localized.label).toBe('Explain');
     expect(localized.template).toBe('Custom explain template: {text}');
+  });
+
+  it('persists canonical built-in templates when the editor still shows localized defaults', () => {
+    const canonical = getBuiltInScenarioCanonical('summarize');
+    expect(canonical).toBeTruthy();
+
+    const saved = resolveBuiltInTemplateForSave(
+      canonical!,
+      'Summarize the following content concisely:\n\n{text}',
+      'en',
+    );
+    expect(saved).toBe(canonical!.template);
   });
 
   it('does not mutate custom scenarios', () => {

@@ -27,7 +27,7 @@ const SUB_TABS: { key: SubTab; labelKey: LocaleMessageKey; titleKey?: LocaleMess
 export default function CapabilitiesPage() {
   const [sub, setSub] = useState<SubTab>('skill');
   const { t } = useI18n();
-  const subTabs = useHorizontalScrollHints<HTMLElement>();
+  const subTabs = useHorizontalScrollHints<HTMLElement>({ compact: false });
 
   return (
     <div className="flex flex-col h-full">

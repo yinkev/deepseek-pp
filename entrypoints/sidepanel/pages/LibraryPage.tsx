@@ -3,6 +3,7 @@ import type { LocaleMessageKey } from '../../../core/i18n';
 import MemoryPage from './MemoryPage';
 import SavedPage from './SavedPage';
 import { useI18n } from '../i18n';
+import { useHorizontalScrollHints } from '../use-horizontal-scroll-hints';
 
 type LibrarySubTab = 'memory' | 'saved';
 
@@ -18,10 +19,15 @@ interface LibraryPageProps {
 export default function LibraryPage({ onInsertPrompt }: LibraryPageProps) {
   const [sub, setSub] = useState<LibrarySubTab>('memory');
   const { t } = useI18n();
+  const subTabs = useHorizontalScrollHints<HTMLElement>({ compact: false });
 
   return (
     <div className="flex flex-col h-full">
-      <nav className="sub-tabs" aria-label={t('sidepanel.libraryPage.navLabel')}>
+      <nav
+        ref={subTabs.ref}
+        className={`sub-tabs${subTabs.className ? ` ${subTabs.className}` : ''}`}
+        aria-label={t('sidepanel.libraryPage.navLabel')}
+      >
         {SUB_TABS.map((tab) => (
           <button
             key={tab.key}

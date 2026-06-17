@@ -10,7 +10,13 @@ function readOverflowState(element: HTMLElement) {
   };
 }
 
-export function useHorizontalScrollHints<T extends HTMLElement>() {
+type HorizontalScrollHintsOptions = {
+  /** When true, adds ds-scroll-compact for icon-only top tabs at narrow widths. */
+  compact?: boolean;
+};
+
+export function useHorizontalScrollHints<T extends HTMLElement>(options: HorizontalScrollHintsOptions = {}) {
+  const enableCompact = options.compact !== false;
   const [node, setNode] = useState<T | null>(null);
   const [state, setState] = useState({ overflowStart: false, overflowEnd: false, compact: false });
 
@@ -41,7 +47,7 @@ export function useHorizontalScrollHints<T extends HTMLElement>() {
   const className = [
     state.overflowStart ? 'ds-scroll-hint-start' : '',
     state.overflowEnd ? 'ds-scroll-hint-end' : '',
-    state.compact ? 'ds-scroll-compact' : '',
+    enableCompact && state.compact ? 'ds-scroll-compact' : '',
   ].filter(Boolean).join(' ');
 
   return { ref, className, ...state };
