@@ -459,14 +459,11 @@ function McpServerForm({
         <div className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
           {initial ? t('sidepanel.mcpPage.form.editTitle') : t('sidepanel.mcpPage.form.createTitle')}
         </div>
-        <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--ds-text-secondary)' }}>
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            onChange={(event) => update('enabled', event.target.checked)}
-          />
-          {t('sidepanel.mcpPage.enabled')}
-        </label>
+        <ToggleSwitch
+          checked={form.enabled}
+          onChange={(enabled) => update('enabled', enabled)}
+          label={t('sidepanel.mcpPage.enabled')}
+        />
       </div>
 
       {error && (
@@ -579,14 +576,11 @@ function McpServerForm({
       <div className="ds-surface-panel rounded-lg p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.mcpPage.form.defaultExecution')}</span>
-          <label className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--ds-text-secondary)' }}>
-            <input
-              type="checkbox"
-              checked={form.executionEnabled}
-              onChange={(event) => update('executionEnabled', event.target.checked)}
-            />
-            {t('sidepanel.mcpPage.form.allowInject')}
-          </label>
+          <ToggleSwitch
+            checked={form.executionEnabled}
+            onChange={(executionEnabled) => update('executionEnabled', executionEnabled)}
+            label={t('sidepanel.mcpPage.form.allowInject')}
+          />
         </div>
         <select
           value={form.executionMode}
@@ -855,14 +849,11 @@ function ServerDetail({
       <div className="ds-card rounded-lg p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.mcpPage.detail.executionPolicy')}</span>
-          <label className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
-            <input
-              type="checkbox"
-              checked={server.execution.enabled}
-              onChange={(event) => onPatch({ execution: { ...server.execution, enabled: event.target.checked } })}
-            />
-            {t('sidepanel.mcpPage.form.allowInject')}
-          </label>
+          <ToggleSwitch
+            checked={server.execution.enabled}
+            onChange={(enabled) => onPatch({ execution: { ...server.execution, enabled } })}
+            label={t('sidepanel.mcpPage.form.allowInject')}
+          />
         </div>
         <select
           value={server.execution.mode}
@@ -947,10 +938,11 @@ function ToolRow({
           <div className="text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>{tool.title || tool.name}</div>
           <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--ds-blue)' }}>{tool.invocationName}</div>
         </div>
-        <label className="flex items-center gap-1 text-[11px]" style={{ color: enabled ? 'var(--ds-success)' : 'var(--ds-text-tertiary)' }}>
-          <input type="checkbox" checked={enabled} onChange={onToggle} />
-          {enabled ? t('sidepanel.mcpPage.auto') : t('sidepanel.mcpPage.disabled')}
-        </label>
+        <ToggleSwitch
+          checked={enabled}
+          onChange={() => onToggle()}
+          label={enabled ? t('sidepanel.mcpPage.auto') : t('sidepanel.mcpPage.disabled')}
+        />
       </div>
       <div className="text-[11px] mt-1 leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
         {tool.description}

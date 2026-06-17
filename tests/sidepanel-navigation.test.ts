@@ -97,6 +97,27 @@ describe('sidepanel navigation', () => {
     expect(css).toContain('.ds-shell-setup-steps');
     expect(css).toContain('.ds-command-block');
   });
+
+  it('uses role=switch toggles in settings scenarios instead of raw checkboxes', async () => {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async () => ({ scenarioConfigs: [] })),
+          set: vi.fn(async () => {}),
+        },
+      },
+      runtime: {
+        sendMessage: vi.fn(async () => {}),
+      },
+    });
+
+    const ScenarioManager = (await import('../entrypoints/sidepanel/components/ScenarioManager')).default;
+    await renderElement(React.createElement(ScenarioManager));
+
+    expect(container.querySelectorAll('[role="switch"]').length).toBeGreaterThan(0);
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    vi.unstubAllGlobals();
+  });
 });
 
 async function renderApp() {

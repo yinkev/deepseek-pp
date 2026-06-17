@@ -13,15 +13,19 @@ export default function ToggleSwitch({
   disabled = false,
   'aria-label': ariaLabel,
 }: ToggleSwitchProps) {
+  const toggle = () => {
+    if (!disabled) onChange(!checked);
+  };
+
   return (
-    <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer" style={{ color: 'var(--ds-text-secondary)' }}>
+    <div className="inline-flex items-center gap-2 shrink-0" style={{ color: 'var(--ds-text-secondary)' }}>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
         aria-label={ariaLabel ?? label}
         disabled={disabled}
-        onClick={() => onChange(!checked)}
+        onClick={toggle}
         className="relative shrink-0 w-10 h-[22px] rounded-full transition-colors duration-200 disabled:opacity-50"
         style={{
           background: checked ? 'var(--ds-blue)' : 'var(--ds-border)',
@@ -34,7 +38,17 @@ export default function ToggleSwitch({
           }}
         />
       </button>
-      {label && <span className="text-[11px]">{label}</span>}
-    </label>
+      {label && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={toggle}
+          className="text-[11px] text-left disabled:opacity-50"
+          style={{ color: 'inherit' }}
+        >
+          {label}
+        </button>
+      )}
+    </div>
   );
 }

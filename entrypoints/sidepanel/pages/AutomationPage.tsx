@@ -10,6 +10,7 @@ import type {
 import { validateAutomationSchedule } from '../../../core/automation/schedule';
 import type { SupportedLocale } from '../../../core/i18n';
 import PageIntro from '../components/PageIntro';
+import ToggleSwitch from '../components/ToggleSwitch';
 import { useI18n } from '../i18n';
 
 const DEFAULT_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
@@ -284,7 +285,7 @@ function AutomationForm({
 
   return (
     <div className="ds-form rounded-xl p-4 space-y-3">
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2">
         <label className="space-y-1">
           <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.name')}</span>
           <input
@@ -309,7 +310,7 @@ function AutomationForm({
       </div>
 
       <label className="space-y-1 block">
-        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>Prompt</span>
+        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.prompt')}</span>
         <textarea
           value={form.prompt}
           onChange={(e) => update('prompt', e.target.value)}
@@ -353,23 +354,17 @@ function AutomationForm({
         />
       </label>
 
-      <div className="flex items-center gap-4">
-        <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--ds-text-secondary)' }}>
-          <input
-            type="checkbox"
-            checked={form.searchEnabled}
-            onChange={(e) => update('searchEnabled', e.target.checked)}
-          />
-          {t('sidepanel.automationPage.form.search')}
-        </label>
-        <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--ds-text-secondary)' }}>
-          <input
-            type="checkbox"
-            checked={form.thinkingEnabled}
-            onChange={(e) => update('thinkingEnabled', e.target.checked)}
-          />
-          {t('sidepanel.automationPage.form.thinking')}
-        </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <ToggleSwitch
+          checked={form.searchEnabled}
+          onChange={(searchEnabled) => update('searchEnabled', searchEnabled)}
+          label={t('sidepanel.automationPage.form.search')}
+        />
+        <ToggleSwitch
+          checked={form.thinkingEnabled}
+          onChange={(thinkingEnabled) => update('thinkingEnabled', thinkingEnabled)}
+          label={t('sidepanel.automationPage.form.thinking')}
+        />
       </div>
 
       <div className="flex justify-end gap-2 pt-1">
@@ -431,11 +426,11 @@ function AutomationCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
-        <Meta label={t('sidepanel.automationPage.meta.next')} value={formatTime(automation.nextRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
-        <Meta label={t('sidepanel.automationPage.meta.previous')} value={formatTime(automation.lastRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
-        <Meta label={t('sidepanel.automationPage.meta.session')} value={automation.deepseek.chatSessionId ? shortId(automation.deepseek.chatSessionId) : t('sidepanel.automationPage.meta.notCreated')} />
-        <Meta label={t('sidepanel.automationPage.meta.recent')} value={latestRun ? formatRun(latestRun, t) : t('sidepanel.automationPage.meta.none')} />
+      <div className="ds-metric-strip">
+        <MetaChip label={t('sidepanel.automationPage.meta.next')} value={formatTime(automation.nextRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
+        <MetaChip label={t('sidepanel.automationPage.meta.previous')} value={formatTime(automation.lastRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
+        <MetaChip label={t('sidepanel.automationPage.meta.session')} value={automation.deepseek.chatSessionId ? shortId(automation.deepseek.chatSessionId) : t('sidepanel.automationPage.meta.notCreated')} />
+        <MetaChip label={t('sidepanel.automationPage.meta.recent')} value={latestRun ? formatRun(latestRun, t) : t('sidepanel.automationPage.meta.none')} />
       </div>
 
       {automation.lastError && (
@@ -488,11 +483,11 @@ function IconButton({
   );
 }
 
-function Meta({ label, value }: { label: string; value: string }) {
+function MetaChip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg px-2.5 py-2" style={{ background: 'var(--ds-surface)' }}>
-      <div style={{ color: 'var(--ds-text-tertiary)' }}>{label}</div>
-      <div className="truncate mt-0.5" style={{ color: 'var(--ds-text-secondary)' }}>{value}</div>
+    <div className="ds-metric-chip min-w-[calc(50%-4px)] flex-1">
+      <span className="ds-metric-chip-label">{label}</span>
+      <span className="ds-metric-chip-value truncate">{value}</span>
     </div>
   );
 }

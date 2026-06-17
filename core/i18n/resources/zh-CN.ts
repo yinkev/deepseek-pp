@@ -705,6 +705,7 @@ export const zhCN = {
         namePlaceholder: '任务名称',
         model: '模型',
         defaultModel: '默认',
+        prompt: 'Prompt',
         promptPlaceholder: '输入要定时发送到 DeepSeek 的内容',
         trigger: '触发',
         manual: '手动',

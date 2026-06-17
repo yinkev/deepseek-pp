@@ -705,6 +705,7 @@ export const en = {
         namePlaceholder: 'Task name',
         model: 'Model',
         defaultModel: 'Default',
+        prompt: 'Prompt',
         promptPlaceholder: 'Enter the content to send to DeepSeek on schedule',
         trigger: 'Trigger',
         manual: 'Manual',
