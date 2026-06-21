@@ -10,59 +10,50 @@ interface Props {
   onToggleEnabled?: () => void;
 }
 
-const SOURCE_LABELS: Record<string, { labelKey: LocaleMessageKey; tone: 'muted' | 'accent' }> = {
-  builtin: { labelKey: 'sidepanel.skill.sources.builtin', tone: 'muted' },
-  official: { labelKey: 'sidepanel.skill.sources.official', tone: 'muted' },
-  'third-party': { labelKey: 'sidepanel.skill.sources.thirdParty', tone: 'muted' },
-  custom: { labelKey: 'sidepanel.skill.sources.custom', tone: 'muted' },
-  remote: { labelKey: 'sidepanel.skill.sources.remote', tone: 'muted' },
+const SOURCE_LABELS: Record<string, { labelKey: LocaleMessageKey; className: string }> = {
+  builtin: { labelKey: 'sidepanel.skill.sources.builtin', className: 'ds-tag' },
+  official: { labelKey: 'sidepanel.skill.sources.official', className: 'ds-tag' },
+  'third-party': { labelKey: 'sidepanel.skill.sources.thirdParty', className: 'ds-tag' },
+  custom: { labelKey: 'sidepanel.skill.sources.custom', className: 'ds-tag' },
+  remote: { labelKey: 'sidepanel.skill.sources.remote', className: 'ds-tag' },
 };
 
 export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: Props) {
   const { t } = useI18n();
   const badge = skill.remote?.provider === 'local'
-    ? { labelKey: 'sidepanel.skill.sources.local' as LocaleMessageKey, tone: 'accent' as const }
+    ? { labelKey: 'sidepanel.skill.sources.local' as LocaleMessageKey, className: 'ds-tag' }
     : SOURCE_LABELS[skill.source];
   const enabled = skill.enabled !== false;
   const hasActions = Boolean(onEdit || onDelete || onToggleEnabled);
   const toggleLabel = enabled
     ? t('sidepanel.skill.actions.disableSkill', { name: skill.name })
     : t('sidepanel.skill.actions.enableSkill', { name: skill.name });
+  const statusBorder = enabled
+    ? '1px solid color-mix(in srgb, var(--ds-success) 28%, var(--ds-border))'
+    : '1px solid color-mix(in srgb, var(--ds-danger) 24%, var(--ds-border))';
 
   return (
     <div
-      className="ds-card group"
-      style={{ padding: '12px 14px', opacity: enabled ? undefined : 0.6 }}
+      className="ds-card rounded-xl p-3 group"
+      style={{
+        border: statusBorder,
+        opacity: enabled ? 1 : 0.82,
+      }}
     >
-      {/* Header: trigger chip + single source label + hover actions */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <code
-            className="font-mono font-semibold"
-            style={{
-              fontSize: '12px',
-              padding: '2px 6px',
-              borderRadius: 'var(--radius-ctrl)',
-              background: 'var(--ds-blue-light)',
-              color: 'var(--ds-blue)',
-            }}
-          >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          <code className="ds-trigger text-[12px] font-mono font-semibold px-1.5 py-0.5 rounded">
             /{skill.name}
           </code>
           {badge && (
-            <span
-              className="text-[10px] font-medium uppercase tracking-wide"
-              style={{
-                color: badge.tone === 'accent' ? 'var(--ds-success)' : 'var(--ds-text-tertiary)',
-              }}
-            >
+            <span className={`${badge.className} inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0`}>
               {t(badge.labelKey)}
             </span>
           )}
           {!enabled && (
             <span
-              className="text-[10px] font-medium uppercase tracking-wide"
-              style={{ color: 'var(--ds-warning)' }}
+              className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
+              style={{ color: 'var(--ds-text-tertiary)', background: 'var(--ds-surface)' }}
             >
               {t('sidepanel.skill.disabledBadge')}
             </span>

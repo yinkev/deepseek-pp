@@ -95,7 +95,7 @@ export default function PresetPage() {
   };
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.presetPage.title')}
         description={t('sidepanel.presetPage.description')}

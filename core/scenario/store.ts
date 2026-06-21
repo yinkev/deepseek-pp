@@ -8,6 +8,10 @@ const BUILT_IN_SCENARIOS: ScenarioConfig[] = [
   { id: 'translate', label: '翻译', template: '请将以下内容翻译成中文：\n\n{text}', builtIn: true, enabled: true },
 ];
 
+export function getBuiltInScenarioCanonical(id: string): ScenarioConfig | undefined {
+  return BUILT_IN_SCENARIOS.find((scenario) => scenario.id === id);
+}
+
 export function getDefaultScenarios(): ScenarioConfig[] {
   return BUILT_IN_SCENARIOS.map((s) => ({ ...s }));
 }

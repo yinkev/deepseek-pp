@@ -30,6 +30,7 @@ import type {
   PlatformEnvironment,
 } from '../../../core/types';
 import PageIntro from '../components/PageIntro';
+import ToggleSwitch from '../components/ToggleSwitch';
 import { useI18n } from '../i18n';
 import {
   SettingsSection,
@@ -379,7 +380,7 @@ export default function McpPage() {
   };
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.mcpPage.title')}
         description={t('sidepanel.mcpPage.description')}
@@ -564,10 +565,10 @@ function McpServerForm({
         <div className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
           {initial ? t('sidepanel.mcpPage.form.editTitle') : t('sidepanel.mcpPage.form.createTitle')}
         </div>
-        <ToggleRow
-          title={t('sidepanel.mcpPage.enabled')}
-          enabled={form.enabled}
-          onToggle={(next) => update('enabled', next)}
+        <ToggleSwitch
+          checked={form.enabled}
+          onChange={(enabled) => update('enabled', enabled)}
+          label={t('sidepanel.mcpPage.enabled')}
         />
       </div>
 
@@ -716,12 +717,16 @@ function McpServerForm({
             </div>
 
             <div className="ds-surface-panel rounded-lg p-3 space-y-2">
-              <ToggleRow
-                title={t('sidepanel.mcpPage.form.defaultExecution')}
-                description={t('sidepanel.mcpPage.form.allowInject')}
-                enabled={form.executionEnabled}
-                onToggle={(next) => update('executionEnabled', next)}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+                  {t('sidepanel.mcpPage.form.defaultExecution')}
+                </span>
+                <ToggleSwitch
+                  checked={form.executionEnabled}
+                  onChange={(executionEnabled) => update('executionEnabled', executionEnabled)}
+                  label={t('sidepanel.mcpPage.form.allowInject')}
+                />
+              </div>
               <select
                 value={form.executionMode}
                 onChange={(event) => update('executionMode', event.target.value as ToolExecutionMode)}
@@ -895,10 +900,10 @@ function ServerRow({
           </span>
         </div>
         <div onClick={(event) => event.stopPropagation()}>
-          <ToggleRow
-            title={t('sidepanel.mcpPage.enabled')}
-            enabled={server.enabled}
-            onToggle={onToggle}
+          <ToggleSwitch
+            checked={server.enabled}
+            onChange={() => onToggle()}
+            label={t('sidepanel.mcpPage.enabled')}
           />
         </div>
       </div>
@@ -972,7 +977,7 @@ function ServerDetail({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
+      <div className="ds-metric-strip">
         <Metric label={t('sidepanel.mcpPage.detail.status')} value={statusMeta(cache?.health.status ?? server.status, t).label} />
         <Metric label={t('sidepanel.mcpPage.detail.latency')} value={formatMs(cache?.health.latencyMs ?? null)} />
         <Metric label={t('sidepanel.mcpPage.detail.lastConnected')} value={formatTime(server.lastConnectedAt ?? cache?.health.checkedAt ?? null, locale)} />
@@ -994,12 +999,17 @@ function ServerDetail({
       )}
 
       <div className="ds-card rounded-lg p-3 space-y-2">
-        <ToggleRow
-          title={t('sidepanel.mcpPage.detail.executionPolicy')}
-          description={t('sidepanel.mcpPage.detail.injectionSummary', { count: enabledToolCount(server, tools) })}
-          enabled={server.execution.enabled}
-          onToggle={(next) => onPatch({ execution: { ...server.execution, enabled: next } })}
-        />
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.mcpPage.detail.executionPolicy')}</span>
+          <ToggleSwitch
+            checked={server.execution.enabled}
+            onChange={(enabled) => onPatch({ execution: { ...server.execution, enabled } })}
+            label={t('sidepanel.mcpPage.form.allowInject')}
+          />
+        </div>
+        <div className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+          {t('sidepanel.mcpPage.detail.injectionSummary', { count: enabledToolCount(server, tools) })}
+        </div>
         <select
           value={server.execution.mode}
           onChange={(event) => onPatch({ execution: { ...server.execution, mode: event.target.value as ToolExecutionMode } })}
@@ -1128,10 +1138,10 @@ function ToolRow({
           <div className="text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>{tool.title || tool.name}</div>
           <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--ds-blue)' }}>{tool.invocationName}</div>
         </div>
-        <ToggleRow
-          title={enabled ? t('sidepanel.mcpPage.auto') : t('sidepanel.mcpPage.disabled')}
-          enabled={enabled}
-          onToggle={onToggle}
+        <ToggleSwitch
+          checked={enabled}
+          onChange={() => onToggle()}
+          label={enabled ? t('sidepanel.mcpPage.auto') : t('sidepanel.mcpPage.disabled')}
         />
       </div>
       <div className="text-[11px] mt-1 leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
@@ -1170,22 +1180,51 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function NumberField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <Field label={label}>
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="ds-input w-full rounded-lg px-2 py-1.5 text-xs"
-        inputMode="numeric"
-      />
-    </Field>
+    <div className="min-w-[7.5rem] flex-1">
+      <Field label={label}>
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="ds-input w-full rounded-lg px-2 py-1.5 text-xs"
+          inputMode="numeric"
+        />
+      </Field>
+    </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg px-3 py-2" style={{ background: 'var(--ds-bg)', border: '1px solid var(--ds-border)' }}>
-      <div style={{ color: 'var(--ds-text-tertiary)' }}>{label}</div>
-      <div className="mt-0.5 truncate" style={{ color: 'var(--ds-text)' }}>{value}</div>
+    <div className="ds-metric-chip">
+      <span className="ds-metric-chip-label">{label}</span>
+      <span className="ds-metric-chip-value">{value}</span>
+    </div>
+  );
+}
+
+function CopyableCommand({ command, copyLabel, copiedLabel }: {
+  command: string;
+  copyLabel: string;
+  copiedLabel: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="ds-command-block">
+      <code className="ds-command-block-text">{command}</code>
+      <button type="button" onClick={handleCopy} className="ds-btn-secondary px-2 py-1 text-[10px] rounded-md shrink-0">
+        {copied ? copiedLabel : copyLabel}
+      </button>
     </div>
   );
 }

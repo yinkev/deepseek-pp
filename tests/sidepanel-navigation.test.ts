@@ -133,6 +133,40 @@ describe('sidepanel navigation', () => {
     expect(navBlock).toContain('min-height: 44px');
     expect(mainBlock).toContain('flex: 1 1 0');
   });
+
+  it('defines scroll-hint and MCP polish utility classes', () => {
+    const css = readFileSync('entrypoints/sidepanel/style.css', 'utf8');
+
+    expect(css).toContain('.side-tabs.ds-scroll-compact .side-tab-label');
+    expect(css).toContain('.ds-metric-strip');
+    expect(css).toContain('.ds-shell-setup-steps');
+    expect(css).toContain('.ds-command-block');
+    expect(css).toContain('.ds-page');
+    expect(css).toContain('.ds-section');
+    expect(css).toContain('--ds-surface-2');
+    expect(css).toContain('--ds-space-3');
+  });
+
+  it('uses role=switch toggles in settings scenarios instead of raw checkboxes', async () => {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async () => ({ scenarioConfigs: [] })),
+          set: vi.fn(async () => {}),
+        },
+      },
+      runtime: {
+        sendMessage: vi.fn(async () => {}),
+      },
+    });
+
+    const ScenarioManager = (await import('../entrypoints/sidepanel/components/ScenarioManager')).default;
+    await renderElement(React.createElement(ScenarioManager));
+
+    expect(container.querySelectorAll('[role="switch"]').length).toBeGreaterThan(0);
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    vi.unstubAllGlobals();
+  });
 });
 
 async function renderApp() {

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import MemoryPage from './MemoryPage';
 import SavedPage from './SavedPage';
-import { SubTabs } from '../components/settings/primitives';
 import { useI18n } from '../i18n';
+import { useHorizontalScrollHints } from '../use-horizontal-scroll-hints';
 
 type LibrarySubTab = 'memory' | 'saved';
 
@@ -18,15 +18,26 @@ interface LibraryPageProps {
 export default function LibraryPage({ onInsertPrompt }: LibraryPageProps) {
   const [sub, setSub] = useState<LibrarySubTab>('memory');
   const { t } = useI18n();
+  const subTabs = useHorizontalScrollHints<HTMLElement>({ compact: false });
 
   return (
     <div className="flex flex-col h-full">
-      <SubTabs
-        tabs={SUB_TABS.map((tab) => ({ key: tab.key, label: t(tab.labelKey) }))}
-        value={sub}
-        onChange={setSub}
-        ariaLabel={t('sidepanel.libraryPage.navLabel')}
-      />
+      <nav
+        ref={subTabs.ref}
+        className={`sub-tabs${subTabs.className ? ` ${subTabs.className}` : ''}`}
+        aria-label={t('sidepanel.libraryPage.navLabel')}
+      >
+        {SUB_TABS.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setSub(tab.key)}
+            className={`sub-tab${sub === tab.key ? ' sub-tab-active' : ''}`}
+          >
+            {t(tab.labelKey)}
+          </button>
+        ))}
+      </nav>
 
       <div className="flex-1 overflow-y-auto">
         {sub === 'memory' && <MemoryPage />}

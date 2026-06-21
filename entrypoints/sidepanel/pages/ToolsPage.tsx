@@ -409,7 +409,7 @@ export default function ToolsPage() {
   };
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.toolsPage.toolTitle')}
         description={t('sidepanel.toolsPage.toolDescription')}

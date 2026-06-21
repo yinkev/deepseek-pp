@@ -10,14 +10,6 @@ import { SkeletonList, useConfirm } from '../components/settings/primitives';
 import { requestGitHubApiPermission } from '../github-permission';
 import { useI18n } from '../i18n';
 
-interface SkillSectionProps {
-  title: string;
-  skills: Skill[];
-  onEdit?: (skill: Skill) => void;
-  onDelete?: (name: string) => void;
-  onToggleEnabled?: (skill: Skill) => void;
-}
-
 type SourceActionStatus = 'checking' | 'updating' | 'success' | 'error';
 
 interface SourceActionState {
@@ -26,32 +18,12 @@ interface SourceActionState {
   update?: GitHubSkillUpdatePreview;
 }
 
-interface ThirdPartySkillGroup {
+interface SkillGroup {
   id: string;
   title: string;
   subtitle: string;
-  badgeKey: LocaleMessageKey;
+  badgeKey?: LocaleMessageKey;
   skills: Skill[];
-}
-
-function SkillSection({ title, skills, onEdit, onDelete, onToggleEnabled }: SkillSectionProps) {
-  if (skills.length === 0) return null;
-  return (
-    <div className="space-y-2">
-      <h3 className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {title}
-      </h3>
-      {skills.map((s) => (
-        <SkillCard
-          key={s.name}
-          skill={s}
-          onEdit={onEdit ? () => onEdit(s) : undefined}
-          onDelete={onDelete ? () => onDelete(s.name) : undefined}
-          onToggleEnabled={onToggleEnabled ? () => onToggleEnabled(s) : undefined}
-        />
-      ))}
-    </div>
-  );
 }
 
 export default function SkillPage() {
@@ -62,7 +34,7 @@ export default function SkillPage() {
   const [importMode, setImportMode] = useState<'github' | 'local' | null>(null);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [sourceActions, setSourceActions] = useState<Record<string, SourceActionState>>({});
-  const [expandedThirdPartyGroups, setExpandedThirdPartyGroups] = useState<Record<string, boolean>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ builtin: true });
   const [loading, setLoading] = useState(true);
   const { confirm, node: confirmNode } = useConfirm();
 
@@ -114,8 +86,8 @@ export default function SkillPage() {
     await load();
   };
 
-  const handleToggleGroupEnabled = async (group: ThirdPartySkillGroup) => {
-    const shouldEnable = group.skills.some((skill) => skill.enabled === false);
+  const handleToggleGroupEnabled = async (group: SkillGroup) => {
+    const shouldEnable = !group.skills.every((skill) => skill.enabled !== false);
     await Promise.all(group.skills.map((skill) => chrome.runtime.sendMessage({
       type: 'SET_SKILL_ENABLED',
       payload: { name: skill.name, enabled: shouldEnable },
@@ -123,8 +95,8 @@ export default function SkillPage() {
     await load();
   };
 
-  const handleToggleThirdPartyGroup = (groupId: string) => {
-    setExpandedThirdPartyGroups((current) => ({
+  const handleToggleGroup = (groupId: string) => {
+    setExpandedGroups((current) => ({
       ...current,
       [groupId]: !current[groupId],
     }));
@@ -157,7 +129,7 @@ export default function SkillPage() {
         ...current,
         [source.id]: {
           status: 'success',
-          message: formatUpdateMessage(update, t),
+          message: formatUpdateMessage(update, t, locale),
           update,
         },
       }));
@@ -239,10 +211,34 @@ export default function SkillPage() {
     t,
   );
   const custom = skills.filter((s) => s.source === 'custom');
+  const builtinGroup: SkillGroup | null = builtin.length > 0
+    ? {
+      id: 'builtin',
+      title: t('sidepanel.skillPage.sectionBuiltin'),
+      subtitle: t('sidepanel.skillPage.enabledSkillCount', {
+        enabled: builtin.filter((skill) => skill.enabled !== false).length,
+        total: builtin.length,
+      }),
+      badgeKey: 'sidepanel.skill.sources.builtin',
+      skills: builtin,
+    }
+    : null;
+  const customGroup: SkillGroup | null = custom.length > 0
+    ? {
+      id: 'custom',
+      title: t('sidepanel.skillPage.sectionCustom'),
+      subtitle: t('sidepanel.skillPage.enabledSkillCount', {
+        enabled: custom.filter((skill) => skill.enabled !== false).length,
+        total: custom.length,
+      }),
+      badgeKey: 'sidepanel.skill.sources.custom',
+      skills: custom,
+    }
+    : null;
   const enabledCount = skills.filter((s) => s.enabled !== false).length;
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.skillPage.title')}
         description={t('sidepanel.skillPage.description')}
@@ -315,22 +311,35 @@ export default function SkillPage() {
         />
       )}
 
-      <SkillSection title={t('sidepanel.skillPage.sectionBuiltin')} skills={builtin} />
-      <ThirdPartySkillSection
+      {builtinGroup && (
+        <SkillGroupsPanel
+          groups={[builtinGroup]}
+          expandedGroups={expandedGroups}
+          onToggleGroup={handleToggleGroup}
+          onToggleGroupEnabled={handleToggleGroupEnabled}
+          onToggleEnabled={handleToggleEnabled}
+        />
+      )}
+      <SkillGroupsPanel
+        sectionLabel={t('sidepanel.skillPage.sectionThirdParty')}
         groups={thirdPartyGroups}
-        expandedGroups={expandedThirdPartyGroups}
-        onToggleGroup={handleToggleThirdPartyGroup}
+        expandedGroups={expandedGroups}
+        onToggleGroup={handleToggleGroup}
         onToggleGroupEnabled={handleToggleGroupEnabled}
         onDelete={handleDelete}
         onToggleEnabled={handleToggleEnabled}
       />
-      <SkillSection
-        title={t('sidepanel.skillPage.sectionCustom')}
-        skills={custom}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        onToggleEnabled={handleToggleEnabled}
-      />
+      {customGroup && (
+        <SkillGroupsPanel
+          groups={[customGroup]}
+          expandedGroups={expandedGroups}
+          onToggleGroup={handleToggleGroup}
+          onToggleGroupEnabled={handleToggleGroupEnabled}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+          onToggleEnabled={handleToggleEnabled}
+        />
+      )}
 
       <div className="ds-info-panel rounded-xl p-3.5">
         <p className="text-xs leading-relaxed" style={{ color: 'var(--ds-text-secondary)' }}>
@@ -350,33 +359,45 @@ export default function SkillPage() {
   );
 }
 
-function ThirdPartySkillSection({ groups, expandedGroups, onToggleGroup, onToggleGroupEnabled, onDelete, onToggleEnabled }: {
-  groups: ThirdPartySkillGroup[];
+function SkillGroupsPanel({
+  sectionLabel,
+  groups,
+  expandedGroups,
+  onToggleGroup,
+  onToggleGroupEnabled,
+  onEdit,
+  onDelete,
+  onToggleEnabled,
+}: {
+  sectionLabel?: string;
+  groups: SkillGroup[];
   expandedGroups: Record<string, boolean>;
   onToggleGroup: (groupId: string) => void;
-  onToggleGroupEnabled: (group: ThirdPartySkillGroup) => void;
-  onDelete: (name: string) => void;
+  onToggleGroupEnabled: (group: SkillGroup) => void;
+  onEdit?: (skill: Skill) => void;
+  onDelete?: (name: string) => void;
   onToggleEnabled: (skill: Skill) => void;
 }) {
   const { t } = useI18n();
   if (groups.length === 0) return null;
 
   return (
-    <section className="space-y-2">
-      <h3 className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {t('sidepanel.skillPage.sectionThirdParty')}
-      </h3>
+    <section className="ds-section">
+      {sectionLabel && (
+        <h3 className="ds-section-title text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
+          {sectionLabel}
+        </h3>
+      )}
       {groups.map((group) => {
         const expanded = expandedGroups[group.id] === true;
-        const enabledCount = group.skills.filter((skill) => skill.enabled !== false).length;
-        const shouldDisableAll = enabledCount === group.skills.length;
-        const toggleAllLabel = shouldDisableAll
+        const allEnabled = group.skills.every((skill) => skill.enabled !== false);
+        const toggleAllLabel = allEnabled
           ? t('sidepanel.skillPage.disableSourceSkills')
           : t('sidepanel.skillPage.enableSourceSkills');
 
         return (
-          <div key={group.id} className="ds-surface-panel rounded-xl overflow-hidden">
-            <div className="flex items-center gap-2 p-3">
+          <div key={group.id} className="ds-surface-panel">
+            <div className="ds-list-row">
               <button
                 type="button"
                 aria-expanded={expanded}
@@ -401,15 +422,19 @@ function ThirdPartySkillSection({ groups, expandedGroups, onToggleGroup, onToggl
                     <span className="text-xs font-semibold truncate" style={{ color: 'var(--ds-text)' }}>
                       {group.title}
                     </span>
-                    <span className="ds-badge-warning inline-flex text-[10px] px-1.5 py-0.5 rounded-full font-medium">
-                      {t(group.badgeKey)}
-                    </span>
+                    {group.badgeKey && (
+                      <span className="ds-tag inline-flex text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0">
+                        {t(group.badgeKey)}
+                      </span>
+                    )}
                   </span>
                   <span className="block text-[11px] mt-0.5 truncate" style={{ color: 'var(--ds-text-tertiary)' }}>
-                    {group.subtitle} · {t('sidepanel.skillPage.enabledSkillCount', {
-                      enabled: enabledCount,
-                      total: group.skills.length,
-                    })}
+                    {group.id === 'builtin' || group.id === 'custom'
+                      ? group.subtitle
+                      : `${group.subtitle} · ${t('sidepanel.skillPage.enabledSkillCount', {
+                        enabled: group.skills.filter((skill) => skill.enabled !== false).length,
+                        total: group.skills.length,
+                      })}`}
                   </span>
                 </span>
               </button>
@@ -423,14 +448,19 @@ function ThirdPartySkillSection({ groups, expandedGroups, onToggleGroup, onToggl
             </div>
             {expanded && (
               <div
-                className="space-y-2 p-3 pt-2 animate-slide-down"
+                className="ds-section ds-panel-block pt-0 animate-slide-down"
                 style={{ borderTop: '1px solid var(--ds-border)' }}
               >
                 {group.skills.map((skill) => (
                   <SkillCard
                     key={skill.name}
                     skill={skill}
-                    onDelete={skill.source === 'remote' ? () => onDelete(skill.name) : undefined}
+                    onEdit={onEdit && skill.source === 'custom' ? () => onEdit(skill) : undefined}
+                    onDelete={
+                      onDelete && (skill.source === 'custom' || skill.source === 'remote')
+                        ? () => onDelete(skill.name)
+                        : undefined
+                    }
                     onToggleEnabled={() => onToggleEnabled(skill)}
                   />
                 ))}
@@ -547,9 +577,9 @@ function createThirdPartySkillGroups(
   skills: Skill[],
   sources: SkillImportSource[],
   t: (key: LocaleMessageKey, params?: MessageParams) => string,
-): ThirdPartySkillGroup[] {
+): SkillGroup[] {
   const sourceById = new Map(sources.map((source) => [source.id, source]));
-  const groups = new Map<string, ThirdPartySkillGroup>();
+  const groups = new Map<string, SkillGroup>();
 
   for (const skill of skills) {
     const descriptor = getThirdPartyGroupDescriptor(skill, sourceById, t);
@@ -571,7 +601,7 @@ function getThirdPartyGroupDescriptor(
   skill: Skill,
   sourceById: Map<string, SkillImportSource>,
   t: (key: LocaleMessageKey, params?: MessageParams) => string,
-): Omit<ThirdPartySkillGroup, 'skills'> {
+): Omit<SkillGroup, 'skills'> {
   if (skill.source === 'remote') {
     const source = skill.remote?.sourceId ? sourceById.get(skill.remote.sourceId) : undefined;
     if (skill.remote?.provider === 'local') {
@@ -617,6 +647,7 @@ function isThirdPartySkillSource(source: Skill['source']): boolean {
 function formatUpdateMessage(
   update: GitHubSkillUpdatePreview,
   t: (key: LocaleMessageKey, params?: MessageParams) => string,
+  locale: SupportedLocale,
 ): string {
   if (!update.hasUpdates) return t('sidepanel.skillPage.noUpdates');
   const parts: string[] = [];
@@ -629,7 +660,8 @@ function formatUpdateMessage(
   if (update.missingPaths.length > 0) {
     parts.push(t('sidepanel.skillPage.missingSkills', { count: update.missingPaths.length }));
   }
-  return parts.join('，') || t('sidepanel.skillPage.updatesFound');
+  const separator = locale === 'zh-CN' ? '，' : ', ';
+  return parts.join(separator) || t('sidepanel.skillPage.updatesFound');
 }
 
 function shortSha(sha: string): string {

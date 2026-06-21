@@ -94,7 +94,7 @@ export default function MemoryPage() {
   };
 
   return (
-    <div className="p-4 space-y-3">
+    <div className="ds-page">
       <PageIntro
         title={t('sidepanel.memoryPage.title')}
         description={t('sidepanel.memoryPage.description')}

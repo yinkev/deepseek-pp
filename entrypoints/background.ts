@@ -158,6 +158,7 @@ import {
   type MultimodalSettingsPatch,
 } from '../core/multimodal/settings';
 import { getWebToolSettings, setWebToolEnabled } from '../core/tool/web-settings';
+import { localizeScenario } from '../core/scenario/localization';
 import { getAllScenarios, applyScenarioTemplate } from '../core/scenario/store';
 import { getChatEnabled } from '../core/chat/store';
 import { selectSidepanelChatProvider } from '../core/chat/provider';
@@ -457,7 +458,7 @@ async function createContextMenus() {
   const menuScope = apiKeyConfigured
     ? {}
     : { documentUrlPatterns: [DEEPSEEK_TAB_URL_PATTERN] };
-  const scenarios = await getAllScenarios();
+  const scenarios = (await getAllScenarios()).map((scenario) => localizeScenario(scenario, currentBackgroundLocale));
   const enabledScenarios = scenarios.filter((s) => s.enabled);
 
   chrome.contextMenus.create({
@@ -512,7 +513,8 @@ try {
         .then((scenarios) => {
           const scenario = scenarios.find((s) => s.id === scenarioId);
           if (!scenario) return;
-          const processed = applyScenarioTemplate(scenario.template, selectedText);
+          const localized = localizeScenario(scenario, currentBackgroundLocale);
+          const processed = applyScenarioTemplate(localized.template, selectedText);
           openSidePanelAndSendText(processed, tab);
         })
         .catch(() => {});

@@ -132,6 +132,20 @@ export const zhCN = {
       customTitle: '自定义场景',
       namePlaceholder: '场景名称',
       templatePlaceholder: 'Prompt 模板（含 {text}）',
+      builtIn: {
+        summarize: {
+          label: '总结',
+          template: '请用简洁的语言总结以下内容：\n\n{text}',
+        },
+        explain: {
+          label: '解释',
+          template: '请解释以下内容：\n\n{text}',
+        },
+        translate: {
+          label: '翻译',
+          template: '请将以下内容翻译成中文：\n\n{text}',
+        },
+      },
     },
     githubSkillImport: {
       title: '从 GitHub 导入 Skill',
@@ -492,6 +506,7 @@ export const zhCN = {
         doctor: '诊断',
         preset: '预设',
         automation: '自动化',
+        automationFull: '自动化',
       },
     },
     browserControlPage: {
@@ -768,6 +783,12 @@ export const zhCN = {
         command: 'command',
       },
       shellSetup: {
+        title: 'Shell Native Host 安装',
+        stepInstall: '安装或更新 Native Host',
+        stepFallback: '已发布扩展备用命令',
+        stepAfter: '安装完成后',
+        copyCommand: '复制命令',
+        copiedCommand: '已复制',
         localIntro: '打开终端，在项目根目录执行以下命令：',
         publishedIntro: '打开终端，执行以下命令（只需一次）：',
         fallbackIntro: '如果你使用的是已发布扩展而不是本地源码版，执行：',
@@ -905,6 +926,7 @@ export const zhCN = {
         namePlaceholder: '任务名称',
         model: '模型',
         defaultModel: '默认',
+        prompt: 'Prompt',
         promptPlaceholder: '输入要定时发送到 DeepSeek 的内容',
         trigger: '触发',
         manual: '手动',

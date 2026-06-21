@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react';
 import type { ScenarioConfig } from '../../../core/types';
 import {
+  localizeScenario,
+  resolveBuiltInTemplateForSave,
+} from '../../../core/scenario/localization';
+import {
   getAllScenarios,
   saveScenario,
   deleteScenario,
   addCustomScenario,
 } from '../../../core/scenario/store';
 import { useI18n } from '../i18n';
+import ToggleSwitch from './ToggleSwitch';
 
 export default function ScenarioManager() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [scenarios, setScenarios] = useState<ScenarioConfig[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTemplate, setEditTemplate] = useState('');
@@ -18,7 +23,7 @@ export default function ScenarioManager() {
 
   useEffect(() => {
     getAllScenarios().then(setScenarios);
-  }, []);
+  }, [locale]);
 
   const refresh = async () => {
     const updated = await getAllScenarios();
@@ -32,12 +37,16 @@ export default function ScenarioManager() {
   };
 
   const startEdit = (scenario: ScenarioConfig) => {
+    const display = localizeScenario(scenario, locale);
     setEditingId(scenario.id);
-    setEditTemplate(scenario.template);
+    setEditTemplate(display.template);
   };
 
   const saveTemplate = async (scenario: ScenarioConfig) => {
-    await saveScenario({ ...scenario, template: editTemplate });
+    const template = scenario.builtIn
+      ? resolveBuiltInTemplateForSave(scenario, editTemplate, locale)
+      : editTemplate;
+    await saveScenario({ ...scenario, template });
     setEditingId(null);
     await refresh();
   };
@@ -55,71 +64,125 @@ export default function ScenarioManager() {
     await refresh();
   };
 
-  return (
-    <section className="space-y-3">
-      <div className="space-y-0.5">
-        <h2 className="ds-settings-section-title">
-          {t('sidepanel.scenario.title')}
-        </h2>
-        <p className="ds-settings-section-description">
-          {t('sidepanel.scenario.description')}
-        </p>
-      </div>
-      <div className="ds-surface-panel rounded-xl p-4 space-y-1">
-      {scenarios.filter((s) => s.builtIn).map((s) => (
-        <div key={s.id} className="flex items-center gap-2 py-1.5">
-          <label className="switch">
-            <input type="checkbox" checked={s.enabled} onChange={() => toggleEnabled(s)} />
-            <span className="slider" />
-          </label>
-          <span className="text-sm flex-1" style={{ color: 'var(--ds-text)' }}>{s.label}</span>
-          {editingId === s.id ? (
-            <div className="flex gap-1">
-              <input
-                value={editTemplate}
-                onChange={(e) => setEditTemplate(e.target.value)}
-                className="text-xs px-2 py-1 rounded w-48"
-                style={{ background: 'var(--ds-surface)', color: 'var(--ds-text)', border: '1px solid var(--ds-border)' }}
-              />
-              <button onClick={() => saveTemplate(s)} className="text-xs px-2 py-1 rounded" style={{ background: 'var(--ds-accent)', color: '#fff' }}>{t('common.save')}</button>
-            </div>
-          ) : (
-            <button onClick={() => startEdit(s)} className="text-xs" style={{ color: 'var(--ds-text-tertiary)' }}>{t('common.edit')}</button>
-          )}
-        </div>
-      ))}
+  const builtIn = scenarios.filter((scenario) => scenario.builtIn);
+  const custom = scenarios.filter((scenario) => !scenario.builtIn);
 
-      <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--ds-border)' }}>
-        <span className="text-xs font-medium" style={{ color: 'var(--ds-text-secondary)' }}>{t('sidepanel.scenario.customTitle')}</span>
-        {scenarios.filter((s) => !s.builtIn).map((s) => (
-          <div key={s.id} className="flex items-center gap-2 py-1.5">
-            <label className="switch">
-              <input type="checkbox" checked={s.enabled} onChange={() => toggleEnabled(s)} />
-              <span className="slider" />
-            </label>
-            <span className="text-sm flex-1" style={{ color: 'var(--ds-text)' }}>{s.label}</span>
-            <button onClick={() => handleDelete(s.id)} className="text-xs text-red-400">{t('common.delete')}</button>
+  return (
+    <div className="ds-section">
+      <div>
+        <h3 className="ds-section-title">{t('sidepanel.scenario.title')}</h3>
+        <p className="ds-section-desc mt-1">{t('sidepanel.scenario.description')}</p>
+      </div>
+
+      <div className="ds-surface-panel divide-y" style={{ borderColor: 'var(--ds-border)' }}>
+        {builtIn.map((scenario) => {
+          const display = localizeScenario(scenario, locale);
+          const editing = editingId === scenario.id;
+
+          return (
+            <div key={scenario.id} className="ds-panel-block">
+              <div className="ds-control-row">
+                <ToggleSwitch
+                  checked={scenario.enabled}
+                  onChange={() => toggleEnabled(scenario)}
+                  aria-label={display.label}
+                />
+                <span className="text-xs flex-1 min-w-0" style={{ color: 'var(--ds-text)' }}>
+                  {display.label}
+                </span>
+                {!editing && (
+                  <button
+                    type="button"
+                    onClick={() => startEdit(scenario)}
+                    className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md shrink-0"
+                  >
+                    {t('common.edit')}
+                  </button>
+                )}
+              </div>
+              {editing && (
+                <div className="ds-section pl-[52px]">
+                  <textarea
+                    value={editTemplate}
+                    onChange={(event) => setEditTemplate(event.target.value)}
+                    rows={3}
+                    className="ds-input w-full rounded-lg px-3 py-2 text-xs resize-y min-h-[72px]"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="ds-btn-cancel px-2 py-1 text-[11px] rounded-md"
+                    >
+                      {t('common.cancel')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => saveTemplate(scenario)}
+                      className="ds-btn-primary px-2 py-1 text-[11px] text-white rounded-md"
+                    >
+                      {t('common.save')}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="ds-section">
+        <span className="ds-section-title text-xs font-medium" style={{ color: 'var(--ds-text-secondary)' }}>
+          {t('sidepanel.scenario.customTitle')}
+        </span>
+
+        {custom.length > 0 && (
+          <div className="ds-surface-panel divide-y" style={{ borderColor: 'var(--ds-border)' }}>
+            {custom.map((scenario) => (
+              <div key={scenario.id} className="ds-list-row">
+                <ToggleSwitch
+                  checked={scenario.enabled}
+                  onChange={() => toggleEnabled(scenario)}
+                  aria-label={scenario.label}
+                />
+                <span className="text-xs flex-1 min-w-0 truncate" style={{ color: 'var(--ds-text)' }}>
+                  {scenario.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(scenario.id)}
+                  className="ds-text-btn-delete px-2 py-1 text-[11px] rounded-md shrink-0"
+                >
+                  {t('common.delete')}
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
-        <div className="flex gap-1 mt-2">
+        )}
+
+        <div className="ds-surface-panel ds-panel-block">
           <input
             value={newLabel}
-            onChange={(e) => setNewLabel(e.target.value)}
+            onChange={(event) => setNewLabel(event.target.value)}
             placeholder={t('sidepanel.scenario.namePlaceholder')}
-            className="text-xs px-2 py-1 rounded flex-1"
-            style={{ background: 'var(--ds-surface)', color: 'var(--ds-text)', border: '1px solid var(--ds-border)' }}
+            className="ds-input w-full rounded-lg px-3 py-2 text-xs"
           />
-          <input
+          <textarea
             value={newTemplate}
-            onChange={(e) => setNewTemplate(e.target.value)}
+            onChange={(event) => setNewTemplate(event.target.value)}
             placeholder={t('sidepanel.scenario.templatePlaceholder')}
-            className="text-xs px-2 py-1 rounded flex-[2]"
-            style={{ background: 'var(--ds-surface)', color: 'var(--ds-text)', border: '1px solid var(--ds-border)' }}
+            rows={2}
+            className="ds-input w-full rounded-lg px-3 py-2 text-xs resize-y min-h-[56px]"
           />
-          <button onClick={handleAdd} className="text-xs px-2 py-1 rounded" style={{ background: 'var(--ds-accent)', color: '#fff' }}>{t('common.add')}</button>
+          <button
+            type="button"
+            onClick={handleAdd}
+            className="ds-btn-primary px-3 py-1.5 text-xs text-white rounded-lg"
+          >
+            {t('common.add')}
+          </button>
         </div>
       </div>
-      </div>
-    </section>
+    </div>
   );
 }

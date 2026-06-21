@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Skill } from '../../../core/types';
-import { ToggleRow } from './settings/primitives';
 import { useI18n } from '../i18n';
+import ToggleSwitch from './ToggleSwitch';
 
 interface Props {
   initialSkill?: Skill | null;
@@ -77,10 +77,10 @@ export default function SkillForm({ initialSkill, onSave, onCancel }: Props) {
         />
       </div>
 
-      <ToggleRow
-        title={t('sidepanel.skill.form.memoryInjectionLabel')}
-        enabled={memoryEnabled}
-        onToggle={(next) => setMemoryEnabled(next)}
+      <ToggleSwitch
+        checked={memoryEnabled}
+        onChange={setMemoryEnabled}
+        label={t('sidepanel.skill.form.memoryInjectionLabel')}
       />
 
       <div className="flex gap-2 justify-end pt-1">
