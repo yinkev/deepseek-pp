@@ -299,6 +299,7 @@ describe('sidepanel interactions', () => {
     await renderElement(React.createElement(AutomationPage));
     await flushEffects();
     await clickButton('新建');
+    expect(container.textContent).not.toContain('就绪评分');
     await enterText('任务名称', 'Visual check');
     await enterText('输入要定时发送到 DeepSeek 的内容', 'Check whether the selected page still looks healthy.');
     await clickButton('创建');
@@ -345,6 +346,9 @@ describe('sidepanel interactions', () => {
     expect(Array.from(container.querySelectorAll('button')).filter((button) => button.textContent === '使用')).toHaveLength(0);
     expect(inputByPlaceholder('任务名称').value).toBe('运行就绪恢复');
     expect(inputByPlaceholder('输入要定时发送到 DeepSeek 的内容').value).toContain('规划就绪检查');
+    expect(container.textContent).toContain('就绪评分');
+    expect(container.textContent).toContain('A · 100');
+    expect(container.textContent).toContain('可以运行。');
 
     await enterText('任务名称', 'My readiness check');
     await enterText('输入要定时发送到 DeepSeek 的内容', 'Check my active setup and tell me exactly what needs attention.');

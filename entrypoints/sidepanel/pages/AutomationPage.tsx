@@ -20,6 +20,11 @@ import {
   type AutomationWorkflowTemplate,
 } from '../../../core/automation/workflow-templates';
 import {
+  evaluateAutomationReadiness,
+  type AutomationReadinessIssueCode,
+  type AutomationReadinessReport,
+} from '../../../core/automation/readiness';
+import {
   DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
   DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
   DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
@@ -454,6 +459,11 @@ function AutomationForm({
 }) {
   const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const readiness = useMemo(
+    () => evaluateAutomationReadiness(toAutomationInput(form), { transientImageCount: imageAttachments.length }),
+    [form, imageAttachments.length],
+  );
+  const showReadiness = editing !== null || hasAutomationDraftContent(form, imageAttachments.length);
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     onChange({ ...form, [key]: value });
   };
@@ -598,6 +608,10 @@ function AutomationForm({
         onToggle={(next) => update('visualMonitorEnabled', next)}
       />
 
+      {showReadiness && (
+        <AutomationReadinessPanel report={readiness} />
+      )}
+
       <div className="flex justify-end gap-2 pt-1">
         <button onClick={onCancel} className="ds-btn-cancel px-3 py-1.5 text-xs rounded-lg">
           {t('common.cancel')}
@@ -633,6 +647,7 @@ function AutomationCard({
 }) {
   const { t, locale } = useI18n();
   const latestRun = runs[0];
+  const readiness = useMemo(() => evaluateAutomationReadiness(automation), [automation]);
   const statusColor = automation.status === 'active' ? 'var(--ds-success)' : 'var(--ds-text-tertiary)';
   const statusBg = automation.status === 'active' ? 'var(--ds-success-bg)' : 'var(--ds-surface)';
 
@@ -666,7 +681,12 @@ function AutomationCard({
         <MetaChip label={t('sidepanel.automationPage.meta.recent')} value={latestRun ? formatRun(latestRun, t) : t('sidepanel.automationPage.meta.none')} />
         <MetaChip label={t('sidepanel.automationPage.meta.visual')} value={automation.promptOptions.visualMonitor?.enabled ? t('sidepanel.automationPage.meta.monitorOn') : t('sidepanel.automationPage.meta.monitorOff')} />
         <MetaChip label={t('sidepanel.automationPage.meta.strategy')} value={formatSessionStrategy(sessionStrategy, t)} />
+        <MetaChip label={t('sidepanel.automationPage.readiness.title')} value={`${readiness.grade} · ${t(`sidepanel.automationPage.readiness.status.${readiness.status}` as LocaleMessageKey)}`} />
       </div>
+
+      {readiness.issues.length > 0 && (
+        <AutomationReadinessPanel report={readiness} compact />
+      )}
 
       {latestRun && (
         <RunFlightRecorder run={latestRun} />
@@ -694,6 +714,60 @@ function AutomationCard({
           {running ? t('sidepanel.automationPage.status.running') : t('sidepanel.automationPage.actions.runNow')}
         </button>
       </div>
+    </div>
+  );
+}
+
+function AutomationReadinessPanel({
+  report,
+  compact = false,
+}: {
+  report: AutomationReadinessReport;
+  compact?: boolean;
+}) {
+  const { t } = useI18n();
+  const visibleIssues = report.issues.slice(0, compact ? 2 : 4);
+  const hiddenIssueCount = Math.max(0, report.issues.length - visibleIssues.length);
+  const toneColor = readinessToneColor(report.status);
+
+  return (
+    <div
+      className={`rounded-lg border px-2.5 py-2 ${compact ? 'space-y-1.5' : 'space-y-2'}`}
+      style={{ borderColor: toneColor, background: 'var(--ds-surface)' }}
+    >
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <div className="font-medium" style={{ color: 'var(--ds-text)' }}>
+          {t('sidepanel.automationPage.readiness.title')}
+        </div>
+        <div className="font-semibold" style={{ color: toneColor }}>
+          {report.grade} · {report.score}
+        </div>
+      </div>
+      <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+        {t(`sidepanel.automationPage.readiness.status.${report.status}` as LocaleMessageKey)}
+      </div>
+      {visibleIssues.length > 0 ? (
+        <ul className="space-y-1">
+          {visibleIssues.map((issue) => (
+            <li
+              key={issue.code}
+              className="text-[11px] leading-4"
+              style={{ color: issue.severity === 'blocker' ? 'var(--ds-danger)' : 'var(--ds-text-secondary)' }}
+            >
+              {t(readinessIssueKey(issue.code))}
+            </li>
+          ))}
+          {hiddenIssueCount > 0 && (
+            <li className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+              {t('sidepanel.automationPage.readiness.moreIssues', { count: hiddenIssueCount })}
+            </li>
+          )}
+        </ul>
+      ) : (
+        <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+          {t('sidepanel.automationPage.readiness.noIssues')}
+        </div>
+      )}
     </div>
   );
 }
@@ -838,6 +912,17 @@ function createLocalizedAutomationInputFromWorkflowTemplate(
   };
 }
 
+function hasAutomationDraftContent(form: FormState, imageAttachmentCount: number): boolean {
+  return Boolean(
+    form.name.trim() ||
+    form.prompt.trim() ||
+    form.refFileIdsText.trim() ||
+    form.modelType ||
+    form.scheduleKind !== 'manual' ||
+    imageAttachmentCount > 0,
+  );
+}
+
 function workflowTemplateCopy(
   template: AutomationWorkflowTemplate,
   field: 'title' | 'summary' | 'cadence' | 'prompt',
@@ -938,6 +1023,16 @@ function flightStatusColor(status: AutomationFlightEventStatus): string {
   if (status === 'error') return 'var(--ds-danger)';
   if (status === 'warning') return 'var(--ds-warning, var(--ds-text-secondary))';
   return 'var(--ds-text-tertiary)';
+}
+
+function readinessToneColor(status: AutomationReadinessReport['status']): string {
+  if (status === 'ready') return 'var(--ds-success)';
+  if (status === 'blocked') return 'var(--ds-danger)';
+  return 'var(--ds-warning, var(--ds-text-secondary))';
+}
+
+function readinessIssueKey(code: AutomationReadinessIssueCode): LocaleMessageKey {
+  return `sidepanel.automationPage.readiness.issues.${code}` as LocaleMessageKey;
 }
 
 function shortId(id: string): string {

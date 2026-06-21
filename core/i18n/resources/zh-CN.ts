@@ -1017,6 +1017,31 @@ export const zhCN = {
           memory: '记忆',
         },
       },
+      readiness: {
+        title: '就绪评分',
+        noIssues: '可以运行。',
+        moreIssues: '另有 {count} 项',
+        status: {
+          ready: '就绪',
+          needs_attention: '需处理',
+          blocked: '已阻塞',
+        },
+        issues: {
+          name_missing: '补上任务名称。',
+          prompt_missing: '补上要运行的 Prompt。',
+          schedule_invalid: '修正定时表达式或时区。',
+          sensitive_prompt_content: '移除内联密钥、Cookie、Token、签名链接或原始媒体。',
+          placeholder_unreplaced: '运行前替换占位文本。',
+          loop_contract_weak: '补强规划、评估、复查、评分、迭代和停止循环。',
+          scheduled_without_stop_condition: '定时工作流需要明确停止条件或确认规则。',
+          scheduled_memory_review: '记忆清理工作流应保持手动运行，除非明确批准。',
+          research_without_search: '研究或监控 Prompt 应开启联网。',
+          evaluation_without_thinking: '评估循环应开启深度思考。',
+          vision_without_visual_input: 'Vision 模式需要文件引用、附加图片或 Browser Control 捕获。',
+          vision_flags_inconsistent: 'DeepSeek Web 的 Vision 运行会关闭联网和深度思考。',
+          scheduled_visual_monitor: '定时视觉捕获依赖已选择的 Browser Control 目标仍然有效。',
+        },
+      },
       templateItems: {
         runtimeReadinessRecovery: {
           title: '运行就绪恢复',

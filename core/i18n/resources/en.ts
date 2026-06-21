@@ -1017,6 +1017,31 @@ export const en = {
           memory: 'Memory',
         },
       },
+      readiness: {
+        title: 'Readiness',
+        noIssues: 'Ready to run.',
+        moreIssues: '+{count} more',
+        status: {
+          ready: 'Ready',
+          needs_attention: 'Needs attention',
+          blocked: 'Blocked',
+        },
+        issues: {
+          name_missing: 'Add a task name.',
+          prompt_missing: 'Add the prompt to run.',
+          schedule_invalid: 'Fix the schedule expression or timezone.',
+          sensitive_prompt_content: 'Remove inline secrets, cookies, tokens, signed URLs, or raw media.',
+          placeholder_unreplaced: 'Replace placeholder text before running.',
+          loop_contract_weak: 'Add a clearer plan, evaluate, review, grade, iterate, and stop loop.',
+          scheduled_without_stop_condition: 'Scheduled workflows need an explicit stop or confirmation rule.',
+          scheduled_memory_review: 'Memory cleanup workflows should stay manual unless explicitly approved.',
+          research_without_search: 'Research or monitoring prompts should enable Web search.',
+          evaluation_without_thinking: 'Evaluator loops should enable Deep thinking.',
+          vision_without_visual_input: 'Vision mode needs refs, attached images, or Browser Control capture.',
+          vision_flags_inconsistent: 'Vision runs disable Web search and Deep thinking on DeepSeek Web.',
+          scheduled_visual_monitor: 'Scheduled visual capture depends on the selected Browser Control target still being valid.',
+        },
+      },
       templateItems: {
         runtimeReadinessRecovery: {
           title: 'Runtime Readiness Recovery',
