@@ -1075,6 +1075,12 @@ export const en = {
           cadence: 'Weekly Monday 9 AM',
           prompt: 'Prepare my project status council for the active DeepSeek++ work.\n\nPlan the review, fan out across recent progress, unresolved blockers, open risks, tests, docs, and next implementation moves.\n\nEvaluate what is actually verified, review what is stale or speculative, grade the project state A through F, and iterate into a prioritized action list.\n\nStop with the top 5 next actions, exact evidence gaps, and what should not be touched yet. Do not commit, merge, delete, or publish without explicit confirmation.\n\nSafety: do not take irreversible actions without explicit confirmation.',
         },
+        implementationCouncil: {
+          title: 'Implementation Council',
+          summary: 'Turns a rough build objective into a scoped implementation plan, tests, risks, and next patch slice.',
+          cadence: 'Manual before implementation',
+          prompt: 'Run an implementation council for this objective: [replace with objective].\n\nPlan the concrete end state and success evidence, then fan out across architecture, code paths, tests, data safety, UX, and release risk.\n\nEvaluate tradeoffs, review the smallest useful implementation slice, grade confidence A through F, and iterate into a patch plan with exact files and verification commands.\n\nStop with the ordered implementation steps, tests to run, rollback risk, and one blocking question only if progress would otherwise be unsafe. Do not edit, commit, merge, delete, or publish without explicit confirmation.\n\nSafety: do not take irreversible actions without explicit confirmation.',
+        },
         browserWatchtower: {
           title: 'Browser Watchtower',
           summary: 'Visual monitor for the selected Browser Control target with metadata-only evidence.',
@@ -1086,6 +1092,12 @@ export const en = {
           summary: 'Evaluator loop for any draft, plan, prompt, or implementation result.',
           cadence: 'Manual after a draft',
           prompt: 'Review this artifact: [replace with artifact or context].\n\nPlan the evaluation rubric, fan out across correctness, usefulness, missing pieces, safety, maintainability, and user fit.\n\nEvaluate against the rubric, review the strongest objections, grade it A through F with reasons, and iterate into a better version or concrete patch plan.\n\nStop when the next version is materially better or when one missing input blocks a truthful grade. Do not claim verification without evidence.\n\nSafety: do not take irreversible actions without explicit confirmation.',
+        },
+        systematicDebugLoop: {
+          title: 'Systematic Debug Loop',
+          summary: 'Reproduces a failure, forms hypotheses, tests them, grades confidence, and lands the smallest fix path.',
+          cadence: 'Manual after a failure',
+          prompt: 'Debug this failure: [replace with symptom, screenshot, log, or failing command].\n\nPlan the reproduction path, then fan out across recent changes, logs, runtime state, configuration, data shape, browser state, and tests.\n\nEvaluate each hypothesis against evidence, review contradictions, grade root-cause confidence, and iterate by choosing the next cheapest discriminating check.\n\nStop with the likely root cause, smallest fix path, exact verification command or manual check, and what evidence would change the diagnosis. Do not claim the bug is fixed without a passing check.\n\nSafety: do not take irreversible actions without explicit confirmation.',
         },
         promptWorkflowRefinery: {
           title: 'Prompt Workflow Refinery',

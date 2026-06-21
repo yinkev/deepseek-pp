@@ -65,6 +65,35 @@ describe('automation workflow templates', () => {
     });
   });
 
+  it('includes manual engineering council templates with the expected runtime posture', () => {
+    const implementation = AUTOMATION_WORKFLOW_TEMPLATES.find((template) => template.id === 'implementation-council');
+    const debugging = AUTOMATION_WORKFLOW_TEMPLATES.find((template) => template.id === 'systematic-debug-loop');
+    expect(implementation).toBeTruthy();
+    expect(debugging).toBeTruthy();
+
+    const implementationInput = createAutomationInputFromWorkflowTemplate(implementation!, { timezone: 'UTC' });
+    expect(implementationInput.schedule).toMatchObject({
+      kind: 'manual',
+      expression: null,
+      enabled: false,
+    });
+    expect(implementationInput.promptOptions.thinkingEnabled).toBe(true);
+    expect(implementationInput.promptOptions.visualMonitor).toBeUndefined();
+    expect(implementationInput.prompt).toContain('implementation council');
+    expect(implementationInput.prompt).toContain('verification commands');
+
+    const debuggingInput = createAutomationInputFromWorkflowTemplate(debugging!, { timezone: 'UTC' });
+    expect(debuggingInput.schedule).toMatchObject({
+      kind: 'manual',
+      expression: null,
+      enabled: false,
+    });
+    expect(debuggingInput.promptOptions.thinkingEnabled).toBe(true);
+    expect(debuggingInput.promptOptions.visualMonitor?.enabled).toBe(true);
+    expect(debuggingInput.prompt).toContain('Debug this failure');
+    expect(debuggingInput.prompt).toContain('passing check');
+  });
+
   it('forces Vision routing when a template carries Vision refs', () => {
     const template: AutomationWorkflowTemplate = {
       id: 'custom-vision',
