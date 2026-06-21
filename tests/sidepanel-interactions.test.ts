@@ -387,6 +387,83 @@ describe('sidepanel interactions', () => {
     });
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie/);
   });
+
+  it('shows preflight fixed and skipped run explanations without sensitive values', async () => {
+    const fixedAutomation = createAutomationForPage({
+      id: 'automation-fixed',
+      name: 'Research review',
+      prompt: 'Research this source and grade confidence.',
+    });
+    const skippedAutomation = createAutomationForPage({
+      id: 'automation-skipped',
+      name: 'Blocked check',
+      prompt: 'Blocked preflight check.',
+      lastError: {
+        code: 'automation_readiness_blocked',
+        message: 'Automation readiness preflight blocked this run: sensitive_prompt_content.',
+        phase: 'runner',
+        retryable: false,
+        at: 2,
+      },
+    });
+    const runsByAutomationId = {
+      'automation-fixed': [createAutomationRunForPage({
+        id: 'run-fixed',
+        automationId: 'automation-fixed',
+        status: 'succeeded',
+        preflight: {
+          schemaVersion: 1,
+          checkedAt: 1,
+          grade: 'A',
+          score: 100,
+          status: 'ready',
+          issueCodes: [],
+          blockingIssueCodes: [],
+          autoFixedIssueCodes: ['research_without_search', 'evaluation_without_thinking'],
+        },
+      })],
+      'automation-skipped': [createAutomationRunForPage({
+        id: 'run-skipped',
+        automationId: 'automation-skipped',
+        status: 'skipped',
+        error: {
+          code: 'automation_readiness_blocked',
+          message: 'Automation readiness preflight blocked this run: sensitive_prompt_content.',
+          phase: 'runner',
+          retryable: false,
+          at: 2,
+        },
+        preflight: {
+          schemaVersion: 1,
+          checkedAt: 1,
+          grade: 'F',
+          score: 65,
+          status: 'blocked',
+          issueCodes: ['sensitive_prompt_content'],
+          blockingIssueCodes: ['sensitive_prompt_content'],
+          autoFixedIssueCodes: [],
+        },
+      })],
+    };
+    const sendMessage = vi.fn(async (message: { type: string; payload?: { automationId?: string } }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [fixedAutomation, skippedAutomation];
+      if (message.type === 'GET_AUTOMATION_RUNS') {
+        return runsByAutomationId[message.payload?.automationId as keyof typeof runsByAutomationId] ?? [];
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+
+    expect(container.textContent).toContain('预检已修正选项');
+    expect(container.textContent).toContain('已开启联网。');
+    expect(container.textContent).toContain('已开启深度思考。');
+    expect(container.textContent).toContain('预检已跳过运行');
+    expect(container.textContent).toContain('移除内联密钥、Cookie、Token、签名链接或原始媒体。');
+    expect(container.textContent).not.toMatch(/sk-proj|secret-token|Authorization|Bearer|Cookie:|data:image/);
+  });
 });
 
 async function renderElement(element: React.ReactElement) {
@@ -459,6 +536,58 @@ function buttonByText(label: string): HTMLButtonElement {
     .find((candidate) => candidate.textContent === label);
   expect(button).toBeTruthy();
   return button as HTMLButtonElement;
+}
+
+function createAutomationForPage(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'automation-1',
+    name: 'Automation',
+    prompt: 'Check status.',
+    status: 'active',
+    schedule: { kind: 'manual', expression: null, timezone: 'UTC', enabled: false, minimumIntervalMinutes: 15 },
+    promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+    deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+    createdAt: 1,
+    updatedAt: 1,
+    lastRunAt: 1,
+    nextRunAt: null,
+    lastError: null,
+    version: 1,
+    ...overrides,
+  };
+}
+
+function createAutomationRunForPage(overrides: Record<string, unknown> = {}) {
+  const { preflight: requestPreflight, ...runOverrides } = overrides;
+  const runId = typeof runOverrides.id === 'string' ? runOverrides.id : 'run-1';
+  const automationId = typeof runOverrides.automationId === 'string' ? runOverrides.automationId : 'automation-1';
+  return {
+    id: runId,
+    automationId,
+    trigger: 'manual',
+    status: 'succeeded',
+    scheduledFor: null,
+    attempt: 1,
+    request: {
+      runId,
+      automationId,
+      prompt: 'Check status.',
+      trigger: 'manual',
+      chatSessionId: null,
+      parentMessageId: null,
+      promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+      preflight: requestPreflight,
+      requestedAt: 1,
+    },
+    result: null,
+    error: null,
+    flightRecorder: null,
+    createdAt: 1,
+    startedAt: 1,
+    completedAt: 2,
+    updatedAt: 2,
+    ...runOverrides,
+  };
 }
 
 async function clickToggleByTitle(label: string) {

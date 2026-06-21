@@ -689,6 +689,10 @@ function AutomationCard({
       )}
 
       {latestRun && (
+        <RunPreflightSummary run={latestRun} />
+      )}
+
+      {latestRun && (
         <RunFlightRecorder run={latestRun} />
       )}
 
@@ -714,6 +718,61 @@ function AutomationCard({
           {running ? t('sidepanel.automationPage.status.running') : t('sidepanel.automationPage.actions.runNow')}
         </button>
       </div>
+    </div>
+  );
+}
+
+function RunPreflightSummary({ run }: { run: AutomationRun }) {
+  const { t } = useI18n();
+  const preflight = run.request?.preflight;
+  if (!preflight) return null;
+  const fixedCodes = preflight.autoFixedIssueCodes;
+  const blockingCodes = preflight.blockingIssueCodes;
+  if (fixedCodes.length === 0 && blockingCodes.length === 0) return null;
+
+  const blocked = blockingCodes.length > 0 || run.status === 'skipped';
+  const toneColor = blocked ? 'var(--ds-danger)' : 'var(--ds-warning, var(--ds-text-secondary))';
+  const visibleFixedCodes = fixedCodes.slice(0, 3);
+  const visibleBlockingCodes = blockingCodes.slice(0, 3);
+
+  return (
+    <div
+      className="rounded-lg border px-2.5 py-2 space-y-1.5"
+      style={{ borderColor: toneColor, background: 'var(--ds-surface)' }}
+    >
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <div className="font-medium" style={{ color: 'var(--ds-text)' }}>
+          {blocked
+            ? t('sidepanel.automationPage.preflight.skippedTitle')
+            : t('sidepanel.automationPage.preflight.fixedTitle')}
+        </div>
+        <div className="font-semibold" style={{ color: toneColor }}>
+          {t('sidepanel.automationPage.preflight.grade', { grade: preflight.grade, score: preflight.score })}
+        </div>
+      </div>
+      <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+        {blocked
+          ? t('sidepanel.automationPage.preflight.skippedSummary')
+          : t('sidepanel.automationPage.preflight.fixedSummary')}
+      </div>
+      {visibleFixedCodes.length > 0 && (
+        <ul className="space-y-1">
+          {visibleFixedCodes.map((code) => (
+            <li key={`fixed-${code}`} className="text-[11px] leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
+              {formatPreflightAutoFix(code, t)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {visibleBlockingCodes.length > 0 && (
+        <ul className="space-y-1">
+          {visibleBlockingCodes.map((code) => (
+            <li key={`blocked-${code}`} className="text-[11px] leading-4" style={{ color: 'var(--ds-danger)' }}>
+              {formatReadinessIssue(code, t)}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -754,7 +813,7 @@ function AutomationReadinessPanel({
               className="text-[11px] leading-4"
               style={{ color: issue.severity === 'blocker' ? 'var(--ds-danger)' : 'var(--ds-text-secondary)' }}
             >
-              {t(readinessIssueKey(issue.code))}
+              {formatReadinessIssue(issue.code, t)}
             </li>
           ))}
           {hiddenIssueCount > 0 && (
@@ -1031,8 +1090,42 @@ function readinessToneColor(status: AutomationReadinessReport['status']): string
   return 'var(--ds-warning, var(--ds-text-secondary))';
 }
 
-function readinessIssueKey(code: AutomationReadinessIssueCode): LocaleMessageKey {
+function readinessIssueKey(code: AutomationReadinessIssueCode | string): LocaleMessageKey {
   return `sidepanel.automationPage.readiness.issues.${code}` as LocaleMessageKey;
+}
+
+function preflightAutoFixKey(code: string): LocaleMessageKey {
+  return `sidepanel.automationPage.preflight.autoFixes.${code}` as LocaleMessageKey;
+}
+
+const READINESS_ISSUE_CODES = new Set<string>([
+  'name_missing',
+  'prompt_missing',
+  'schedule_invalid',
+  'sensitive_prompt_content',
+  'placeholder_unreplaced',
+  'loop_contract_weak',
+  'scheduled_without_stop_condition',
+  'scheduled_memory_review',
+  'research_without_search',
+  'evaluation_without_thinking',
+  'vision_without_visual_input',
+  'vision_flags_inconsistent',
+  'scheduled_visual_monitor',
+]);
+
+const PREFLIGHT_AUTO_FIX_CODES = new Set<string>([
+  'research_without_search',
+  'evaluation_without_thinking',
+  'vision_flags_inconsistent',
+]);
+
+function formatReadinessIssue(code: string, t: ReturnType<typeof useI18n>['t']): string {
+  return READINESS_ISSUE_CODES.has(code) ? t(readinessIssueKey(code)) : code;
+}
+
+function formatPreflightAutoFix(code: string, t: ReturnType<typeof useI18n>['t']): string {
+  return PREFLIGHT_AUTO_FIX_CODES.has(code) ? t(preflightAutoFixKey(code)) : code;
 }
 
 function shortId(id: string): string {

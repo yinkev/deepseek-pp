@@ -1042,6 +1042,18 @@ export const zhCN = {
           scheduled_visual_monitor: '定时视觉捕获依赖已选择的 Browser Control 目标仍然有效。',
         },
       },
+      preflight: {
+        fixedTitle: '预检已修正选项',
+        skippedTitle: '预检已跳过运行',
+        fixedSummary: '发送到 DeepSeek 前已安全调整设置。',
+        skippedSummary: '仍有就绪阻塞项，已在发送前停止本次运行。',
+        grade: '{grade} · {score}',
+        autoFixes: {
+          research_without_search: '已开启联网。',
+          evaluation_without_thinking: '已开启深度思考。',
+          vision_flags_inconsistent: '已规范 Vision 模式标志。',
+        },
+      },
       templateItems: {
         runtimeReadinessRecovery: {
           title: '运行就绪恢复',

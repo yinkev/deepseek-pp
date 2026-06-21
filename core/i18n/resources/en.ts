@@ -1042,6 +1042,18 @@ export const en = {
           scheduled_visual_monitor: 'Scheduled visual capture depends on the selected Browser Control target still being valid.',
         },
       },
+      preflight: {
+        fixedTitle: 'Preflight fixed options',
+        skippedTitle: 'Preflight skipped run',
+        fixedSummary: 'Safe settings were adjusted before sending this run to DeepSeek.',
+        skippedSummary: 'The run was stopped before sending because readiness blockers remain.',
+        grade: '{grade} · {score}',
+        autoFixes: {
+          research_without_search: 'Enabled Web search.',
+          evaluation_without_thinking: 'Enabled Deep thinking.',
+          vision_flags_inconsistent: 'Normalized Vision mode flags.',
+        },
+      },
       templateItems: {
         runtimeReadinessRecovery: {
           title: 'Runtime Readiness Recovery',
