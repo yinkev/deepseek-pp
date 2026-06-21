@@ -1005,6 +1005,7 @@ export const zhCN = {
       emptyHelp: '新建任务后，可以让它定时跟踪信息、复盘内容或重复执行固定 Prompt。',
       filterPlaceholder: '搜索自动化',
       filterNoResults: '没有匹配的自动化',
+      clearFilters: '清除筛选',
       filters: {
         all: '全部',
         active: '启用',

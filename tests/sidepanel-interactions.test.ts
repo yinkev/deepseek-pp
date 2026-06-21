@@ -866,6 +866,11 @@ describe('sidepanel interactions', () => {
     await enterText('搜索自动化', 'missing');
     expect(container.textContent).toContain('没有匹配的自动化');
 
+    await clickButton('清除筛选');
+    expect(container.textContent).toContain('Research digest');
+    expect(container.textContent).toContain('Visual page check');
+    expect(container.textContent).toContain('Blocked vision');
+
     await enterText('搜索自动化', '');
     await clickAutomationListFilter('暂停');
     expect(container.textContent).not.toContain('Research digest');

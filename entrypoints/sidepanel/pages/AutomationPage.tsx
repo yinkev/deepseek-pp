@@ -148,6 +148,7 @@ export default function AutomationPage() {
         automation.prompt.toLowerCase().includes(query);
     });
   }, [automations, automationListFilter, automationQuery]);
+  const automationFiltersActive = automationQuery.trim().length > 0 || automationListFilter !== 'all';
 
   const load = async () => {
     const list: Automation[] = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATIONS' });
@@ -490,6 +491,15 @@ export default function AutomationPage() {
                 </button>
               );
             })}
+            {automationFiltersActive && (
+              <button
+                type="button"
+                onClick={() => { setAutomationQuery(''); setAutomationListFilter('all'); }}
+                className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md"
+              >
+                {t('sidepanel.automationPage.clearFilters')}
+              </button>
+            )}
           </div>
         </div>
       )}
