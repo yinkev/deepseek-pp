@@ -123,10 +123,20 @@ export default function AutomationPage() {
   const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
 
-  const activeCount = useMemo(
-    () => automations.filter((item) => item.status === 'active').length,
-    [automations],
-  );
+  const automationListCounts = useMemo(() => {
+    const counts: Record<AutomationListFilter, number> = {
+      all: automations.length,
+      active: 0,
+      paused: 0,
+      blocked: 0,
+    };
+    for (const automation of automations) {
+      if (automation.status === 'active') counts.active += 1;
+      if (automation.status === 'paused') counts.paused += 1;
+      if (evaluateAutomationReadiness(automation).status === 'blocked') counts.blocked += 1;
+    }
+    return counts;
+  }, [automations]);
   const filteredAutomations = useMemo(() => {
     const query = automationQuery.trim().toLowerCase();
     return automations.filter((automation) => {
@@ -407,7 +417,7 @@ export default function AutomationPage() {
       <PageIntro
         title={t('sidepanel.automationPage.title')}
         description={t('sidepanel.automationPage.description')}
-        meta={t('sidepanel.automationPage.summary', { total: automations.length, active: activeCount })}
+        meta={t('sidepanel.automationPage.summary', { total: automations.length, active: automationListCounts.active })}
         actions={(
         <div className="flex items-center gap-2">
           <button
@@ -465,14 +475,18 @@ export default function AutomationPage() {
           <div className="flex flex-wrap gap-1.5">
             {AUTOMATION_LIST_FILTERS.map((filter) => {
               const selected = automationListFilter === filter;
+              const label = t(`sidepanel.automationPage.filters.${filter}` as LocaleMessageKey);
               return (
                 <button
                   key={filter}
                   type="button"
                   onClick={() => setAutomationListFilter(filter)}
-                  className={`px-2 py-1 text-[11px] rounded-md ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
+                  aria-label={label}
+                  aria-pressed={selected}
+                  className={`px-2 py-1 text-[11px] rounded-md inline-flex items-center gap-1.5 ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
                 >
-                  {t(`sidepanel.automationPage.filters.${filter}` as LocaleMessageKey)}
+                  <span>{label}</span>
+                  <span className="font-mono text-[10px] opacity-80">{automationListCounts[filter]}</span>
                 </button>
               );
             })}

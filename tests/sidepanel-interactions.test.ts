@@ -848,6 +848,10 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('Research digest');
     expect(container.textContent).toContain('Visual page check');
     expect(container.textContent).toContain('Blocked vision');
+    expect(container.textContent).toContain('全部3');
+    expect(container.textContent).toContain('启用2');
+    expect(container.textContent).toContain('暂停1');
+    expect(container.textContent).toContain('阻塞1');
 
     await enterText('搜索自动化', 'visual');
     expect(container.textContent).not.toContain('Research digest');
@@ -1081,7 +1085,7 @@ async function clickButton(label: string) {
 async function clickAutomationListFilter(label: string) {
   const search = inputByPlaceholder('搜索自动化');
   const button = Array.from(search.parentElement?.querySelectorAll('button') ?? [])
-    .find((candidate) => candidate.textContent === label);
+    .find((candidate) => candidate.getAttribute('aria-label') === label);
   expect(button).toBeTruthy();
   await act(async () => {
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
