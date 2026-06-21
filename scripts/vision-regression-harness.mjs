@@ -25,7 +25,7 @@ assert.match(background, /browserControlService\.captureScreenshotForVision\(\)/
 assert.match(background, /createDeepSeekWebVisionEvidencePack/);
 assert.match(background, /ensurePersonalRuntimeReady\(undefined,\s*'startup'\)/);
 assert.match(background, /case 'ENSURE_PERSONAL_RUNTIME_READY'/);
-assert.match(background, /source === 'manual' && personalRuntimeReadySource === 'startup'/);
+assert.match(background, /source !== 'startup' && personalRuntimeReadySource === 'startup'/);
 assert.match(background, /!isDeepSeekWebTargetUrl\(browserState\.target\.url\)/);
 assert.match(background, /updateAutomationRun\(request\.runId,\s*\{\s*request:\s*preparedRequest\s*\}\)/s);
 assert.match(evidence, /schemaVersion:\s*typeof DEEPSEEK_WEB_VISION_EVIDENCE_SCHEMA_VERSION/);

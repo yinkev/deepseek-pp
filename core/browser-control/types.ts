@@ -53,6 +53,7 @@ export interface BrowserControlSettings {
 
 export interface BrowserControlTargetHint {
   windowId: number | null;
+  windowHint: BrowserControlWindowHint | null;
   origin: string;
   title: string;
   updatedAt: number;
@@ -63,14 +64,24 @@ export interface BrowserControlTargetLock {
   label: string;
   targetTabId: number | null;
   windowId: number | null;
+  windowHint: BrowserControlWindowHint | null;
   groupId: number | null;
   origin: string;
   updatedAt: number;
 }
 
+export interface BrowserControlWindowHint {
+  left: number | null;
+  top: number | null;
+  width: number | null;
+  height: number | null;
+  state: string | null;
+}
+
 export interface BrowserControlTarget {
   id: number;
   windowId: number;
+  windowHint: BrowserControlWindowHint | null;
   groupId: number;
   groupName?: string;
   active: boolean;

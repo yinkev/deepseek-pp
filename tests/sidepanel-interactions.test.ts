@@ -484,6 +484,11 @@ function createRuntimeDoctorReport(overrides: Partial<{
       maxAttempts: 2,
       retryableFailure: overrides.retryableFailure ?? null,
     },
+    autopilot: {
+      inFlightSource: null,
+      latestRun: null,
+      recentRuns: [],
+    },
     humanEval: {
       grade: 'A',
       checks: [{
@@ -499,6 +504,11 @@ function createRuntimeDoctorReport(overrides: Partial<{
       grade: 'A',
       issueCount: 0,
       checkedAreas: ['local', 'session'],
+    },
+    leakQuarantine: {
+      issueCount: 0,
+      cleanupEligibleCount: 0,
+      groups: [],
     },
     debugDistiller: {
       enabled: true,

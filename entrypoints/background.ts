@@ -163,10 +163,12 @@ import { getAllScenarios, applyScenarioTemplate } from '../core/scenario/store';
 import { getChatEnabled } from '../core/chat/store';
 import { selectSidepanelChatProvider } from '../core/chat/provider';
 import {
-	  scanRuntimeDoctorStorage,
-	  type RuntimeDoctorReport,
-	  type RuntimeDoctorReadiness,
-	} from '../core/chat/runtime-doctor';
+  createRuntimeDoctorLeakQuarantine,
+  scanRuntimeDoctorStorage,
+  type RuntimeDoctorAutopilotRun,
+  type RuntimeDoctorReport,
+  type RuntimeDoctorReadiness,
+} from '../core/chat/runtime-doctor';
 import {
   clearSidepanelWebAuthRejected,
   isSidepanelWebAuthRejected,
@@ -189,6 +191,10 @@ import {
   savePersonalConvenienceConfig,
   type PersonalConvenienceConfig,
 } from '../core/personal-convenience/config';
+import {
+  appendAutopilotRun,
+  getAutopilotRunLedger,
+} from '../core/personal-convenience/autopilot-ledger';
 import {
   markChatLoopFinished,
   markChatLoopStarted,
@@ -304,6 +310,7 @@ let currentBackgroundTranslator = createTranslator(DEFAULT_LOCALE);
 let sandboxOffscreenCreation: Promise<void> | null = null;
 let personalRuntimeReadyPromise: Promise<EnsurePersonalRuntimeReadyResult> | null = null;
 let personalRuntimeReadySource: EnsurePersonalRuntimeReadySource | null = null;
+let personalAutopilotRepairPromise: Promise<PersonalAutopilotRepairResult> | null = null;
 let lastPersonalRuntimeReadiness: RuntimeDoctorReadiness | null = null;
 const SANDBOX_OFFSCREEN_URL = 'sandbox-offscreen.html';
 const SANDBOX_OFFSCREEN_PORT = 'sandbox-offscreen';
@@ -345,7 +352,7 @@ type CapturedTabInfo = {
   url: string;
 };
 
-type EnsurePersonalRuntimeReadySource = 'manual' | 'startup';
+type EnsurePersonalRuntimeReadySource = 'manual' | 'startup' | 'repair';
 
 type EnsurePersonalRuntimeReadyResult = {
   ok: true;
@@ -354,6 +361,14 @@ type EnsurePersonalRuntimeReadyResult = {
   changedSettings: boolean;
   refreshedAuth: boolean;
   targetStatus: RuntimeDoctorReadiness['targetStatus'];
+  blockers: RuntimeDoctorReadiness['blockers'];
+  report: RuntimeDoctorReport;
+};
+
+type PersonalAutopilotRepairResult = {
+  ok: true;
+  ready: boolean;
+  repaired: string[];
   blockers: RuntimeDoctorReadiness['blockers'];
   report: RuntimeDoctorReport;
 };
@@ -1708,6 +1723,7 @@ async function getRuntimeDoctorReport(
     retryableFailure,
     personal,
     sessionPreference,
+    autopilotRuns,
   ] = await Promise.all([
     getChatEnabled(),
     hasDeepSeekApiKey(),
@@ -1719,6 +1735,7 @@ async function getRuntimeDoctorReport(
     findLatestRetryableAutomationFailure(),
     getPersonalConvenienceConfig(),
     getDeepSeekWebSessionPreference(),
+    getAutopilotRunLedger().catch(() => []),
   ]);
   const contentScripts = await getDeepSeekContentScriptHealth(deepSeekTabs);
   let headers = await loadClientHeadersFromStorage();
@@ -1810,6 +1827,11 @@ async function getRuntimeDoctorReport(
       maxAttempts: AUTOMATION_MAX_ATTEMPTS,
       retryableFailure,
     },
+    autopilot: {
+      inFlightSource: personalAutopilotRepairPromise ? 'repair' : personalRuntimeReadySource,
+      latestRun: autopilotRuns[0] ?? null,
+      recentRuns: autopilotRuns.slice(0, 5),
+    },
     humanEval: createRuntimeDoctorHumanEval({
       hasUsableWebAuth,
       sessionActive: sessionSource !== 'none' || !!sessionPreference.lastSession,
@@ -1823,6 +1845,7 @@ async function getRuntimeDoctorReport(
       toolDescriptorsReady: true,
     }),
     leakSentry: createRuntimeDoctorLeakSentry(storage, storageSnapshot.failedAreas),
+    leakQuarantine: createRuntimeDoctorLeakQuarantine(storage),
     debugDistiller: {
       enabled: browserSettings.debugDistillerEnabled,
       suggestions: browserSettings.debugDistillerEnabled
@@ -2136,9 +2159,9 @@ async function ensurePersonalRuntimeReady(
     }
   }
   if (personalRuntimeReadyPromise) {
-    if (source === 'manual' && personalRuntimeReadySource === 'startup') {
+    if (source !== 'startup' && personalRuntimeReadySource === 'startup') {
       await personalRuntimeReadyPromise.catch(() => null);
-      return ensurePersonalRuntimeReady(preferredTabId, 'manual');
+      return ensurePersonalRuntimeReady(preferredTabId, source);
     }
     return personalRuntimeReadyPromise;
   }
@@ -2151,9 +2174,19 @@ async function ensurePersonalRuntimeReady(
   return personalRuntimeReadyPromise;
 }
 
-async function runPersonalAutopilotRepair(preferredTabId?: number) {
+async function runPersonalAutopilotRepair(preferredTabId?: number): Promise<PersonalAutopilotRepairResult> {
+  if (personalAutopilotRepairPromise) return personalAutopilotRepairPromise;
+  personalAutopilotRepairPromise = runPersonalAutopilotRepairOnce(preferredTabId)
+    .finally(() => {
+      personalAutopilotRepairPromise = null;
+    });
+  return personalAutopilotRepairPromise;
+}
+
+async function runPersonalAutopilotRepairOnce(preferredTabId?: number): Promise<PersonalAutopilotRepairResult> {
+  const startedAt = Date.now();
   const repaired: string[] = [];
-  const first = await ensurePersonalRuntimeReady(preferredTabId, 'manual');
+  const first = await ensurePersonalRuntimeReady(preferredTabId, 'repair');
   let report = first.report;
   if (first.changedSettings) repaired.push('browser_control_defaults');
   if (first.refreshedAuth) repaired.push('web_auth_refreshed');
@@ -2165,6 +2198,8 @@ async function runPersonalAutopilotRepair(preferredTabId?: number) {
     if (reload.reloaded > 0) repaired.push('stale_deepseek_tabs_reloaded');
     report = reload.report;
   }
+  const run = await recordAutopilotRunFromReport('repair', startedAt, Date.now(), report, repaired);
+  report = attachAutopilotRunToReport(report, run);
   return {
     ok: true,
     ready: report.readiness.ready,
@@ -2244,7 +2279,11 @@ async function runEnsurePersonalRuntimeReady(
     noLeak: storage.ok,
   });
   lastPersonalRuntimeReadiness = readiness;
-  const report = await getRuntimeDoctorReport(preferredTabId, readiness);
+  let report = await getRuntimeDoctorReport(preferredTabId, readiness);
+  if (source !== 'repair') {
+    const run = await recordAutopilotRunFromReport(source, preparedAt, Date.now(), report, []);
+    report = attachAutopilotRunToReport(report, run);
+  }
 
   return {
     ok: true,
@@ -2255,6 +2294,42 @@ async function runEnsurePersonalRuntimeReady(
     targetStatus: targetPreparation.status,
     blockers: report.readiness.blockers,
     report,
+  };
+}
+
+async function recordAutopilotRunFromReport(
+  source: RuntimeDoctorAutopilotRun['source'],
+  startedAt: number,
+  finishedAt: number,
+  report: RuntimeDoctorReport,
+  repaired: string[],
+): Promise<RuntimeDoctorAutopilotRun> {
+  return appendAutopilotRun({
+    source,
+    startedAt,
+    finishedAt,
+    ready: report.readiness.ready,
+    status: report.readiness.status,
+    grade: report.humanEval.grade,
+    blockers: report.readiness.blockers,
+    targetStatus: report.readiness.targetStatus,
+    repaired,
+    leakIssueCount: report.leakSentry.issueCount,
+  });
+}
+
+function attachAutopilotRunToReport(
+  report: RuntimeDoctorReport,
+  run: RuntimeDoctorAutopilotRun,
+): RuntimeDoctorReport {
+  const recentRuns = [run, ...report.autopilot.recentRuns.filter((item) => item.id !== run.id)].slice(0, 5);
+  return {
+    ...report,
+    autopilot: {
+      inFlightSource: null,
+      latestRun: run,
+      recentRuns,
+    },
   };
 }
 

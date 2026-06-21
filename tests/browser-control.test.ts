@@ -300,6 +300,7 @@ describe('browser control settings and descriptors', () => {
       label: 'Dev++ personal browser target with extra',
       targetTabId: 12,
       windowId: 1,
+      windowHint: null,
       groupId: 4,
       origin: 'https://example.com',
       updatedAt: 123,
@@ -336,6 +337,7 @@ describe('browser control settings and descriptors', () => {
         label: 'Dev++',
         targetTabId: 12,
         windowId: 1,
+        windowHint: null,
         groupId: 7,
         origin: 'https://example.com',
       },
@@ -402,6 +404,47 @@ describe('browser control settings and descriptors', () => {
 
     expect(preparation.status).toBe('missing');
     expect(preparation.target).toBeNull();
+  });
+
+  it('uses safe window geometry hints to reacquire locked targets on the same display', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 99,
+        targetLock: {
+          enabled: true,
+          label: 'Dev++',
+          targetTabId: 99,
+          windowId: null,
+          windowHint: {
+            left: 3055,
+            top: -243,
+            width: 1351,
+            height: 971,
+            state: 'normal',
+          },
+          groupId: null,
+          origin: 'https://locked.example',
+          updatedAt: 1,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 34, active: false, title: 'Locked main', url: 'https://locked.example/a', windowId: 1 }),
+      createTab({ id: 35, active: false, title: 'Locked studio', url: 'https://locked.example/b', windowId: 2 }),
+    ], [
+      { id: 1, left: 192, top: 76, width: 1643, height: 1169, state: 'normal' },
+      { id: 2, left: 3055, top: -243, width: 1351, height: 971, state: 'normal' },
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget({ allowActiveFallback: true });
+
+    expect(preparation.status).toBe('reacquired');
+    expect(preparation.target?.id).toBe(35);
+    expect(JSON.stringify(storage.get(BROWSER_CONTROL_STORAGE_KEY))).not.toMatch(/locked.example\/b/);
   });
 });
 
@@ -676,6 +719,7 @@ function createRect(input: {
 function createChromeStub(
   storage: Map<string, unknown>,
   initialTabs: chrome.tabs.Tab[] = [],
+  initialWindows: Array<Partial<chrome.windows.Window> & { id: number }> = [],
 ) {
   let nextTabId = 100;
   let attachedTabId: number | null = null;
@@ -770,6 +814,9 @@ function createChromeStub(
       remove: vi.fn(async (tabId: number) => {
         tabs.delete(tabId);
       }),
+    },
+    windows: {
+      getAll: vi.fn(async () => initialWindows.map((window) => ({ ...window }))),
     },
     tabGroups: {
       query: vi.fn(async () => []),

@@ -212,6 +212,8 @@ export default function RuntimeDoctorPage() {
 
       {report && <ReadinessBanner report={report} />}
 
+      {report && <AutopilotLedgerSection report={report} />}
+
       {report && report.failureExplanations.length > 0 && (
         <SettingsSection
           title={t('sidepanel.runtimeDoctorPage.failureExplainer')}
@@ -496,6 +498,7 @@ export default function RuntimeDoctorPage() {
                 <StatusMessage tone="error">
                   {t('sidepanel.runtimeDoctorPage.leakSentryIssues', { count: report.storage.issues.length })}
                 </StatusMessage>
+                <LeakQuarantinePreview report={report} />
                 <div className="space-y-1.5">
                   {report.storage.issues.map((issue) => (
                     <StorageIssueRow key={`${issue.area}:${issue.path}:${issue.reason}`} issue={issue} />
@@ -507,6 +510,72 @@ export default function RuntimeDoctorPage() {
         </>
       )}
     </div>
+  );
+}
+
+function AutopilotLedgerSection({ report }: { report: RuntimeDoctorReport }) {
+  const { t } = useI18n();
+  const latest = report.autopilot.latestRun;
+  return (
+    <SettingsSection
+      title={t('sidepanel.runtimeDoctorPage.autopilotSection')}
+      description={t('sidepanel.runtimeDoctorPage.autopilotSectionDescription')}
+    >
+      <StatusGrid>
+        <StatusTile
+          label={t('sidepanel.runtimeDoctorPage.autopilotInFlight')}
+          value={report.autopilot.inFlightSource
+            ? formatAutopilotSource(report.autopilot.inFlightSource, t)
+            : t('common.none')}
+          tone={report.autopilot.inFlightSource ? 'warning' : 'success'}
+        />
+        <StatusTile
+          label={t('sidepanel.runtimeDoctorPage.autopilotLatest')}
+          value={latest
+            ? `${formatAutopilotSource(latest.source, t)} · ${latest.grade}`
+            : t('sidepanel.runtimeDoctorPage.autopilotNoRuns')}
+          tone={!latest ? 'info' : latest.ready ? 'success' : latest.status === 'blocked' ? 'error' : 'warning'}
+        />
+        <StatusTile
+          label={t('sidepanel.runtimeDoctorPage.autopilotBlockers')}
+          value={latest ? String(latest.blockers.length) : t('common.none')}
+          tone={!latest || latest.blockers.length === 0 ? 'success' : 'warning'}
+        />
+        <StatusTile
+          label={t('sidepanel.runtimeDoctorPage.autopilotLeaks')}
+          value={latest ? String(latest.leakIssueCount) : '0'}
+          tone={!latest || latest.leakIssueCount === 0 ? 'success' : 'error'}
+        />
+      </StatusGrid>
+      {latest && (
+        <div className="space-y-1.5">
+          {report.autopilot.recentRuns.slice(0, 3).map((run) => (
+            <div
+              key={run.id}
+              className="px-3 py-2 text-[11px] border"
+              style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)', color: 'var(--ds-text-secondary)' }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium" style={{ color: 'var(--ds-text)' }}>
+                  {formatAutopilotSource(run.source, t)} · {new Date(run.finishedAt).toLocaleTimeString()}
+                </span>
+                <span>{run.grade}</span>
+              </div>
+              <div>
+                {run.ready
+                  ? t('sidepanel.runtimeDoctorPage.autopilotRunReady')
+                  : t('sidepanel.runtimeDoctorPage.autopilotRunBlocked', { count: run.blockers.length })}
+              </div>
+              {run.repaired.length > 0 && (
+                <div>
+                  {t('sidepanel.runtimeDoctorPage.autopilotRepaired')}: {run.repaired.join(', ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </SettingsSection>
   );
 }
 
@@ -561,6 +630,40 @@ function ReadyCheckPanel({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function LeakQuarantinePreview({ report }: { report: RuntimeDoctorReport }) {
+  const { t } = useI18n();
+  if (report.leakQuarantine.groups.length === 0) return null;
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+        {t('sidepanel.runtimeDoctorPage.leakQuarantineSummary', {
+          count: report.leakQuarantine.cleanupEligibleCount,
+        })}
+      </div>
+      {report.leakQuarantine.groups.map((group) => (
+        <div
+          key={`${group.area}:${group.reason}`}
+          className="px-3 py-2 text-[11px] border"
+          style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)', color: 'var(--ds-text-secondary)' }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium" style={{ color: 'var(--ds-text)' }}>
+              {group.area} · {t(`sidepanel.runtimeDoctorPage.issueReasons.${group.reason}` as LocaleMessageKey)}
+            </span>
+            <span>{group.count}</span>
+          </div>
+          <div>
+            {group.cleanupEligible
+              ? t('sidepanel.runtimeDoctorPage.leakQuarantineEligible')
+              : t('sidepanel.runtimeDoctorPage.leakQuarantineManual')}
+          </div>
+          <div className="font-mono truncate">{group.samplePaths.join(', ')}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -721,6 +824,14 @@ function formatReadinessBlocker(
   t: (key: LocaleMessageKey) => string,
 ): string {
   return t(`sidepanel.runtimeDoctorPage.readiness.blockers.${blocker}` as LocaleMessageKey);
+}
+
+function formatAutopilotSource(
+  source: RuntimeDoctorReport['autopilot']['inFlightSource'] | NonNullable<RuntimeDoctorReport['autopilot']['latestRun']>['source'],
+  t: (key: LocaleMessageKey) => string,
+): string {
+  const key = source ?? 'manual';
+  return t(`sidepanel.runtimeDoctorPage.autopilotSources.${key}` as LocaleMessageKey);
 }
 
 function formatError(error: unknown): string {

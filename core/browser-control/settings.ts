@@ -1,6 +1,7 @@
 import {
   BROWSER_CONTROL_STORAGE_KEY,
   type BrowserControlSettings,
+  type BrowserControlWindowHint,
 } from './types';
 
 export const DEFAULT_BROWSER_CONTROL_SETTINGS: BrowserControlSettings = {
@@ -94,6 +95,7 @@ function normalizeTargetHint(value: unknown): BrowserControlSettings['lastTarget
     : 0;
   return {
     windowId: typeof hint.windowId === 'number' && Number.isInteger(hint.windowId) ? hint.windowId : null,
+    windowHint: normalizeWindowHint(hint.windowHint),
     origin,
     title,
     updatedAt,
@@ -116,8 +118,29 @@ function normalizeTargetLock(value: unknown): BrowserControlSettings['targetLock
       ? lock.targetTabId
       : null,
     windowId: typeof lock.windowId === 'number' && Number.isInteger(lock.windowId) ? lock.windowId : null,
+    windowHint: normalizeWindowHint(lock.windowHint),
     groupId: typeof lock.groupId === 'number' && Number.isInteger(lock.groupId) ? lock.groupId : null,
     origin,
     updatedAt,
   };
+}
+
+function normalizeWindowHint(value: unknown): BrowserControlWindowHint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const hint = value as Record<string, unknown>;
+  return {
+    left: normalizeOptionalWindowInteger(hint.left),
+    top: normalizeOptionalWindowInteger(hint.top),
+    width: normalizeOptionalWindowInteger(hint.width),
+    height: normalizeOptionalWindowInteger(hint.height),
+    state: typeof hint.state === 'string' && /^[a-z_ -]{1,32}$/i.test(hint.state)
+      ? hint.state.slice(0, 32)
+      : null,
+  };
+}
+
+function normalizeOptionalWindowInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(value)
+    : null;
 }

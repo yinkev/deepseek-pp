@@ -9,6 +9,7 @@ import type {
   BrowserControlState,
   BrowserControlTarget,
   BrowserControlTargetPreparation,
+  BrowserControlWindowHint,
   BrowserScreenshotCaptureResult,
   BrowserControlToolName,
   BrowserSnapshotResult,
@@ -89,6 +90,7 @@ export class BrowserControlService {
     const activeCurrent = await chromeApi.tabs.query({ active: true, currentWindow: true });
     const activeCurrentId = activeCurrent[0]?.id ?? null;
     const tabGroups = readOptionalChromeApi(() => chromeApi.tabGroups);
+    const windowHints = await getChromeWindowHints(chromeApi);
     const groups = tabGroups?.query
       ? await tabGroups.query({}).catch(() => [])
       : [];
@@ -104,6 +106,7 @@ export class BrowserControlService {
         return {
           id: tab.id!,
           windowId: tab.windowId,
+          windowHint: windowHints.get(tab.windowId) ?? null,
           groupId,
           groupName: groupNames.get(groupId),
           active: tab.active,
@@ -1003,10 +1006,12 @@ export class BrowserControlService {
     const chromeApi = this.requireChromeApi();
     const tab = await chromeApi.tabs.get(tabId);
     const current = await chromeApi.tabs.query({ active: true, currentWindow: true });
+    const windowHints = await getChromeWindowHints(chromeApi);
     const { controllable, reason } = getControllableState(tab.url ?? '');
     return {
       id: tabId,
       windowId: tab.windowId,
+      windowHint: windowHints.get(tab.windowId) ?? null,
       groupId: typeof tab.groupId === 'number' ? tab.groupId : -1,
       groupName: undefined,
       active: tab.active,
@@ -1238,6 +1243,7 @@ function targetToJson(target: BrowserControlTarget): Record<string, unknown> {
   return {
     id: target.id,
     windowId: target.windowId,
+    windowHint: target.windowHint,
     groupId: target.groupId,
     groupName: target.groupName ?? null,
     active: target.active,
@@ -1249,11 +1255,33 @@ function targetToJson(target: BrowserControlTarget): Record<string, unknown> {
   };
 }
 
+async function getChromeWindowHints(chromeApi: typeof chrome): Promise<Map<number, BrowserControlWindowHint>> {
+  const windowsApi = readOptionalChromeApi(() => chromeApi.windows);
+  if (!windowsApi?.getAll) return new Map();
+  const windows = await windowsApi.getAll({ windowTypes: ['normal'] }).catch(() => []);
+  return new Map(
+    windows
+      .filter((window) => typeof window.id === 'number')
+      .map((window) => [window.id!, createWindowHint(window)]),
+  );
+}
+
+function createWindowHint(window: chrome.windows.Window): BrowserControlWindowHint {
+  return {
+    left: normalizeWindowNumber(window.left),
+    top: normalizeWindowNumber(window.top),
+    width: normalizeWindowNumber(window.width),
+    height: normalizeWindowNumber(window.height),
+    state: typeof window.state === 'string' ? window.state : null,
+  };
+}
+
 function createTargetHint(target: BrowserControlTarget, updatedAt: number): BrowserControlSettings['lastTargetHint'] {
   const origin = safeUrlOrigin(target.url);
   if (!origin) return null;
   return {
     windowId: target.windowId,
+    windowHint: target.windowHint,
     origin,
     title: '',
     updatedAt,
@@ -1265,6 +1293,7 @@ function createTabHint(tab: chrome.tabs.Tab, updatedAt: number): BrowserControlS
   if (!origin) return null;
   return {
     windowId: typeof tab.windowId === 'number' ? tab.windowId : null,
+    windowHint: null,
     origin,
     title: '',
     updatedAt,
@@ -1284,6 +1313,7 @@ function createTargetLock(
     label: safeLabel || 'Dev++',
     targetTabId: target.id,
     windowId: target.windowId,
+    windowHint: target.windowHint,
     groupId: target.groupId >= 0 ? target.groupId : null,
     origin,
     updatedAt,
@@ -1302,10 +1332,13 @@ function findHintedTarget(
 
   const sameWindow = candidates.filter((target) => hint.windowId !== null && target.windowId === hint.windowId);
   const sameTitle = candidates.filter((target) => hint.title && target.title === hint.title);
+  const sameWindowHint = findClosestWindowHintTarget(candidates, hint.windowHint);
   const preferred = sameWindow.length === 1
     ? sameWindow[0]
     : sameTitle.length === 1
       ? sameTitle[0]
+      : sameWindowHint
+        ? sameWindowHint
       : candidates.length === 1
         ? candidates[0]
         : null;
@@ -1322,7 +1355,51 @@ function findLockedTarget(
   if (sameWindow.length === 1) return sameWindow[0];
   const sameGroup = candidates.filter((target) => lock.groupId !== null && target.groupId === lock.groupId);
   if (sameGroup.length === 1) return sameGroup[0];
+  const sameWindowHint = findClosestWindowHintTarget(candidates, lock.windowHint);
+  if (sameWindowHint) return sameWindowHint;
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+function findClosestWindowHintTarget(
+  candidates: BrowserControlTarget[],
+  hint: BrowserControlWindowHint | null,
+): BrowserControlTarget | null {
+  if (!hint) return null;
+  const scored = candidates
+    .map((target) => ({ target, score: scoreWindowHint(target.windowHint, hint) }))
+    .filter((item) => item.score !== null)
+    .sort((a, b) => a.score! - b.score!);
+  const best = scored[0];
+  if (!best || best.score === null || best.score > 80) return null;
+  const tied = scored.filter((item) => item.score === best.score);
+  return tied.length === 1 ? best.target : null;
+}
+
+function scoreWindowHint(
+  current: BrowserControlWindowHint | null,
+  locked: BrowserControlWindowHint,
+): number | null {
+  if (!current) return null;
+  const values: Array<[number | null, number | null]> = [
+    [current.left, locked.left],
+    [current.top, locked.top],
+    [current.width, locked.width],
+    [current.height, locked.height],
+  ];
+  let score = 0;
+  let compared = 0;
+  for (const [left, right] of values) {
+    if (left === null || right === null) continue;
+    score += Math.abs(left - right);
+    compared += 1;
+  }
+  if (compared === 0) return null;
+  if (current.state && locked.state && current.state !== locked.state) score += 20;
+  return score;
+}
+
+function normalizeWindowNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null;
 }
 
 function matchesTargetLock(

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { scanRuntimeDoctorStorage } from '../core/chat/runtime-doctor';
+import {
+  createRuntimeDoctorLeakQuarantine,
+  scanRuntimeDoctorStorage,
+} from '../core/chat/runtime-doctor';
 
 describe('runtime doctor storage scan', () => {
   it('flags forbidden DeepSeek Web transient storage without returning values', () => {
@@ -206,5 +209,44 @@ describe('runtime doctor storage scan', () => {
         reason: 'vision_ref_data',
       },
     ]);
+  });
+
+  it('creates grouped Leak Quarantine previews without exposing values', () => {
+    const scan = scanRuntimeDoctorStorage({
+      local: {
+        deepseekCachedClientHeaders: { Authorization: 'Bearer local-secret' },
+        pending: { dataUrl: 'data:image/png;base64,AAAA' },
+      },
+      failedAreas: ['session'],
+    });
+
+    const preview = createRuntimeDoctorLeakQuarantine(scan);
+
+    expect(preview.issueCount).toBe(3);
+    expect(preview.cleanupEligibleCount).toBe(2);
+    expect(preview.groups).toEqual([
+      {
+        area: 'session',
+        reason: 'storage_read_failed',
+        count: 1,
+        samplePaths: ['(unavailable)'],
+        cleanupEligible: false,
+      },
+      {
+        area: 'local',
+        reason: 'deepseek_web_headers',
+        count: 1,
+        samplePaths: ['deepseekCachedClientHeaders'],
+        cleanupEligible: true,
+      },
+      {
+        area: 'local',
+        reason: 'raw_image_data',
+        count: 1,
+        samplePaths: ['pending.dataUrl'],
+        cleanupEligible: true,
+      },
+    ]);
+    expect(JSON.stringify(preview)).not.toMatch(/local-secret|AAAA|Bearer|data:image/);
   });
 });

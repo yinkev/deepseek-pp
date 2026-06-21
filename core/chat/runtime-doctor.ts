@@ -62,8 +62,10 @@ export interface RuntimeDoctorReport {
     maxAttempts: number;
     retryableFailure: RuntimeDoctorAutomationFailure | null;
   };
+  autopilot: RuntimeDoctorAutopilotStatus;
   humanEval: RuntimeDoctorHumanEval;
   leakSentry: RuntimeDoctorLeakSentry;
+  leakQuarantine: RuntimeDoctorLeakQuarantine;
   debugDistiller: {
     enabled: boolean;
     suggestions: RuntimeDoctorDebugSuggestion[];
@@ -107,6 +109,26 @@ export interface RuntimeDoctorAutomationFailure {
   at: number;
 }
 
+export interface RuntimeDoctorAutopilotRun {
+  id: string;
+  source: 'startup' | 'manual' | 'repair';
+  startedAt: number;
+  finishedAt: number;
+  ready: boolean;
+  status: RuntimeDoctorReadiness['status'];
+  grade: RuntimeDoctorHumanEval['grade'];
+  blockers: RuntimeDoctorReadinessBlocker[];
+  targetStatus: RuntimeDoctorReadiness['targetStatus'];
+  repaired: string[];
+  leakIssueCount: number;
+}
+
+export interface RuntimeDoctorAutopilotStatus {
+  inFlightSource: RuntimeDoctorAutopilotRun['source'] | null;
+  latestRun: RuntimeDoctorAutopilotRun | null;
+  recentRuns: RuntimeDoctorAutopilotRun[];
+}
+
 export interface RuntimeDoctorTargetLockStatus {
   enabled: boolean;
   label: string | null;
@@ -140,6 +162,20 @@ export interface RuntimeDoctorLeakSentry {
   grade: 'A' | 'F';
   issueCount: number;
   checkedAreas: RuntimeDoctorStorageArea[];
+}
+
+export interface RuntimeDoctorLeakQuarantineGroup {
+  area: RuntimeDoctorStorageArea;
+  reason: RuntimeDoctorStorageIssue['reason'];
+  count: number;
+  samplePaths: string[];
+  cleanupEligible: boolean;
+}
+
+export interface RuntimeDoctorLeakQuarantine {
+  issueCount: number;
+  cleanupEligibleCount: number;
+  groups: RuntimeDoctorLeakQuarantineGroup[];
 }
 
 export interface RuntimeDoctorFailureExplanation {
@@ -212,6 +248,36 @@ export function scanRuntimeDoctorStorage(input: {
   return {
     ok: issues.length === 0,
     issues,
+  };
+}
+
+export function createRuntimeDoctorLeakQuarantine(
+  storage: RuntimeDoctorStorageScan,
+): RuntimeDoctorLeakQuarantine {
+  const groups = new Map<string, RuntimeDoctorLeakQuarantineGroup>();
+  for (const issue of storage.issues) {
+    const key = `${issue.area}:${issue.reason}`;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (existing.samplePaths.length < 3) existing.samplePaths.push(issue.path);
+      continue;
+    }
+    groups.set(key, {
+      area: issue.area,
+      reason: issue.reason,
+      count: 1,
+      samplePaths: [issue.path],
+      cleanupEligible: issue.reason !== 'storage_read_failed',
+    });
+  }
+  const items = [...groups.values()];
+  return {
+    issueCount: storage.issues.length,
+    cleanupEligibleCount: items
+      .filter((group) => group.cleanupEligible)
+      .reduce((total, group) => total + group.count, 0),
+    groups: items,
   };
 }
 
