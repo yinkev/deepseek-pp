@@ -810,6 +810,7 @@ function AutomationCard({
     getSafeAutomationReadinessFixes(readiness).length > 0 ||
     getPromptAutomationReadinessFixes(readiness).length > 0
   );
+  const runBlocked = readiness.status === 'blocked';
   const statusColor = automation.status === 'active' ? 'var(--ds-success)' : 'var(--ds-text-tertiary)';
   const statusBg = automation.status === 'active' ? 'var(--ds-success-bg)' : 'var(--ds-surface)';
 
@@ -883,10 +884,14 @@ function AutomationCard({
           )}
           <button
             onClick={onRun}
-            disabled={running}
+            disabled={running || runBlocked}
             className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-60"
           >
-            {running ? t('sidepanel.automationPage.status.running') : t('sidepanel.automationPage.actions.runNow')}
+            {runBlocked
+              ? t('sidepanel.automationPage.readiness.status.blocked')
+              : running
+                ? t('sidepanel.automationPage.status.running')
+                : t('sidepanel.automationPage.actions.runNow')}
           </button>
         </div>
       </div>

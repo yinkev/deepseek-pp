@@ -771,6 +771,33 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(updateCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('disables run now for readiness-blocked automation cards', async () => {
+    const automation = createAutomationForPage({
+      id: 'automation-blocked',
+      name: 'Blocked vision',
+      prompt: 'Look at the current page and stop.',
+      promptOptions: { modelType: 'vision', searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+    });
+    const sendMessage = vi.fn(async (message: { type: string; payload?: { automationId?: string } }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [automation];
+      if (message.type === 'GET_AUTOMATION_RUNS') return [];
+      if (message.type === 'RUN_AUTOMATION_NOW') return { ok: false, error: 'should_not_run' };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+
+    const blockedButton = buttonByText('已阻塞');
+    expect(blockedButton.disabled).toBe(true);
+    await act(async () => {
+      blockedButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(sendMessage.mock.calls.some(([message]) => message.type === 'RUN_AUTOMATION_NOW')).toBe(false);
+  });
+
   it('shows preflight fixed and skipped run explanations without sensitive values', async () => {
     const fixedAutomation = createAutomationForPage({
       id: 'automation-fixed',
