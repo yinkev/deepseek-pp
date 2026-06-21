@@ -131,6 +131,11 @@ describe('runDeepSeekAutomation PoW handling', () => {
     expect(adapterMocks.submitPrompt.mock.calls[0][0]).toMatchObject({
       clientHeaders: { Authorization: 'Bearer cached-token' },
     });
+    expect(adapterMocks.readHistorySnapshot).toHaveBeenCalledWith(
+      'session-1',
+      301,
+      { clientHeaders: { Authorization: 'Bearer cached-token' } },
+    );
   });
 
   it('creates fresh PoW headers for the initial completion and each tool continuation', async () => {

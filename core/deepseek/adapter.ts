@@ -17,6 +17,7 @@ import {
   type PowChallenge,
 } from './pow';
 
+const DEEPSEEK_WEB_ORIGIN = new URL(DEEPSEEK_API_URL).origin;
 const COMPLETION_PATH = new URL(DEEPSEEK_API_URL).pathname;
 const POW_CHALLENGE_PATH = '/api/v0/chat/create_pow_challenge';
 const CHAT_SESSION_CREATE_PATH = '/api/v0/chat_session/create';
@@ -310,12 +311,27 @@ export async function submitPromptStreaming(
   return readCompletionStreamWithCallbacks(response, decoratedCallbacks);
 }
 
+export function getDeepSeekWebOrigin(): string {
+  const hostname = globalThis.location?.hostname;
+  if (hostname === 'chat.deepseek.com') {
+    return globalThis.location.origin;
+  }
+  return DEEPSEEK_WEB_ORIGIN;
+}
+
+export interface ReadHistorySnapshotOptions {
+  clientHeaders?: Record<string, string>;
+  baseUrl?: string;
+}
+
 export async function readHistorySnapshot(
   chatSessionId: string,
   expectedAssistantMessageId: number,
+  options?: ReadHistorySnapshotOptions,
 ): Promise<DeepSeekHistorySnapshot | null> {
-  const clientHeaders = createClientHeaders();
-  const url = new URL(HISTORY_PATH, location.origin);
+  const clientHeaders = options?.clientHeaders ?? createClientHeaders();
+  const baseUrl = options?.baseUrl ?? getDeepSeekWebOrigin();
+  const url = new URL(HISTORY_PATH, baseUrl);
   url.searchParams.set('chat_session_id', chatSessionId);
   const response = await fetch(url.href, {
     method: 'GET',
@@ -359,7 +375,7 @@ export function normalizeMessageId(value: unknown, fieldName = 'message_id'): nu
 }
 
 export function buildDeepSeekSessionUrl(chatSessionId: string): string {
-  return `${new URL(DEEPSEEK_API_URL).origin}/a/chat/s/${chatSessionId}`;
+  return `${getDeepSeekWebOrigin()}/a/chat/s/${chatSessionId}`;
 }
 
 async function readCompletionStream(response: Response): Promise<ModelTurn> {

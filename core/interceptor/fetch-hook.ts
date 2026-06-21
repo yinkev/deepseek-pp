@@ -121,7 +121,11 @@ export interface RequestBodyModification {
 function hookFetch() {
   originalFetch = window.fetch;
 
-  const hookedFetch = async function (this: typeof window, input: RequestInfo | URL, init?: RequestInit) {
+  const hookedFetch = async function hookedFetch(
+    this: typeof globalThis,
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
     if (url.includes(HISTORY_PATH)) {
@@ -149,8 +153,7 @@ function hookFetch() {
     const requestInit = modified ? { ...init, body: modified.body } : init;
     return interceptFetchResponse(originalFetch.call(this, input, requestInit), requestContext);
   };
-  Object.assign(hookedFetch, originalFetch);
-  window.fetch = hookedFetch as typeof window.fetch;
+  window.fetch = Object.assign(hookedFetch, originalFetch);
 }
 
 function hookXHR() {

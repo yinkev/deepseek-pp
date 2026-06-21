@@ -93,7 +93,7 @@ export async function runDeepSeekAutomation(
 
     const completedAt = Date.now();
     const finalAssistantMessageId = stream.responseMessageId ?? assistantMessageId;
-    const history = await readHistorySnapshot(chatSessionId, finalAssistantMessageId).catch(() => null);
+    const history = await readHistorySnapshot(chatSessionId, finalAssistantMessageId, { clientHeaders }).catch(() => null);
     const nextParentMessageId = history?.parentMessageId ?? finalAssistantMessageId;
     const result: AutomationRunnerSuccess = {
       ok: true,
