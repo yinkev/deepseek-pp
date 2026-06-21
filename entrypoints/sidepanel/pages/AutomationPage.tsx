@@ -14,6 +14,7 @@ import {
   type PersonalConvenienceConfig,
 } from '../../../core/personal-convenience/config';
 import { validateAutomationSchedule } from '../../../core/automation/schedule';
+import { createAutomationRunReplayBrief } from '../../../core/automation/replay';
 import {
   AUTOMATION_WORKFLOW_TEMPLATES,
   createAutomationInputFromWorkflowTemplate,
@@ -1225,6 +1226,7 @@ function AutomationReadinessPanel({
 function RunFlightRecorder({ run }: { run: AutomationRun }) {
   const { t, locale } = useI18n();
   const recorder = run.flightRecorder;
+  const replayBrief = createAutomationRunReplayBrief(run);
   if (!recorder) {
     return (
       <details className="rounded-lg border px-2.5 py-2" style={{ borderColor: 'var(--ds-border)' }}>
@@ -1234,6 +1236,7 @@ function RunFlightRecorder({ run }: { run: AutomationRun }) {
         <div className="mt-2 text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
           {t('sidepanel.automationPage.flightRecorder.noRecorder')}
         </div>
+        <RunReplayBrief brief={replayBrief} />
       </details>
     );
   }
@@ -1275,6 +1278,21 @@ function RunFlightRecorder({ run }: { run: AutomationRun }) {
           </div>
         ))}
       </div>
+      <RunReplayBrief brief={replayBrief} />
+    </details>
+  );
+}
+
+function RunReplayBrief({ brief }: { brief: string }) {
+  const { t } = useI18n();
+  return (
+    <details className="mt-2 rounded-md border px-2 py-1.5" style={{ borderColor: 'var(--ds-border)' }}>
+      <summary className="cursor-pointer text-[11px] font-medium" style={{ color: 'var(--ds-text-secondary)' }}>
+        {t('sidepanel.automationPage.flightRecorder.replayBrief')}
+      </summary>
+      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-4" style={{ color: 'var(--ds-text-tertiary)' }}>
+        {brief}
+      </pre>
     </details>
   );
 }

@@ -1204,6 +1204,7 @@ export const zhCN = {
         auth: '登录',
         evidence: '证据',
         updated: '更新',
+        replayBrief: '复盘简报',
         visualAttached: '{count} 个视觉引用',
         visualNone: '无视觉引用',
         sessionSources: {

@@ -1140,6 +1140,8 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('已开启深度思考。');
     expect(container.textContent).toContain('预检已跳过运行');
     expect(container.textContent).toContain('移除内联密钥、Cookie、Token、签名链接或原始媒体。');
+    expect(container.textContent).toContain('复盘简报');
+    expect(container.textContent).toContain('Automation run replay brief');
     expect(container.textContent).not.toMatch(/sk-proj|secret-token|Authorization|Bearer|Cookie:|data:image/);
   });
 });

@@ -1204,6 +1204,7 @@ export const en = {
         auth: 'Auth',
         evidence: 'Evidence',
         updated: 'Updated',
+        replayBrief: 'Replay brief',
         visualAttached: '{count} visual ref',
         visualNone: 'No visual ref',
         sessionSources: {
