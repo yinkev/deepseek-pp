@@ -546,6 +546,34 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie/);
   });
 
+  it('filters automation workflow templates by category', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+
+    expect(container.textContent).toContain('实现委员会');
+    expect(container.textContent).toContain('来源监控');
+
+    await clickButton('项目');
+    expect(container.textContent).toContain('实现委员会');
+    expect(container.textContent).toContain('项目状态委员会');
+    expect(container.textContent).not.toContain('来源监控');
+
+    await clickButton('质量');
+    expect(container.textContent).toContain('系统调试循环');
+    expect(container.textContent).toContain('评审评分迭代');
+    expect(container.textContent).not.toContain('实现委员会');
+
+    await clickButton('全部');
+    expect(container.textContent).toContain('实现委员会');
+    expect(container.textContent).toContain('来源监控');
+  });
+
   it('shows preflight fixed and skipped run explanations without sensitive values', async () => {
     const fixedAutomation = createAutomationForPage({
       id: 'automation-fixed',

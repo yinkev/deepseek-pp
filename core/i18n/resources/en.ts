@@ -1007,6 +1007,7 @@ export const en = {
         title: 'Workflow starter pack',
         description: 'Use a high-ROI loop as a starting point, then edit it before saving.',
         use: 'Use',
+        all: 'All',
         categories: {
           readiness: 'Readiness',
           research: 'Research',

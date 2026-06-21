@@ -17,6 +17,7 @@ import { validateAutomationSchedule } from '../../../core/automation/schedule';
 import {
   AUTOMATION_WORKFLOW_TEMPLATES,
   createAutomationInputFromWorkflowTemplate,
+  type AutomationWorkflowTemplateCategory,
   type AutomationWorkflowTemplate,
 } from '../../../core/automation/workflow-templates';
 import {
@@ -58,6 +59,16 @@ const DEFAULT_PROMPT_OPTIONS: AutomationPromptOptions = {
 };
 
 const FLIGHT_RECORDER_VISIBLE_EVENTS = 6;
+const TEMPLATE_CATEGORY_FILTERS: Array<'all' | AutomationWorkflowTemplateCategory> = [
+  'all',
+  'readiness',
+  'research',
+  'project',
+  'browser',
+  'quality',
+  'prompt',
+  'memory',
+];
 
 type FormState = {
   name: string;
@@ -400,6 +411,13 @@ function AutomationTemplatePicker({
   onUse: (template: AutomationWorkflowTemplate) => void;
 }) {
   const { t } = useI18n();
+  const [category, setCategory] = useState<'all' | AutomationWorkflowTemplateCategory>('all');
+  const visibleTemplates = useMemo(
+    () => category === 'all'
+      ? AUTOMATION_WORKFLOW_TEMPLATES
+      : AUTOMATION_WORKFLOW_TEMPLATES.filter((template) => template.category === category),
+    [category],
+  );
   return (
     <section className="ds-surface-panel rounded-lg p-3 space-y-2">
       <div className="flex items-start justify-between gap-3">
@@ -412,8 +430,25 @@ function AutomationTemplatePicker({
           </div>
         </div>
       </div>
+      <div className="flex flex-wrap gap-1.5">
+        {TEMPLATE_CATEGORY_FILTERS.map((item) => {
+          const selected = item === category;
+          return (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setCategory(item)}
+              className={`px-2 py-1 text-[11px] rounded-md ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
+            >
+              {item === 'all'
+                ? t('sidepanel.automationPage.templates.all')
+                : t(`sidepanel.automationPage.templates.categories.${item}` as LocaleMessageKey)}
+            </button>
+          );
+        })}
+      </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        {AUTOMATION_WORKFLOW_TEMPLATES.map((template) => (
+        {visibleTemplates.map((template) => (
           <article key={template.id} className="ds-card rounded-lg p-3 space-y-2">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">

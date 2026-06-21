@@ -1007,6 +1007,7 @@ export const zhCN = {
         title: '工作流启动包',
         description: '用高 ROI 循环作为起点，保存前可以继续编辑。',
         use: '使用',
+        all: '全部',
         categories: {
           readiness: '就绪',
           research: '研究',
