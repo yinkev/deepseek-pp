@@ -114,6 +114,7 @@ export default function AutomationPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
   const [imageAttachments, setImageAttachments] = useState<AutomationImageAttachment[]>([]);
+  const [automationQuery, setAutomationQuery] = useState('');
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const banner = useBanner();
@@ -123,6 +124,14 @@ export default function AutomationPage() {
     () => automations.filter((item) => item.status === 'active').length,
     [automations],
   );
+  const filteredAutomations = useMemo(() => {
+    const query = automationQuery.trim().toLowerCase();
+    if (!query) return automations;
+    return automations.filter((automation) =>
+      automation.name.toLowerCase().includes(query) ||
+      automation.prompt.toLowerCase().includes(query)
+    );
+  }, [automations, automationQuery]);
 
   const load = async () => {
     const list: Automation[] = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATIONS' });
@@ -439,6 +448,15 @@ export default function AutomationPage() {
         </div>
       )}
 
+      {!showForm && automations.length > 0 && (
+        <input
+          value={automationQuery}
+          onChange={(event) => setAutomationQuery(event.target.value)}
+          className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+          placeholder={t('sidepanel.automationPage.filterPlaceholder')}
+        />
+      )}
+
       {loading ? (
         <SkeletonList rows={3} />
       ) : automations.length === 0 && !showForm ? (
@@ -453,7 +471,11 @@ export default function AutomationPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {automations.map((automation) => (
+          {filteredAutomations.length === 0 ? (
+            <div className="ds-empty-state">
+              <div className="ds-empty-state-title">{t('sidepanel.automationPage.filterNoResults')}</div>
+            </div>
+          ) : filteredAutomations.map((automation) => (
             <AutomationCard
               key={automation.id}
               automation={automation}

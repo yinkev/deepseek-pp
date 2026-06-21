@@ -1003,6 +1003,8 @@ export const en = {
       created: 'Automation created',
       empty: 'No automations',
       emptyHelp: 'Create a task to track information, review content, or repeat a fixed prompt on schedule.',
+      filterPlaceholder: 'Search automations',
+      filterNoResults: 'No matching automations',
       namePromptRequired: 'Name and prompt are required',
       expressionRequired: 'Enter a schedule expression',
       runFailed: 'Run failed',

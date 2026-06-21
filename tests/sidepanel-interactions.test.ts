@@ -817,6 +817,42 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(sendMessage.mock.calls)).not.toMatch(/chatSessionId|parentMessageId|session-[a-z0-9_-]+/i);
   });
 
+  it('filters saved automations by name and prompt', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [
+        createAutomationForPage({
+          id: 'automation-research',
+          name: 'Research digest',
+          prompt: 'Research source updates and stop.',
+        }),
+        createAutomationForPage({
+          id: 'automation-visual',
+          name: 'Visual page check',
+          prompt: 'Inspect browser target visually and stop.',
+        }),
+      ];
+      if (message.type === 'GET_AUTOMATION_RUNS') return [];
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    expect(container.textContent).toContain('Research digest');
+    expect(container.textContent).toContain('Visual page check');
+
+    await enterText('搜索自动化', 'visual');
+    expect(container.textContent).not.toContain('Research digest');
+    expect(container.textContent).toContain('Visual page check');
+
+    await enterText('搜索自动化', 'updates');
+    expect(container.textContent).toContain('Research digest');
+    expect(container.textContent).not.toContain('Visual page check');
+
+    await enterText('搜索自动化', 'missing');
+    expect(container.textContent).toContain('没有匹配的自动化');
+  });
+
   it('prepares an existing automation from its card', async () => {
     let automation = createAutomationForPage({
       id: 'automation-needs-prep',

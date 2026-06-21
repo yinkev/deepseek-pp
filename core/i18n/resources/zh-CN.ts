@@ -1003,6 +1003,8 @@ export const zhCN = {
       created: '自动化已创建',
       empty: '暂无自动化',
       emptyHelp: '新建任务后，可以让它定时跟踪信息、复盘内容或重复执行固定 Prompt。',
+      filterPlaceholder: '搜索自动化',
+      filterNoResults: '没有匹配的自动化',
       namePromptRequired: '名称和 Prompt 不能为空',
       expressionRequired: '请填写定时表达式',
       runFailed: '运行失败',
