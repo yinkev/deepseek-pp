@@ -338,6 +338,33 @@ export default function AutomationPage() {
     await load();
   };
 
+  const prepareAutomation = async (automation: Automation) => {
+    const report = evaluateAutomationReadiness(automation);
+    if (report.status === 'blocked') return;
+    const safeFixCodes = getSafeAutomationReadinessFixes(report);
+    const promptFixCodes = getPromptAutomationReadinessFixes(report);
+    if (safeFixCodes.length === 0 && promptFixCodes.length === 0) return;
+
+    const patch: Partial<Pick<Automation, 'prompt' | 'promptOptions'>> = {};
+    if (safeFixCodes.length > 0) {
+      patch.promptOptions = applySafeAutomationReadinessFixes(automation.promptOptions, safeFixCodes);
+    }
+    if (promptFixCodes.length > 0) {
+      patch.prompt = applyPromptAutomationReadinessFixes(automation.prompt, promptFixCodes);
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'UPDATE_AUTOMATION',
+      payload: { id: automation.id, patch },
+    });
+    if (response?.ok === false && response.error) {
+      banner.show('error', typeof response.error === 'string' ? response.error : response.error.message);
+      return;
+    }
+    banner.show('success', t('sidepanel.automationPage.readiness.noIssues'));
+    await load();
+  };
+
   const openSession = async (url: string | null) => {
     if (!url) return;
     await chrome.tabs.create({ url, active: true });
@@ -407,6 +434,7 @@ export default function AutomationPage() {
               sessionStrategy={personalConfig.sameSessionStrategy}
               onRun={() => runNow(automation.id)}
               onToggleStatus={() => toggleStatus(automation)}
+              onPrepare={() => prepareAutomation(automation)}
               onEdit={() => startEdit(automation)}
               onDelete={() => remove(automation)}
               onOpenSession={() => openSession(automation.deepseek.sessionUrl)}
@@ -759,6 +787,7 @@ function AutomationCard({
   sessionStrategy,
   onRun,
   onToggleStatus,
+  onPrepare,
   onEdit,
   onDelete,
   onOpenSession,
@@ -769,6 +798,7 @@ function AutomationCard({
   sessionStrategy: PersonalConvenienceConfig['sameSessionStrategy'];
   onRun: () => void;
   onToggleStatus: () => void;
+  onPrepare: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onOpenSession: () => void;
@@ -776,6 +806,10 @@ function AutomationCard({
   const { t, locale } = useI18n();
   const latestRun = runs[0];
   const readiness = useMemo(() => evaluateAutomationReadiness(automation), [automation]);
+  const canPrepare = readiness.status !== 'blocked' && (
+    getSafeAutomationReadinessFixes(readiness).length > 0 ||
+    getPromptAutomationReadinessFixes(readiness).length > 0
+  );
   const statusColor = automation.status === 'active' ? 'var(--ds-success)' : 'var(--ds-text-tertiary)';
   const statusBg = automation.status === 'active' ? 'var(--ds-success-bg)' : 'var(--ds-surface)';
 
@@ -838,13 +872,23 @@ function AutomationCard({
         >
           {t('sidepanel.automationPage.actions.openSession')}
         </button>
-        <button
-          onClick={onRun}
-          disabled={running}
-          className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-60"
-        >
-          {running ? t('sidepanel.automationPage.status.running') : t('sidepanel.automationPage.actions.runNow')}
-        </button>
+        <div className="flex items-center gap-2">
+          {canPrepare && (
+            <button
+              onClick={onPrepare}
+              className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
+            >
+              {t('sidepanel.automationPage.readiness.prepareRun')}
+            </button>
+          )}
+          <button
+            onClick={onRun}
+            disabled={running}
+            className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-60"
+          >
+            {running ? t('sidepanel.automationPage.status.running') : t('sidepanel.automationPage.actions.runNow')}
+          </button>
+        </div>
       </div>
     </div>
   );

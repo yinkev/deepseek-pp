@@ -722,6 +722,54 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('没有匹配的工作流。');
   });
 
+  it('prepares an existing automation from its card', async () => {
+    let automation = createAutomationForPage({
+      id: 'automation-needs-prep',
+      name: 'Needs prep',
+      prompt: 'Run a workflow to research this source and evaluate it.',
+      promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+    });
+    const sendMessage = vi.fn(async (message: { type: string; payload?: { automationId?: string; id?: string; patch?: Record<string, unknown> } }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [automation];
+      if (message.type === 'GET_AUTOMATION_RUNS') return [];
+      if (message.type === 'UPDATE_AUTOMATION') {
+        expect(message.payload?.id).toBe('automation-needs-prep');
+        automation = { ...automation, ...(message.payload?.patch ?? {}) };
+        return automation;
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    expect(container.textContent).toContain('Needs prep');
+    expect(container.textContent).toContain('准备运行');
+
+    await clickButton('准备运行');
+    await flushEffects();
+
+    const updateCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'UPDATE_AUTOMATION';
+        payload: {
+          patch: {
+            prompt: string;
+            promptOptions: {
+              searchEnabled: boolean;
+              thinkingEnabled: boolean;
+            };
+          };
+        };
+      } => message.type === 'UPDATE_AUTOMATION');
+
+    expect(updateCall?.payload.patch.prompt).toContain('Workflow contract: Plan the work, evaluate evidence, review risks, grade confidence, iterate once if useful, then stop');
+    expect(updateCall?.payload.patch.promptOptions.searchEnabled).toBe(true);
+    expect(updateCall?.payload.patch.promptOptions.thinkingEnabled).toBe(true);
+    expect(JSON.stringify(updateCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
+  });
+
   it('shows preflight fixed and skipped run explanations without sensitive values', async () => {
     const fixedAutomation = createAutomationForPage({
       id: 'automation-fixed',
