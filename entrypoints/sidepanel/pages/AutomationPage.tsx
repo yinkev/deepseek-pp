@@ -15,6 +15,11 @@ import {
 } from '../../../core/personal-convenience/config';
 import { validateAutomationSchedule } from '../../../core/automation/schedule';
 import {
+  AUTOMATION_WORKFLOW_TEMPLATES,
+  createAutomationInputFromWorkflowTemplate,
+  type AutomationWorkflowTemplate,
+} from '../../../core/automation/workflow-templates';
+import {
   DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
   DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
   DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
@@ -155,6 +160,15 @@ export default function AutomationPage() {
   const startEdit = (automation: Automation) => {
     setEditing(automation);
     setForm(fromAutomation(automation));
+    setImageAttachments([]);
+    banner.clear();
+    setShowForm(true);
+  };
+
+  const applyWorkflowTemplate = (template: AutomationWorkflowTemplate) => {
+    const input = createLocalizedAutomationInputFromWorkflowTemplate(template, DEFAULT_TIMEZONE, t);
+    setEditing(null);
+    setForm(fromAutomationInput(input));
     setImageAttachments([]);
     banner.clear();
     setShowForm(true);
@@ -318,6 +332,10 @@ export default function AutomationPage() {
       {banner.node}
       {confirmNode}
 
+      {!editing && !showForm && (
+        <AutomationTemplatePicker onUse={applyWorkflowTemplate} />
+      )}
+
       {showForm && (
         <div className="animate-slide-down">
           <AutomationForm
@@ -364,6 +382,54 @@ export default function AutomationPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function AutomationTemplatePicker({
+  onUse,
+}: {
+  onUse: (template: AutomationWorkflowTemplate) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <section className="ds-surface-panel rounded-lg p-3 space-y-2">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+            {t('sidepanel.automationPage.templates.title')}
+          </div>
+          <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
+            {t('sidepanel.automationPage.templates.description')}
+          </div>
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {AUTOMATION_WORKFLOW_TEMPLATES.map((template) => (
+          <article key={template.id} className="ds-card rounded-lg p-3 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>
+                  {workflowTemplateCopy(template, 'title', t)}
+                </div>
+                <div className="text-[10px] uppercase mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
+                  {workflowTemplateCategory(template, t)} · {workflowTemplateCopy(template, 'cadence', t)}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onUse(template)}
+                className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md shrink-0"
+              >
+                {t('sidepanel.automationPage.templates.use')}
+              </button>
+            </div>
+            <div className="text-[11px] leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
+              {workflowTemplateCopy(template, 'summary', t)}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -742,6 +808,49 @@ function fromAutomation(automation: Automation): FormState {
     refFileIdsText: automation.promptOptions.refFileIds.join(', '),
     visualMonitorEnabled: automation.promptOptions.visualMonitor?.enabled === true,
   };
+}
+
+function fromAutomationInput(input: AutomationCreateInput): FormState {
+  return {
+    name: input.name,
+    prompt: input.prompt,
+    scheduleKind: input.schedule.kind,
+    expression: input.schedule.expression ?? '',
+    timezone: input.schedule.timezone || DEFAULT_TIMEZONE,
+    modelType: normalizeFormModelType(input.promptOptions.modelType),
+    searchEnabled: input.promptOptions.searchEnabled,
+    thinkingEnabled: input.promptOptions.thinkingEnabled,
+    refFileIdsText: input.promptOptions.refFileIds.join(', '),
+    visualMonitorEnabled: input.promptOptions.visualMonitor?.enabled === true,
+  };
+}
+
+function createLocalizedAutomationInputFromWorkflowTemplate(
+  template: AutomationWorkflowTemplate,
+  timezone: string,
+  t: (key: LocaleMessageKey) => string,
+): AutomationCreateInput {
+  const input = createAutomationInputFromWorkflowTemplate(template, { timezone });
+  return {
+    ...input,
+    name: workflowTemplateCopy(template, 'title', t),
+    prompt: workflowTemplateCopy(template, 'prompt', t),
+  };
+}
+
+function workflowTemplateCopy(
+  template: AutomationWorkflowTemplate,
+  field: 'title' | 'summary' | 'cadence' | 'prompt',
+  t: (key: LocaleMessageKey) => string,
+): string {
+  return t(`sidepanel.automationPage.templateItems.${template.copyKey}.${field}` as LocaleMessageKey);
+}
+
+function workflowTemplateCategory(
+  template: AutomationWorkflowTemplate,
+  t: (key: LocaleMessageKey) => string,
+): string {
+  return t(`sidepanel.automationPage.templates.categories.${template.category}` as LocaleMessageKey);
 }
 
 function toAutomationInput(form: FormState): AutomationCreateInput {

@@ -316,6 +316,73 @@ describe('sidepanel interactions', () => {
     });
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:/);
   });
+
+  it('creates an automation from a workflow template while preserving user edits', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-template-1',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    expect(container.textContent).toContain('运行就绪恢复');
+    expect(container.textContent).not.toContain('Runtime Readiness Recovery');
+
+    await clickButton('使用');
+    expect(Array.from(container.querySelectorAll('button')).filter((button) => button.textContent === '使用')).toHaveLength(0);
+    expect(inputByPlaceholder('任务名称').value).toBe('运行就绪恢复');
+    expect(inputByPlaceholder('输入要定时发送到 DeepSeek 的内容').value).toContain('规划就绪检查');
+
+    await enterText('任务名称', 'My readiness check');
+    await enterText('输入要定时发送到 DeepSeek 的内容', 'Check my active setup and tell me exactly what needs attention.');
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: {
+          name: string;
+          prompt: string;
+          schedule: Record<string, unknown>;
+          promptOptions: Record<string, unknown>;
+        };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.name).toBe('My readiness check');
+    expect(createCall?.payload.prompt).toBe('Check my active setup and tell me exactly what needs attention.');
+    expect(createCall?.payload.schedule).toMatchObject({
+      kind: 'manual',
+      expression: null,
+      enabled: false,
+    });
+    expect(createCall?.payload.promptOptions).toMatchObject({
+      modelType: null,
+      searchEnabled: false,
+      thinkingEnabled: true,
+      refFileIds: [],
+      visualMonitor: {
+        enabled: true,
+        source: 'browser_control_target',
+        includeEvidencePack: true,
+      },
+    });
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie/);
+  });
 });
 
 async function renderElement(element: React.ReactElement) {
