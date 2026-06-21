@@ -1042,6 +1042,61 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(updateCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('prepares all eligible automations from the header action', async () => {
+    const needsPrep = createAutomationForPage({
+      id: 'automation-needs-prep',
+      name: 'Needs prep',
+      prompt: 'Run a workflow to research this source and evaluate it.',
+      promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+    });
+    const blocked = createAutomationForPage({
+      id: 'automation-blocked-secret',
+      name: 'Blocked secret',
+      prompt: 'Use Authorization: Bearer secret-token, then stop.',
+    });
+    const ready = createAutomationForPage({
+      id: 'automation-ready',
+      name: 'Ready',
+      prompt: 'Plan, evaluate, review, grade, iterate, then stop.',
+      promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: true, refFileIds: [] },
+    });
+    const sendMessage = vi.fn(async (message: { type: string; payload?: { id?: string; patch?: Record<string, unknown> } }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [needsPrep, blocked, ready];
+      if (message.type === 'GET_AUTOMATION_RUNS') return [];
+      if (message.type === 'UPDATE_AUTOMATION') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('全部准备');
+    await flushEffects();
+
+    const updateCalls = sendMessage.mock.calls
+      .map(([message]) => message)
+      .filter((message): message is {
+        type: 'UPDATE_AUTOMATION';
+        payload: {
+          id: string;
+          patch: {
+            prompt?: string;
+            promptOptions?: {
+              searchEnabled?: boolean;
+              thinkingEnabled?: boolean;
+            };
+          };
+        };
+      } => message.type === 'UPDATE_AUTOMATION');
+
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].payload.id).toBe('automation-needs-prep');
+    expect(updateCalls[0].payload.patch.prompt).toContain('Workflow contract: Plan the work');
+    expect(updateCalls[0].payload.patch.promptOptions).toMatchObject({ searchEnabled: true, thinkingEnabled: true });
+    expect(JSON.stringify(updateCalls)).not.toMatch(/secret-token|Authorization|Bearer|Cookie|data:image/);
+    expect(container.textContent).toContain('已准备 1 个自动化。');
+  });
+
   it('disables run now for readiness-blocked automation cards', async () => {
     const automation = createAutomationForPage({
       id: 'automation-blocked',

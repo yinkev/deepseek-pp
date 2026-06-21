@@ -1053,6 +1053,9 @@ export const en = {
         noIssues: 'Ready to run.',
         moreIssues: '+{count} more',
         prepareRun: 'Prepare run',
+        prepareAll: 'Prepare all',
+        preparedAll: 'Prepared {count} automation(s).',
+        noPreparedAll: 'All eligible automations are already prepared.',
         applySafeFixes: 'Apply safe fixes',
         addLoopContract: 'Add loop contract',
         status: {

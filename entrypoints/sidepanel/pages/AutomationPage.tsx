@@ -439,6 +439,40 @@ export default function AutomationPage() {
     await load();
   };
 
+  const prepareAllAutomations = async () => {
+    let prepared = 0;
+    for (const automation of automations) {
+      const report = evaluateAutomationReadiness(automation);
+      if (report.status === 'blocked') continue;
+      const safeFixCodes = getSafeAutomationReadinessFixes(report);
+      const promptFixCodes = getPromptAutomationReadinessFixes(report);
+      if (safeFixCodes.length === 0 && promptFixCodes.length === 0) continue;
+
+      const patch: Partial<Pick<Automation, 'prompt' | 'promptOptions'>> = {};
+      if (safeFixCodes.length > 0) {
+        patch.promptOptions = applySafeAutomationReadinessFixes(automation.promptOptions, safeFixCodes);
+      }
+      if (promptFixCodes.length > 0) {
+        patch.prompt = applyPromptAutomationReadinessFixes(automation.prompt, promptFixCodes);
+      }
+
+      const response = await chrome.runtime.sendMessage({
+        type: 'UPDATE_AUTOMATION',
+        payload: { id: automation.id, patch },
+      });
+      if (response?.ok === false && response.error) {
+        banner.show('error', typeof response.error === 'string' ? response.error : response.error.message);
+        return;
+      }
+      prepared += 1;
+    }
+
+    banner.show('success', prepared > 0
+      ? t('sidepanel.automationPage.readiness.preparedAll', { count: prepared })
+      : t('sidepanel.automationPage.readiness.noPreparedAll'));
+    await load();
+  };
+
   const openSession = async (url: string | null) => {
     if (!url) return;
     await chrome.tabs.create({ url, active: true });
@@ -452,6 +486,15 @@ export default function AutomationPage() {
         meta={t('sidepanel.automationPage.summary', { total: automations.length, active: automationListCounts.active })}
         actions={(
         <div className="flex items-center gap-2">
+          {automations.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void prepareAllAutomations()}
+              className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
+            >
+              {t('sidepanel.automationPage.readiness.prepareAll')}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void cycleSessionStrategy()}

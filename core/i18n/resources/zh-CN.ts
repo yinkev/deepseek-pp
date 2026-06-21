@@ -1053,6 +1053,9 @@ export const zhCN = {
         noIssues: '可以运行。',
         moreIssues: '另有 {count} 项',
         prepareRun: '准备运行',
+        prepareAll: '全部准备',
+        preparedAll: '已准备 {count} 个自动化。',
+        noPreparedAll: '所有可处理自动化都已准备好。',
         applySafeFixes: '应用安全修正',
         addLoopContract: '补强循环',
         status: {
