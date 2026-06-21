@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateAutomationReadiness } from '../core/automation/readiness';
+import {
+  applySafeAutomationReadinessFixes,
+  evaluateAutomationReadiness,
+  getSafeAutomationReadinessFixes,
+} from '../core/automation/readiness';
 import { AUTOMATION_WORKFLOW_TEMPLATES, createAutomationInputFromWorkflowTemplate } from '../core/automation/workflow-templates';
 import type { AutomationCreateInput } from '../core/automation/types';
 
@@ -105,6 +109,52 @@ describe('automation readiness', () => {
       code: 'research_without_search',
       severity: 'warning',
     });
+  });
+
+  it('applies safe option fixes for research and evaluator warnings', () => {
+    const input = createInput({
+      prompt: 'Research this source, evaluate evidence, review contradictions, grade confidence, iterate once, then stop.',
+      promptOptions: {
+        modelType: null,
+        searchEnabled: false,
+        thinkingEnabled: false,
+        refFileIds: [],
+      },
+    });
+    const report = evaluateAutomationReadiness(input);
+    const issueCodes = getSafeAutomationReadinessFixes(report);
+
+    expect(issueCodes).toEqual(['research_without_search', 'evaluation_without_thinking']);
+
+    const fixed = applySafeAutomationReadinessFixes(input.promptOptions, issueCodes);
+    expect(fixed.searchEnabled).toBe(true);
+    expect(fixed.thinkingEnabled).toBe(true);
+    expect(fixed.refFileIds).toEqual([]);
+  });
+
+  it('normalizes Vision flags while preserving visual-input blockers', () => {
+    const input = createInput({
+      prompt: 'Look at the current page and stop.',
+      promptOptions: {
+        modelType: 'vision',
+        searchEnabled: true,
+        thinkingEnabled: true,
+        refFileIds: [],
+      },
+    });
+    const report = evaluateAutomationReadiness(input);
+    const issueCodes = getSafeAutomationReadinessFixes(report);
+
+    expect(report.issues).toContainEqual({
+      code: 'vision_without_visual_input',
+      severity: 'blocker',
+    });
+    expect(issueCodes).toEqual(['vision_flags_inconsistent']);
+
+    const fixed = applySafeAutomationReadinessFixes(input.promptOptions, issueCodes);
+    expect(fixed.modelType).toBe('vision');
+    expect(fixed.searchEnabled).toBe(false);
+    expect(fixed.thinkingEnabled).toBe(false);
   });
 
   it('keeps scheduled memory hygiene in warning territory instead of silently approving it', () => {

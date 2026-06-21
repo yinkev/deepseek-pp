@@ -8,9 +8,10 @@ import {
   updateAutomationRuntime,
 } from './store';
 import { calculateNextRunAt } from './schedule';
-import { createDeepSeekWebVisionRoute } from '../deepseek/web-vision';
 import {
+  applySafeAutomationReadinessFixes,
   evaluateAutomationReadiness,
+  getSafeAutomationReadinessFixes,
   type AutomationReadinessIssueCode,
   type AutomationReadinessReport,
 } from './readiness';
@@ -18,7 +19,6 @@ import type {
   Automation,
   AutomationErrorState,
   AutomationId,
-  AutomationPromptOptions,
   AutomationRun,
   AutomationRunPreflight,
   AutomationRunnerRequest,
@@ -31,12 +31,6 @@ export const AUTOMATION_WAKE_INTERVAL_MINUTES = 1;
 export const AUTOMATION_RUN_TIMEOUT_MS = 180_000;
 export const AUTOMATION_MAX_ATTEMPTS = 2;
 export const AUTOMATION_RETRY_DELAY_MS = 10_000;
-
-const SAFE_PREFLIGHT_FIXES = new Set<AutomationReadinessIssueCode>([
-  'research_without_search',
-  'evaluation_without_thinking',
-  'vision_flags_inconsistent',
-]);
 
 type AutomationRunExecutor = (request: AutomationRunnerRequest) => Promise<AutomationRunnerResult>;
 
@@ -388,10 +382,10 @@ async function prepareAutomationRunPreflight(
 }> {
   let workingAutomation = automation;
   let report = evaluateAutomationReadiness(workingAutomation);
-  const autoFixedIssueCodes = getSafePreflightFixes(report);
+  const autoFixedIssueCodes = getSafeAutomationReadinessFixes(report);
 
   if (autoFixedIssueCodes.length > 0) {
-    const promptOptions = applySafePreflightFixes(workingAutomation.promptOptions, autoFixedIssueCodes);
+    const promptOptions = applySafeAutomationReadinessFixes(workingAutomation.promptOptions, autoFixedIssueCodes);
     const updated = await updateAutomation(workingAutomation.id, { promptOptions });
     workingAutomation = updated ?? { ...workingAutomation, promptOptions };
     report = evaluateAutomationReadiness(workingAutomation);
@@ -419,12 +413,6 @@ async function prepareAutomationRunPreflight(
   return { automation: workingAutomation, summary, blockingError };
 }
 
-function getSafePreflightFixes(report: AutomationReadinessReport): AutomationReadinessIssueCode[] {
-  return report.issues
-    .map((issue) => issue.code)
-    .filter((code): code is AutomationReadinessIssueCode => SAFE_PREFLIGHT_FIXES.has(code));
-}
-
 function getBlockingIssueCodes(report: AutomationReadinessReport): AutomationReadinessIssueCode[] {
   return report.issues
     .filter((issue) => issue.severity === 'blocker')
@@ -447,42 +435,6 @@ function createAutomationRunPreflight(
     blockingIssueCodes: [...blockingIssueCodes],
     autoFixedIssueCodes: [...autoFixedIssueCodes],
   };
-}
-
-function applySafePreflightFixes(
-  promptOptions: AutomationPromptOptions,
-  issueCodes: readonly AutomationReadinessIssueCode[],
-): AutomationPromptOptions {
-  let next: AutomationPromptOptions = {
-    ...promptOptions,
-    refFileIds: [...promptOptions.refFileIds],
-    webVisionFiles: promptOptions.webVisionFiles ? [...promptOptions.webVisionFiles] : [],
-    visualEvidencePacks: promptOptions.visualEvidencePacks ? [...promptOptions.visualEvidencePacks] : undefined,
-  };
-
-  if (issueCodes.includes('research_without_search')) {
-    next = { ...next, searchEnabled: true };
-  }
-  if (issueCodes.includes('evaluation_without_thinking')) {
-    next = { ...next, thinkingEnabled: true };
-  }
-  if (issueCodes.includes('vision_flags_inconsistent')) {
-    const shouldDisableVisionFlags = next.modelType === 'vision' || next.refFileIds.length > 0;
-    const route = createDeepSeekWebVisionRoute({
-      modelType: next.modelType,
-      refFileIds: next.refFileIds,
-      thinkingEnabled: next.thinkingEnabled,
-      searchEnabled: next.searchEnabled,
-    });
-    next = {
-      ...next,
-      ...route,
-      searchEnabled: shouldDisableVisionFlags ? false : route.searchEnabled,
-      thinkingEnabled: shouldDisableVisionFlags ? false : route.thinkingEnabled,
-    };
-  }
-
-  return next;
 }
 
 function nextRunAfterCompletion(automation: Automation, completedAt: number): number | null {

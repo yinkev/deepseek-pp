@@ -20,7 +20,9 @@ import {
   type AutomationWorkflowTemplate,
 } from '../../../core/automation/workflow-templates';
 import {
+  applySafeAutomationReadinessFixes,
   evaluateAutomationReadiness,
+  getSafeAutomationReadinessFixes,
   type AutomationReadinessIssueCode,
   type AutomationReadinessReport,
 } from '../../../core/automation/readiness';
@@ -463,6 +465,7 @@ function AutomationForm({
     () => evaluateAutomationReadiness(toAutomationInput(form), { transientImageCount: imageAttachments.length }),
     [form, imageAttachments.length],
   );
+  const safeFixCodes = useMemo(() => getSafeAutomationReadinessFixes(readiness), [readiness]);
   const showReadiness = editing !== null || hasAutomationDraftContent(form, imageAttachments.length);
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     onChange({ ...form, [key]: value });
@@ -471,6 +474,18 @@ function AutomationForm({
   const handleFiles = (files: FileList | null) => {
     onAddImages(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+  const applySafeFixes = () => {
+    if (safeFixCodes.length === 0) return;
+    const promptOptions = applySafeAutomationReadinessFixes(toAutomationInput(form).promptOptions, safeFixCodes);
+    onChange({
+      ...form,
+      modelType: normalizeFormModelType(promptOptions.modelType),
+      searchEnabled: promptOptions.searchEnabled,
+      thinkingEnabled: promptOptions.thinkingEnabled,
+      refFileIdsText: promptOptions.refFileIds.join(', '),
+      visualMonitorEnabled: promptOptions.visualMonitor?.enabled === true,
+    });
   };
 
   return (
@@ -609,7 +624,11 @@ function AutomationForm({
       />
 
       {showReadiness && (
-        <AutomationReadinessPanel report={readiness} />
+        <AutomationReadinessPanel
+          report={readiness}
+          safeFixCodes={safeFixCodes}
+          onApplySafeFixes={applySafeFixes}
+        />
       )}
 
       <div className="flex justify-end gap-2 pt-1">
@@ -780,14 +799,19 @@ function RunPreflightSummary({ run }: { run: AutomationRun }) {
 function AutomationReadinessPanel({
   report,
   compact = false,
+  safeFixCodes = [],
+  onApplySafeFixes,
 }: {
   report: AutomationReadinessReport;
   compact?: boolean;
+  safeFixCodes?: readonly AutomationReadinessIssueCode[];
+  onApplySafeFixes?: () => void;
 }) {
   const { t } = useI18n();
   const visibleIssues = report.issues.slice(0, compact ? 2 : 4);
   const hiddenIssueCount = Math.max(0, report.issues.length - visibleIssues.length);
   const toneColor = readinessToneColor(report.status);
+  const canApplySafeFixes = !compact && safeFixCodes.length > 0 && Boolean(onApplySafeFixes);
 
   return (
     <div
@@ -826,6 +850,15 @@ function AutomationReadinessPanel({
         <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
           {t('sidepanel.automationPage.readiness.noIssues')}
         </div>
+      )}
+      {canApplySafeFixes && (
+        <button
+          type="button"
+          onClick={onApplySafeFixes}
+          className="ds-btn-secondary px-2.5 py-1 text-[11px] rounded-md"
+        >
+          {t('sidepanel.automationPage.readiness.applySafeFixes')}
+        </button>
       )}
     </div>
   );

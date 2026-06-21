@@ -1021,6 +1021,7 @@ export const en = {
         title: 'Readiness',
         noIssues: 'Ready to run.',
         moreIssues: '+{count} more',
+        applySafeFixes: 'Apply safe fixes',
         status: {
           ready: 'Ready',
           needs_attention: 'Needs attention',

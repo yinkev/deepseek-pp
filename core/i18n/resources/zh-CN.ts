@@ -1021,6 +1021,7 @@ export const zhCN = {
         title: '就绪评分',
         noIssues: '可以运行。',
         moreIssues: '另有 {count} 项',
+        applySafeFixes: '应用安全修正',
         status: {
           ready: '就绪',
           needs_attention: '需处理',

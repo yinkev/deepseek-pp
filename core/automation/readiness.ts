@@ -1,5 +1,6 @@
 import { validateAutomationSchedule } from './schedule';
-import type { AutomationCreateInput } from './types';
+import { createDeepSeekWebVisionRoute } from '../deepseek/web-vision';
+import type { AutomationCreateInput, AutomationPromptOptions } from './types';
 
 export type AutomationReadinessGrade = 'A' | 'B' | 'C' | 'D' | 'F';
 export type AutomationReadinessStatus = 'ready' | 'needs_attention' | 'blocked';
@@ -50,6 +51,12 @@ const LOOP_TERM_ALIASES: Record<string, readonly string[]> = {
 const PLACEHOLDER_PATTERN = /\[(?:replace|\u66ff\u6362|insert|topic|artifact|context|source)[^\]]*\]|<[^>\n]*(?:replace|topic|artifact|context|source)[^>\n]*>/i;
 const SENSITIVE_PROMPT_PATTERN =
   /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,|data:image|blob:|filesystem:|\bBearer\s+|\bAuthorization\s*[:=]|\bCookie\s*[:=]|\bSet-Cookie\s*[:=]|\b(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath|x-ds-pow-response)\s*[:=]|(?:[?&]|\b)(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token)=|\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bAIza[0-9A-Za-z_-]{20,}/i;
+
+export const SAFE_AUTOMATION_READINESS_FIXES = new Set<AutomationReadinessIssueCode>([
+  'research_without_search',
+  'evaluation_without_thinking',
+  'vision_flags_inconsistent',
+]);
 
 export function evaluateAutomationReadiness(
   input: Pick<AutomationCreateInput, 'name' | 'prompt' | 'schedule' | 'promptOptions'>,
@@ -102,6 +109,48 @@ export function evaluateAutomationReadiness(
     issues,
     strengths,
   };
+}
+
+export function getSafeAutomationReadinessFixes(report: AutomationReadinessReport): AutomationReadinessIssueCode[] {
+  return report.issues
+    .map((issue) => issue.code)
+    .filter((code): code is AutomationReadinessIssueCode => SAFE_AUTOMATION_READINESS_FIXES.has(code));
+}
+
+export function applySafeAutomationReadinessFixes(
+  promptOptions: AutomationPromptOptions,
+  issueCodes: readonly AutomationReadinessIssueCode[],
+): AutomationPromptOptions {
+  let next: AutomationPromptOptions = {
+    ...promptOptions,
+    refFileIds: [...promptOptions.refFileIds],
+    webVisionFiles: promptOptions.webVisionFiles ? [...promptOptions.webVisionFiles] : [],
+    visualEvidencePacks: promptOptions.visualEvidencePacks ? [...promptOptions.visualEvidencePacks] : undefined,
+  };
+
+  if (issueCodes.includes('research_without_search')) {
+    next = { ...next, searchEnabled: true };
+  }
+  if (issueCodes.includes('evaluation_without_thinking')) {
+    next = { ...next, thinkingEnabled: true };
+  }
+  if (issueCodes.includes('vision_flags_inconsistent')) {
+    const shouldDisableVisionFlags = next.modelType === 'vision' || next.refFileIds.length > 0;
+    const route = createDeepSeekWebVisionRoute({
+      modelType: next.modelType,
+      refFileIds: next.refFileIds,
+      thinkingEnabled: next.thinkingEnabled,
+      searchEnabled: next.searchEnabled,
+    });
+    next = {
+      ...next,
+      ...route,
+      searchEnabled: shouldDisableVisionFlags ? false : route.searchEnabled,
+      thinkingEnabled: shouldDisableVisionFlags ? false : route.thinkingEnabled,
+    };
+  }
+
+  return next;
 }
 
 function addIssueIf(
