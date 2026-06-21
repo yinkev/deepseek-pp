@@ -212,6 +212,19 @@ export default function AutomationPage() {
       banner.show('error', scheduleValidation.error.message);
       return;
     }
+    const readiness = evaluateAutomationReadiness(payload, { transientImageCount: imageAttachments.length });
+    const safeFixCodes = getSafeAutomationReadinessFixes(readiness);
+    if (safeFixCodes.length > 0) {
+      payload.promptOptions = applySafeAutomationReadinessFixes(payload.promptOptions, safeFixCodes);
+    }
+    const finalReadiness = safeFixCodes.length > 0
+      ? evaluateAutomationReadiness(payload, { transientImageCount: imageAttachments.length })
+      : readiness;
+    const blocker = finalReadiness.issues.find((issue) => issue.severity === 'blocker');
+    if (blocker) {
+      banner.show('error', formatReadinessIssue(blocker.code, t));
+      return;
+    }
 
     const images = [];
     try {

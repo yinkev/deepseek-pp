@@ -377,6 +377,83 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('auto-applies safe automation readiness fixes on save', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-auto-safe-fix',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await toggleVisualMonitor();
+    await enterText('任务名称', 'Auto fixed research');
+    await enterText(
+      '输入要定时发送到 DeepSeek 的内容',
+      'Research this source, evaluate evidence, review contradictions, grade confidence, iterate once, then stop.',
+    );
+
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: {
+          promptOptions: {
+            searchEnabled: boolean;
+            thinkingEnabled: boolean;
+          };
+        };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.promptOptions.searchEnabled).toBe(true);
+    expect(createCall?.payload.promptOptions.thinkingEnabled).toBe(true);
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
+  });
+
+  it('blocks unsafe automation prompts before saving', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'should-not-create',
+        ...(message.payload as Record<string, unknown>),
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await enterText('任务名称', 'Unsafe automation');
+    await enterText(
+      '输入要定时发送到 DeepSeek 的内容',
+      'Use Authorization: Bearer secret-token and data:image/png;base64,AAAA, then stop.',
+    );
+
+    await clickButton('创建');
+    await flushEffects();
+
+    expect(sendMessage.mock.calls.some(([message]) => message.type === 'CREATE_AUTOMATION')).toBe(false);
+    expect(container.textContent).toContain('移除内联密钥、Cookie、Token、签名链接或原始媒体。');
+    expect(JSON.stringify(sendMessage.mock.calls)).not.toMatch(/Bearer|secret-token|data:image|AAAA/);
+  });
+
   it('adds an automation loop contract before saving weak workflow prompts', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];
