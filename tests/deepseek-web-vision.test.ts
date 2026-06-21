@@ -342,6 +342,20 @@ describe('DeepSeek Web Vision routing', () => {
     });
   });
 
+  it('disables incompatible flags for explicit Vision mode before file refs exist', () => {
+    expect(createDeepSeekWebVisionRoute({
+      modelType: 'vision',
+      refFileIds: [],
+      thinkingEnabled: true,
+      searchEnabled: true,
+    })).toEqual({
+      modelType: 'vision',
+      refFileIds: [],
+      thinkingEnabled: false,
+      searchEnabled: false,
+    });
+  });
+
   it('preserves text-only routing when no file refs are present', () => {
     expect(createDeepSeekWebVisionRoute({
       modelType: 'expert',

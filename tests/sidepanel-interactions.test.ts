@@ -370,6 +370,69 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('explains and enforces Vision mode search and thinking limits before saving', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-vision',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await enterText('任务名称', 'Vision check');
+    await enterText('输入要定时发送到 DeepSeek 的内容', 'Look at the attached visual context and stop.');
+    await clickButton('联网');
+    await clickButton('深度思考');
+
+    const modelSelect = container.querySelector('select');
+    expect(modelSelect).toBeTruthy();
+    await act(async () => {
+      setSelectValue(modelSelect as HTMLSelectElement, 'vision');
+      modelSelect?.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain('DeepSeek Web Vision 使用图片路由');
+    const switches = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="switch"]'));
+    expect(switches[0].disabled).toBe(true);
+    expect(switches[0].getAttribute('aria-checked')).toBe('false');
+    expect(switches[1].disabled).toBe(true);
+    expect(switches[1].getAttribute('aria-checked')).toBe('false');
+
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: {
+          promptOptions: {
+            modelType: string | null;
+            searchEnabled: boolean;
+            thinkingEnabled: boolean;
+          };
+        };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.promptOptions.modelType).toBe('vision');
+    expect(createCall?.payload.promptOptions.searchEnabled).toBe(false);
+    expect(createCall?.payload.promptOptions.thinkingEnabled).toBe(false);
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
+  });
+
   it('creates an automation from a workflow template while preserving user edits', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];

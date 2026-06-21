@@ -467,6 +467,9 @@ function AutomationForm({
   );
   const safeFixCodes = useMemo(() => getSafeAutomationReadinessFixes(readiness), [readiness]);
   const showReadiness = editing !== null || hasAutomationDraftContent(form, imageAttachments.length);
+  const visionRouteLocksFlags = form.modelType === 'vision' ||
+    parseVisionRefFileIds(form.refFileIdsText).length > 0 ||
+    imageAttachments.length > 0;
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     onChange({ ...form, [key]: value });
   };
@@ -605,16 +608,23 @@ function AutomationForm({
 
       <div className="flex flex-wrap items-center gap-3">
         <ToggleSwitch
-          checked={form.searchEnabled}
+          checked={visionRouteLocksFlags ? false : form.searchEnabled}
           onChange={(searchEnabled) => update('searchEnabled', searchEnabled)}
+          disabled={visionRouteLocksFlags}
           label={t('sidepanel.automationPage.form.search')}
         />
         <ToggleSwitch
-          checked={form.thinkingEnabled}
+          checked={visionRouteLocksFlags ? false : form.thinkingEnabled}
           onChange={(thinkingEnabled) => update('thinkingEnabled', thinkingEnabled)}
+          disabled={visionRouteLocksFlags}
           label={t('sidepanel.automationPage.form.thinking')}
         />
       </div>
+      {visionRouteLocksFlags && (
+        <div className="rounded-lg px-2.5 py-2 text-[11px]" style={{ color: 'var(--ds-text-secondary)', background: 'var(--ds-surface)' }}>
+          {t('sidepanel.automationPage.form.visionRouteNote')}
+        </div>
+      )}
 
       <ToggleRow
         title={t('sidepanel.automationPage.form.visualMonitor')}

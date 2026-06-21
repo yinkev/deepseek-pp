@@ -153,7 +153,8 @@ export async function uploadDeepSeekWebVisionImage(
 
 export function createDeepSeekWebVisionRoute(input: DeepSeekWebVisionRouteInput): DeepSeekWebVisionRoute {
   const refFileIds = normalizeDeepSeekWebVisionRefFileIds(input.refFileIds);
-  if (refFileIds.length === 0) {
+  const shouldUseVisionRoute = refFileIds.length > 0 || input.modelType === DEEPSEEK_WEB_VISION_MODEL_TYPE;
+  if (!shouldUseVisionRoute) {
     return {
       modelType: input.modelType,
       refFileIds,
