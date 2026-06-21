@@ -11,6 +11,9 @@ const DEFAULT_COPY: SkillPopupCopy = {
   hint: '↑↓ Navigate · Enter Select · Esc Close',
 };
 
+const TEXTAREA_OBSERVER_RETRY_MS = 50;
+const TEXTAREA_OBSERVER_RETRY_LIMIT = 40;
+
 let popupEl: HTMLElement | null = null;
 let skills: SkillPopupItem[] = [];
 let filtered: SkillPopupItem[] = [];
@@ -20,6 +23,9 @@ let copy: SkillPopupCopy = DEFAULT_COPY;
 
 let initialized = false;
 let textareaObserver: MutationObserver | null = null;
+let textareaObserverRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let textareaObserverRetryCount = 0;
+let textareaDomReadyRetryArmed = false;
 
 export function initSkillPopup(initialSkills: SkillPopupItem[], nextCopy: Partial<SkillPopupCopy> = {}) {
   skills = initialSkills;
@@ -37,19 +43,53 @@ function watchTextarea() {
   tryAttach();
   if (textareaObserver) return;
 
-  const root = document.body ?? document.documentElement;
+  const root = getTextareaObserverRoot();
   if (!root) {
-    document.addEventListener('DOMContentLoaded', watchTextarea, { once: true });
+    scheduleTextareaObserverRetry();
     return;
   }
 
-  textareaObserver = new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     if (!textarea || !document.contains(textarea)) {
       textarea = null;
       tryAttach();
     }
   });
-  textareaObserver.observe(root, { childList: true, subtree: true });
+
+  try {
+    observer.observe(root, { childList: true, subtree: true });
+    textareaObserver = observer;
+    textareaObserverRetryCount = 0;
+  } catch {
+    observer.disconnect();
+    scheduleTextareaObserverRetry();
+  }
+}
+
+function getTextareaObserverRoot(): Element | null {
+  const root = document.body ?? document.documentElement;
+  return isDomNode(root) ? root : null;
+}
+
+function isDomNode(value: unknown): value is Element {
+  return Boolean(value && typeof (value as { nodeType?: unknown }).nodeType === 'number');
+}
+
+function scheduleTextareaObserverRetry() {
+  if (!textareaDomReadyRetryArmed && document.readyState === 'loading') {
+    textareaDomReadyRetryArmed = true;
+    document.addEventListener('DOMContentLoaded', () => {
+      textareaDomReadyRetryArmed = false;
+      watchTextarea();
+    }, { once: true });
+  }
+
+  if (textareaObserverRetryTimer || textareaObserverRetryCount >= TEXTAREA_OBSERVER_RETRY_LIMIT) return;
+  textareaObserverRetryCount += 1;
+  textareaObserverRetryTimer = setTimeout(() => {
+    textareaObserverRetryTimer = null;
+    watchTextarea();
+  }, TEXTAREA_OBSERVER_RETRY_MS);
 }
 
 function tryAttach() {
