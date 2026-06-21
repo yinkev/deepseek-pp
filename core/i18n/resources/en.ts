@@ -1013,6 +1013,12 @@ export const en = {
         paused: 'Paused',
         blocked: 'Blocked',
       },
+      commandCenter: {
+        ready: 'Ready',
+        needsAttention: 'Attention',
+        blocked: 'Blocked',
+        running: 'Running',
+      },
       namePromptRequired: 'Name and prompt are required',
       expressionRequired: 'Enter a schedule expression',
       runFailed: 'Run failed',

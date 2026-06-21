@@ -76,6 +76,13 @@ const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStr
 const AUTOMATION_LIST_FILTERS = ['all', 'active', 'paused', 'blocked'] as const;
 type AutomationListFilter = typeof AUTOMATION_LIST_FILTERS[number];
 
+type AutomationCommandCenterCounts = {
+  ready: number;
+  needsAttention: number;
+  blocked: number;
+  running: number;
+};
+
 type FormState = {
   name: string;
   prompt: string;
@@ -146,6 +153,21 @@ export default function AutomationPage() {
     }
     return counts;
   }, [automations]);
+  const commandCenterCounts = useMemo<AutomationCommandCenterCounts>(() => {
+    const counts: AutomationCommandCenterCounts = {
+      ready: 0,
+      needsAttention: 0,
+      blocked: 0,
+      running: runningIds.size,
+    };
+    for (const automation of automations) {
+      const report = evaluateAutomationReadiness(automation);
+      if (report.status === 'ready') counts.ready += 1;
+      if (report.status === 'needs_attention') counts.needsAttention += 1;
+      if (report.status === 'blocked') counts.blocked += 1;
+    }
+    return counts;
+  }, [automations, runningIds]);
   const filteredAutomations = useMemo(() => {
     const query = automationQuery.trim().toLowerCase();
     return automations.filter((automation) => {
@@ -455,6 +477,10 @@ export default function AutomationPage() {
       {banner.node}
       {confirmNode}
 
+      {!showForm && automations.length > 0 && (
+        <AutomationCommandCenterSummary counts={commandCenterCounts} />
+      )}
+
       {!editing && !showForm && (
         <AutomationTemplatePicker onUse={applyWorkflowTemplate} />
       )}
@@ -557,6 +583,18 @@ export default function AutomationPage() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function AutomationCommandCenterSummary({ counts }: { counts: AutomationCommandCenterCounts }) {
+  const { t } = useI18n();
+  return (
+    <div className="ds-metric-strip">
+      <MetaChip label={t('sidepanel.automationPage.commandCenter.ready')} value={String(counts.ready)} />
+      <MetaChip label={t('sidepanel.automationPage.commandCenter.needsAttention')} value={String(counts.needsAttention)} />
+      <MetaChip label={t('sidepanel.automationPage.commandCenter.blocked')} value={String(counts.blocked)} />
+      <MetaChip label={t('sidepanel.automationPage.commandCenter.running')} value={String(counts.running)} />
     </div>
   );
 }

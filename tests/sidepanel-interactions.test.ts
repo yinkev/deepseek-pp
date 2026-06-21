@@ -954,6 +954,9 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('启用2');
     expect(container.textContent).toContain('暂停1');
     expect(container.textContent).toContain('阻塞1');
+    expect(container.textContent).toContain('可运行1');
+    expect(container.textContent).toContain('需处理1');
+    expect(container.textContent).toContain('运行中0');
 
     await enterText('搜索自动化', 'visual');
     expect(container.textContent).not.toContain('Research digest');

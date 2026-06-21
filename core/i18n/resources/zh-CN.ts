@@ -1013,6 +1013,12 @@ export const zhCN = {
         paused: '暂停',
         blocked: '阻塞',
       },
+      commandCenter: {
+        ready: '可运行',
+        needsAttention: '需处理',
+        blocked: '阻塞',
+        running: '运行中',
+      },
       namePromptRequired: '名称和 Prompt 不能为空',
       expressionRequired: '请填写定时表达式',
       runFailed: '运行失败',
