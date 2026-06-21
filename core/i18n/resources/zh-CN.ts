@@ -1022,6 +1022,7 @@ export const zhCN = {
         noIssues: '可以运行。',
         moreIssues: '另有 {count} 项',
         applySafeFixes: '应用安全修正',
+        addLoopContract: '补强循环',
         status: {
           ready: '就绪',
           needs_attention: '需处理',

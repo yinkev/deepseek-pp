@@ -58,6 +58,14 @@ export const SAFE_AUTOMATION_READINESS_FIXES = new Set<AutomationReadinessIssueC
   'vision_flags_inconsistent',
 ]);
 
+export const PROMPT_AUTOMATION_READINESS_FIXES = new Set<AutomationReadinessIssueCode>([
+  'loop_contract_weak',
+  'scheduled_without_stop_condition',
+]);
+
+const AUTOMATION_LOOP_CONTRACT =
+  'Workflow contract: Plan the work, evaluate evidence, review risks, grade confidence, iterate once if useful, then stop with the next concrete action. Do not take irreversible actions without explicit confirmation.';
+
 export function evaluateAutomationReadiness(
   input: Pick<AutomationCreateInput, 'name' | 'prompt' | 'schedule' | 'promptOptions'>,
   options: AutomationReadinessOptions = {},
@@ -115,6 +123,24 @@ export function getSafeAutomationReadinessFixes(report: AutomationReadinessRepor
   return report.issues
     .map((issue) => issue.code)
     .filter((code): code is AutomationReadinessIssueCode => SAFE_AUTOMATION_READINESS_FIXES.has(code));
+}
+
+export function getPromptAutomationReadinessFixes(report: AutomationReadinessReport): AutomationReadinessIssueCode[] {
+  return report.issues
+    .map((issue) => issue.code)
+    .filter((code): code is AutomationReadinessIssueCode => PROMPT_AUTOMATION_READINESS_FIXES.has(code));
+}
+
+export function applyPromptAutomationReadinessFixes(
+  prompt: string,
+  issueCodes: readonly AutomationReadinessIssueCode[],
+): string {
+  const trimmed = prompt.trim();
+  if (issueCodes.length === 0 || !issueCodes.some((code) => PROMPT_AUTOMATION_READINESS_FIXES.has(code))) {
+    return trimmed;
+  }
+  if (trimmed.toLowerCase().includes('workflow contract:')) return trimmed;
+  return trimmed ? `${trimmed}\n\n${AUTOMATION_LOOP_CONTRACT}` : AUTOMATION_LOOP_CONTRACT;
 }
 
 export function applySafeAutomationReadinessFixes(

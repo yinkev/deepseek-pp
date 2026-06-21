@@ -1022,6 +1022,7 @@ export const en = {
         noIssues: 'Ready to run.',
         moreIssues: '+{count} more',
         applySafeFixes: 'Apply safe fixes',
+        addLoopContract: 'Add loop contract',
         status: {
           ready: 'Ready',
           needs_attention: 'Needs attention',

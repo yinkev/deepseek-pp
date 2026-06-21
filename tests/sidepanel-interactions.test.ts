@@ -370,6 +370,49 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('adds an automation loop contract before saving weak workflow prompts', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-loop-contract',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await enterText('任务名称', 'Weak workflow');
+    await enterText('输入要定时发送到 DeepSeek 的内容', 'Run a workflow that evaluates the source.');
+
+    expect(container.textContent).toContain('补强规划、评估、复查、评分、迭代和停止循环。');
+
+    await clickButton('补强循环');
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: { prompt: string };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.prompt).toContain('Workflow contract: Plan the work, evaluate evidence, review risks, grade confidence, iterate once if useful, then stop');
+    expect(createCall?.payload.prompt).toContain('Do not take irreversible actions without explicit confirmation.');
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token|[0-9]{6,}:[A-Za-z0-9_-]{24,}/);
+  });
+
   it('explains and enforces Vision mode search and thinking limits before saving', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];

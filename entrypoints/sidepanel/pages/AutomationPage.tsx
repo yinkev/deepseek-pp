@@ -20,8 +20,10 @@ import {
   type AutomationWorkflowTemplate,
 } from '../../../core/automation/workflow-templates';
 import {
+  applyPromptAutomationReadinessFixes,
   applySafeAutomationReadinessFixes,
   evaluateAutomationReadiness,
+  getPromptAutomationReadinessFixes,
   getSafeAutomationReadinessFixes,
   type AutomationReadinessIssueCode,
   type AutomationReadinessReport,
@@ -466,6 +468,7 @@ function AutomationForm({
     [form, imageAttachments.length],
   );
   const safeFixCodes = useMemo(() => getSafeAutomationReadinessFixes(readiness), [readiness]);
+  const promptFixCodes = useMemo(() => getPromptAutomationReadinessFixes(readiness), [readiness]);
   const showReadiness = editing !== null || hasAutomationDraftContent(form, imageAttachments.length);
   const visionRouteLocksFlags = form.modelType === 'vision' ||
     parseVisionRefFileIds(form.refFileIdsText).length > 0 ||
@@ -488,6 +491,13 @@ function AutomationForm({
       thinkingEnabled: promptOptions.thinkingEnabled,
       refFileIdsText: promptOptions.refFileIds.join(', '),
       visualMonitorEnabled: promptOptions.visualMonitor?.enabled === true,
+    });
+  };
+  const applyPromptFixes = () => {
+    if (promptFixCodes.length === 0) return;
+    onChange({
+      ...form,
+      prompt: applyPromptAutomationReadinessFixes(form.prompt, promptFixCodes),
     });
   };
 
@@ -637,7 +647,9 @@ function AutomationForm({
         <AutomationReadinessPanel
           report={readiness}
           safeFixCodes={safeFixCodes}
+          promptFixCodes={promptFixCodes}
           onApplySafeFixes={applySafeFixes}
+          onApplyPromptFixes={applyPromptFixes}
         />
       )}
 
@@ -810,18 +822,23 @@ function AutomationReadinessPanel({
   report,
   compact = false,
   safeFixCodes = [],
+  promptFixCodes = [],
   onApplySafeFixes,
+  onApplyPromptFixes,
 }: {
   report: AutomationReadinessReport;
   compact?: boolean;
   safeFixCodes?: readonly AutomationReadinessIssueCode[];
+  promptFixCodes?: readonly AutomationReadinessIssueCode[];
   onApplySafeFixes?: () => void;
+  onApplyPromptFixes?: () => void;
 }) {
   const { t } = useI18n();
   const visibleIssues = report.issues.slice(0, compact ? 2 : 4);
   const hiddenIssueCount = Math.max(0, report.issues.length - visibleIssues.length);
   const toneColor = readinessToneColor(report.status);
   const canApplySafeFixes = !compact && safeFixCodes.length > 0 && Boolean(onApplySafeFixes);
+  const canApplyPromptFixes = !compact && promptFixCodes.length > 0 && Boolean(onApplyPromptFixes);
 
   return (
     <div
@@ -861,14 +878,27 @@ function AutomationReadinessPanel({
           {t('sidepanel.automationPage.readiness.noIssues')}
         </div>
       )}
-      {canApplySafeFixes && (
-        <button
-          type="button"
-          onClick={onApplySafeFixes}
-          className="ds-btn-secondary px-2.5 py-1 text-[11px] rounded-md"
-        >
-          {t('sidepanel.automationPage.readiness.applySafeFixes')}
-        </button>
+      {(canApplySafeFixes || canApplyPromptFixes) && (
+        <div className="flex flex-wrap gap-1.5">
+          {canApplySafeFixes && (
+            <button
+              type="button"
+              onClick={onApplySafeFixes}
+              className="ds-btn-secondary px-2.5 py-1 text-[11px] rounded-md"
+            >
+              {t('sidepanel.automationPage.readiness.applySafeFixes')}
+            </button>
+          )}
+          {canApplyPromptFixes && (
+            <button
+              type="button"
+              onClick={onApplyPromptFixes}
+              className="ds-btn-secondary px-2.5 py-1 text-[11px] rounded-md"
+            >
+              {t('sidepanel.automationPage.readiness.addLoopContract')}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyPromptAutomationReadinessFixes,
   applySafeAutomationReadinessFixes,
   evaluateAutomationReadiness,
+  getPromptAutomationReadinessFixes,
   getSafeAutomationReadinessFixes,
 } from '../core/automation/readiness';
 import { AUTOMATION_WORKFLOW_TEMPLATES, createAutomationInputFromWorkflowTemplate } from '../core/automation/workflow-templates';
@@ -143,6 +145,56 @@ describe('automation readiness', () => {
     expect(fixed.searchEnabled).toBe(true);
     expect(fixed.thinkingEnabled).toBe(true);
     expect(fixed.refFileIds).toEqual([]);
+  });
+
+  it('adds a deterministic loop contract for weak long-horizon prompts', () => {
+    const input = createInput({
+      prompt: 'Run a workflow that evaluates the source.',
+      promptOptions: {
+        modelType: null,
+        searchEnabled: false,
+        thinkingEnabled: true,
+        refFileIds: [],
+      },
+    });
+    const report = evaluateAutomationReadiness(input);
+    const issueCodes = getPromptAutomationReadinessFixes(report);
+
+    expect(issueCodes).toEqual(['loop_contract_weak']);
+
+    const fixedPrompt = applyPromptAutomationReadinessFixes(input.prompt, issueCodes);
+    expect(fixedPrompt).toContain('Workflow contract: Plan the work, evaluate evidence, review risks, grade confidence, iterate once if useful, then stop');
+
+    const fixedReport = evaluateAutomationReadiness({ ...input, prompt: fixedPrompt });
+    expect(fixedReport.issues.some((issue) => issue.code === 'loop_contract_weak')).toBe(false);
+    expect(applyPromptAutomationReadinessFixes(fixedPrompt, issueCodes)).toBe(fixedPrompt);
+  });
+
+  it('adds an explicit stop rule for scheduled prompts', () => {
+    const input = createInput({
+      prompt: 'Research project updates and summarize them.',
+      schedule: {
+        kind: 'cron',
+        expression: '0 9 * * *',
+        timezone: 'UTC',
+        enabled: true,
+        minimumIntervalMinutes: 15,
+      },
+      promptOptions: {
+        modelType: null,
+        searchEnabled: true,
+        thinkingEnabled: true,
+        refFileIds: [],
+      },
+    });
+    const report = evaluateAutomationReadiness(input);
+    const issueCodes = getPromptAutomationReadinessFixes(report);
+
+    expect(issueCodes).toContain('scheduled_without_stop_condition');
+
+    const fixedPrompt = applyPromptAutomationReadinessFixes(input.prompt, issueCodes);
+    const fixedReport = evaluateAutomationReadiness({ ...input, prompt: fixedPrompt });
+    expect(fixedReport.issues.some((issue) => issue.code === 'scheduled_without_stop_condition')).toBe(false);
   });
 
   it('normalizes Vision flags while preserving visual-input blockers', () => {
