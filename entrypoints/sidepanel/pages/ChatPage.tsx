@@ -85,6 +85,7 @@ const EFFORT_OPTIONS: Array<{ value: OfficialDeepSeekReasoningEffort; labelKey: 
   { value: 'high', labelKey: 'sidepanel.chatPage.effortHigh' },
   { value: 'max', labelKey: 'sidepanel.chatPage.effortMax' },
 ];
+const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
 
 export default function ChatPage() {
   const { t } = useI18n();
@@ -547,6 +548,22 @@ export default function ChatPage() {
     });
   };
 
+  const cycleSessionStrategy = async () => {
+    const index = SESSION_STRATEGY_SEQUENCE.indexOf(personalConfig.sameSessionStrategy);
+    const sameSessionStrategy = SESSION_STRATEGY_SEQUENCE[(index + 1) % SESSION_STRATEGY_SEQUENCE.length];
+    const optimistic = normalizePersonalConvenienceConfig({ ...personalConfig, sameSessionStrategy });
+    setPersonalConfig(optimistic);
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+        payload: { sameSessionStrategy },
+      });
+      setPersonalConfig(normalizePersonalConvenienceConfig(result?.config ?? optimistic));
+    } catch {
+      setPersonalConfig(personalConfig);
+    }
+  };
+
   const clearPendingImageSubmission = () => {
     const pending = pendingImageSubmissionRef.current;
     if (!pending) return;
@@ -595,9 +612,16 @@ export default function ChatPage() {
               </span>
               <ProviderBadge provider={authStatus?.provider ?? null} />
               {authStatus?.provider === 'deepseek-web' && (
-                <span className="ds-chat-provider-badge" title={t('sidepanel.chatPage.sessionStrategyLabel')}>
+                <button
+                  type="button"
+                  className="ds-chat-provider-badge"
+                  title={t('sidepanel.chatPage.changeSessionStrategy')}
+                  aria-label={t('sidepanel.chatPage.changeSessionStrategy')}
+                  disabled={isStreaming}
+                  onClick={() => void cycleSessionStrategy()}
+                >
                   {formatSessionStrategy(personalConfig.sameSessionStrategy, t)}
-                </span>
+                </button>
               )}
             </div>
             <p className="ds-chat-subtitle">

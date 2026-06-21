@@ -946,6 +946,17 @@ input[type='range'] {
   padding: 3px 7px;
 }
 
+button.ds-chat-provider-badge {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+button.ds-chat-provider-badge:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .ds-chat-current-config {
   max-width: 220px;
   overflow: hidden;

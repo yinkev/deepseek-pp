@@ -187,6 +187,28 @@ describe('sidepanel chat image attachments', () => {
     expect(submit.payload.images).toHaveLength(1);
   });
 
+  it('cycles the DeepSeek Web session strategy from the chat header', async () => {
+    await renderChatPage();
+
+    expect(container.textContent).toContain('会话：上次');
+
+    await clickButtonByLabel('切换会话策略');
+    expect(container.textContent).toContain('会话：当前');
+
+    await clickButtonByLabel('切换会话策略');
+    expect(container.textContent).toContain('会话：新建');
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+      payload: { sameSessionStrategy: 'current' },
+    });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+      payload: { sameSessionStrategy: 'new' },
+    });
+    expect(container.textContent).not.toMatch(/session-[a-z0-9_-]+/i);
+  });
+
   it('captures the current tab into a transient attachment', async () => {
     await renderChatPage();
     const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');

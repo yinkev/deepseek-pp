@@ -923,6 +923,7 @@ export const zhCN = {
       captureBrowserTargetFailed: '无法捕获已选择的浏览器控制目标。请选择可控制的浏览器标签页后重试。',
       browserViewPrompt: '看一下我当前的浏览器画面，帮我判断下一步该怎么做。',
       sessionStrategyLabel: '会话策略',
+      changeSessionStrategy: '切换会话策略',
       sessionStrategyLast: '会话：上次',
       sessionStrategyCurrent: '会话：当前',
       sessionStrategyNew: '会话：新建',

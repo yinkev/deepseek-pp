@@ -923,6 +923,7 @@ export const en = {
       captureBrowserTargetFailed: 'Could not capture the selected Browser Control target. Select a controllable browser tab, then try again.',
       browserViewPrompt: 'Take a look at my current browser view and help me figure out what to do next.',
       sessionStrategyLabel: 'Session strategy',
+      changeSessionStrategy: 'Change session strategy',
       sessionStrategyLast: 'Session: Last',
       sessionStrategyCurrent: 'Session: Current',
       sessionStrategyNew: 'Session: New',
