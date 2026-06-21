@@ -1022,6 +1022,7 @@ export const zhCN = {
         title: '就绪评分',
         noIssues: '可以运行。',
         moreIssues: '另有 {count} 项',
+        prepareRun: '准备运行',
         applySafeFixes: '应用安全修正',
         addLoopContract: '补强循环',
         status: {

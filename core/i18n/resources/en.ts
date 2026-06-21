@@ -1022,6 +1022,7 @@ export const en = {
         title: 'Readiness',
         noIssues: 'Ready to run.',
         moreIssues: '+{count} more',
+        prepareRun: 'Prepare run',
         applySafeFixes: 'Apply safe fixes',
         addLoopContract: 'Add loop contract',
         status: {

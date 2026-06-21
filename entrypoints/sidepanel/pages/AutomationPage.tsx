@@ -535,6 +535,19 @@ function AutomationForm({
       prompt: applyPromptAutomationReadinessFixes(form.prompt, promptFixCodes),
     });
   };
+  const prepareRun = () => {
+    if (safeFixCodes.length === 0 && promptFixCodes.length === 0) return;
+    const promptOptions = applySafeAutomationReadinessFixes(toAutomationInput(form).promptOptions, safeFixCodes);
+    onChange({
+      ...form,
+      prompt: applyPromptAutomationReadinessFixes(form.prompt, promptFixCodes),
+      modelType: normalizeFormModelType(promptOptions.modelType),
+      searchEnabled: promptOptions.searchEnabled,
+      thinkingEnabled: promptOptions.thinkingEnabled,
+      refFileIdsText: promptOptions.refFileIds.join(', '),
+      visualMonitorEnabled: promptOptions.visualMonitor?.enabled === true,
+    });
+  };
 
   return (
     <div className="ds-form rounded-xl p-4 space-y-3">
@@ -683,6 +696,7 @@ function AutomationForm({
           report={readiness}
           safeFixCodes={safeFixCodes}
           promptFixCodes={promptFixCodes}
+          onPrepareRun={prepareRun}
           onApplySafeFixes={applySafeFixes}
           onApplyPromptFixes={applyPromptFixes}
         />
@@ -858,6 +872,7 @@ function AutomationReadinessPanel({
   compact = false,
   safeFixCodes = [],
   promptFixCodes = [],
+  onPrepareRun,
   onApplySafeFixes,
   onApplyPromptFixes,
 }: {
@@ -865,6 +880,7 @@ function AutomationReadinessPanel({
   compact?: boolean;
   safeFixCodes?: readonly AutomationReadinessIssueCode[];
   promptFixCodes?: readonly AutomationReadinessIssueCode[];
+  onPrepareRun?: () => void;
   onApplySafeFixes?: () => void;
   onApplyPromptFixes?: () => void;
 }) {
@@ -874,6 +890,7 @@ function AutomationReadinessPanel({
   const toneColor = readinessToneColor(report.status);
   const canApplySafeFixes = !compact && safeFixCodes.length > 0 && Boolean(onApplySafeFixes);
   const canApplyPromptFixes = !compact && promptFixCodes.length > 0 && Boolean(onApplyPromptFixes);
+  const canPrepareRun = !compact && (safeFixCodes.length > 0 || promptFixCodes.length > 0) && Boolean(onPrepareRun);
 
   return (
     <div
@@ -913,8 +930,17 @@ function AutomationReadinessPanel({
           {t('sidepanel.automationPage.readiness.noIssues')}
         </div>
       )}
-      {(canApplySafeFixes || canApplyPromptFixes) && (
+      {(canPrepareRun || canApplySafeFixes || canApplyPromptFixes) && (
         <div className="flex flex-wrap gap-1.5">
+          {canPrepareRun && (
+            <button
+              type="button"
+              onClick={onPrepareRun}
+              className="ds-btn-primary px-2.5 py-1 text-[11px] rounded-md text-white"
+            >
+              {t('sidepanel.automationPage.readiness.prepareRun')}
+            </button>
+          )}
           {canApplySafeFixes && (
             <button
               type="button"
