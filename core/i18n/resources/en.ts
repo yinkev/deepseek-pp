@@ -1145,7 +1145,7 @@ export const en = {
         thinking: 'Deep thinking',
         visualMonitor: 'Capture Browser Control target at run start',
         visualMonitorDescription: 'On by default for personal convenience: each run captures the selected Browser Control tab and sends that screenshot through DeepSeek Web Vision with metadata-only evidence.',
-        visionRouteNote: 'DeepSeek Web Vision uses the image route, so Web search and Deep thinking are off for this run.',
+        visionRouteNote: 'DeepSeek Web Vision uses the image route, so Web search and Deep thinking are off for this run. Turn off visual monitor for text-only Search/DeepThink runs.',
         create: 'Create',
       },
       status: {

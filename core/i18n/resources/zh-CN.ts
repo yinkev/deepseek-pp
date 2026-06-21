@@ -1145,7 +1145,7 @@ export const zhCN = {
         thinking: '深度思考',
         visualMonitor: '运行开始时捕获 Browser Control 目标',
         visualMonitorDescription: '为个人便利默认开启：每次运行会捕获已选择的 Browser Control 标签页，并通过 DeepSeek Web Vision 发送截图，只保留元数据证据。',
-        visionRouteNote: 'DeepSeek Web Vision 使用图片路由，因此本次运行会关闭联网和深度思考。',
+        visionRouteNote: 'DeepSeek Web Vision 使用图片路由，因此本次运行会关闭联网和深度思考。文本类联网/深度思考任务请关闭视觉监控。',
         create: '创建',
       },
       status: {

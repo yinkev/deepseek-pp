@@ -306,6 +306,7 @@ describe('sidepanel interactions', () => {
     expect(switches[1].disabled).toBe(true);
     expect(switches[1].getAttribute('aria-checked')).toBe('false');
     expect(container.textContent).toContain('DeepSeek Web Vision 使用图片路由');
+    expect(container.textContent).toContain('文本类联网/深度思考任务请关闭视觉监控');
     await enterText('任务名称', 'Visual check');
     await enterText('输入要定时发送到 DeepSeek 的内容', 'Check whether the selected page still looks healthy.');
     await clickButton('创建');
