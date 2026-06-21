@@ -1006,6 +1006,7 @@ export const zhCN = {
       filterPlaceholder: '搜索自动化',
       filterNoResults: '没有匹配的自动化',
       clearFilters: '清除筛选',
+      filterResultCount: '显示 {visible} / {total}',
       filters: {
         all: '全部',
         active: '启用',

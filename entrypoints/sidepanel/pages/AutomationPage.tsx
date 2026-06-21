@@ -501,6 +501,14 @@ export default function AutomationPage() {
               </button>
             )}
           </div>
+          {automationFiltersActive && (
+            <div className="text-[11px] text-[var(--ds-text-muted)]">
+              {t('sidepanel.automationPage.filterResultCount', {
+                visible: filteredAutomations.length,
+                total: automations.length,
+              })}
+            </div>
+          )}
         </div>
       )}
 

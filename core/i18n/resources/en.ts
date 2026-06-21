@@ -1006,6 +1006,7 @@ export const en = {
       filterPlaceholder: 'Search automations',
       filterNoResults: 'No matching automations',
       clearFilters: 'Clear filters',
+      filterResultCount: 'Showing {visible} of {total}',
       filters: {
         all: 'All',
         active: 'Active',
