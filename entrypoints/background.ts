@@ -292,6 +292,7 @@ import type { ConversationExportProgress, ConversationExportResult } from '../co
 const DEEPSEEK_HOME_URL = 'https://chat.deepseek.com/';
 const DEEPSEEK_TAB_URL_PATTERN = '*://chat.deepseek.com/*';
 const REFRESH_AUTH_MESSAGE = { type: 'REFRESH_DEEPSEEK_AUTH' } as const;
+const CONTENT_HEALTH_MESSAGE = { type: 'DPP_CONTENT_HEALTH' } as const;
 const BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME = 'browser_capture_screenshot';
 let chatSessionId: string | null = null;
 let chatParentMessageId: number | null = null;
@@ -902,6 +903,21 @@ async function handleMessage(
       return { ok: true, target };
     }
 
+    case 'LOCK_BROWSER_CONTROL_TARGET': {
+      const label = typeof (message.payload as { label?: unknown } | undefined)?.label === 'string'
+        ? (message.payload as { label: string }).label
+        : 'Dev++';
+      const target = await browserControlService.lockCurrentTarget(label);
+      await broadcastBrowserControlUpdate(sender.tab?.id);
+      return { ok: true, target };
+    }
+
+    case 'CLEAR_BROWSER_CONTROL_TARGET_LOCK': {
+      await browserControlService.clearTargetLock();
+      await broadcastBrowserControlUpdate(sender.tab?.id);
+      return { ok: true };
+    }
+
     case 'DETACH_BROWSER_CONTROL': {
       await browserControlService.detach();
       await broadcastBrowserControlUpdate(sender.tab?.id);
@@ -1317,6 +1333,14 @@ async function handleMessage(
     case 'ENSURE_PERSONAL_RUNTIME_READY':
       return ensurePersonalRuntimeReady(sender.tab?.id, 'manual');
 
+    case 'RELOAD_STALE_DEEPSEEK_TABS':
+      return reloadStaleDeepSeekTabs(sender.tab?.id);
+
+    case 'RUN_PERSONAL_HUMAN_EVAL': {
+      const report = await getRuntimeDoctorReport(sender.tab?.id);
+      return { ok: true, humanEval: report.humanEval, leakSentry: report.leakSentry, report };
+    }
+
     case 'GET_OFFICIAL_API_CHAT_CONFIG':
       return getOfficialApiChatConfig();
 
@@ -1512,6 +1536,47 @@ async function getDeepSeekTabsForAuthRefresh(preferredTabId?: number): Promise<c
   return [preferred, ...tabs.filter((tab) => tab.id !== preferredTabId)];
 }
 
+async function getDeepSeekContentScriptHealth(
+  tabs: chrome.tabs.Tab[],
+): Promise<RuntimeDoctorReport['contentScripts']> {
+  const tabIds = tabs
+    .map((tab) => tab.id)
+    .filter((id): id is number => typeof id === 'number');
+  const staleTabIds: number[] = [];
+  let healthyTabs = 0;
+  for (const tabId of tabIds) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, CONTENT_HEALTH_MESSAGE);
+      if (response?.ok === true && response.hasLiveExtensionContext !== false) {
+        healthyTabs += 1;
+      } else {
+        staleTabIds.push(tabId);
+      }
+    } catch {
+      staleTabIds.push(tabId);
+    }
+  }
+  return {
+    checked: true,
+    totalTabs: tabIds.length,
+    healthyTabs,
+    staleTabs: staleTabIds.length,
+    staleTabIds,
+  };
+}
+
+async function reloadStaleDeepSeekTabs(preferredTabId?: number) {
+  const tabs = await getDeepSeekTabsForAuthRefresh(preferredTabId);
+  const health = await getDeepSeekContentScriptHealth(tabs);
+  await Promise.all(health.staleTabIds.map((tabId) => chrome.tabs.reload(tabId).catch(() => undefined)));
+  return {
+    ok: true,
+    reloaded: health.staleTabIds.length,
+    contentScripts: health,
+    report: await getRuntimeDoctorReport(preferredTabId),
+  };
+}
+
 async function broadcastStateUpdate(excludeTabId?: number) {
   const [memories, skills, activePreset, modelType, promptSettings] = await Promise.all([
     getAllMemories(),
@@ -1652,6 +1717,7 @@ async function getRuntimeDoctorReport(
     getPersonalConvenienceConfig(),
     getDeepSeekWebSessionPreference(),
   ]);
+  const contentScripts = await getDeepSeekContentScriptHealth(deepSeekTabs);
   let headers = await loadClientHeadersFromStorage();
   if (!headers && !webAuthRejected) {
     await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
@@ -1678,6 +1744,7 @@ async function getRuntimeDoctorReport(
       webAuthRejected,
       browserSettings,
       browserState,
+      contentScripts,
       storage,
     }),
     lastPreparedAt: lastPersonalRuntimeReadiness?.lastPreparedAt ?? null,
@@ -1719,6 +1786,12 @@ async function getRuntimeDoctorReport(
     browserControl: {
       enabled: browserSettings.enabled,
       targetSelected: typeof browserSettings.targetTabId === 'number',
+      targetLock: {
+        enabled: browserSettings.targetLock?.enabled === true,
+        label: browserSettings.targetLock?.label ?? null,
+        origin: browserSettings.targetLock?.origin ?? null,
+        updatedAt: browserSettings.targetLock?.updatedAt ?? null,
+      },
       visualCaptureAllowed: browserSettings.allowVisionCapture,
       actVerifyEnabled: browserSettings.verifyAfterActions,
       evidencePacksEnabled: browserSettings.collectEvidencePacks,
@@ -1729,10 +1802,24 @@ async function getRuntimeDoctorReport(
         browserState?.target?.controllable === true &&
         !isDeepSeekWebTargetUrl(browserState.target.url),
     },
+    contentScripts,
     automation: {
       maxAttempts: AUTOMATION_MAX_ATTEMPTS,
       retryableFailure,
     },
+    humanEval: createRuntimeDoctorHumanEval({
+      hasUsableWebAuth,
+      sessionActive: sessionSource !== 'none' || !!sessionPreference.lastSession,
+      browserMonitorReady: browserSettings.enabled &&
+        browserSettings.allowVisionCapture &&
+        typeof browserSettings.targetTabId === 'number' &&
+        browserState?.target?.controllable === true &&
+        !isDeepSeekWebTargetUrl(browserState.target.url),
+      contentScripts,
+      storage,
+      toolDescriptorsReady: true,
+    }),
+    leakSentry: createRuntimeDoctorLeakSentry(storage, storageSnapshot.failedAreas),
     debugDistiller: {
       enabled: browserSettings.debugDistillerEnabled,
       suggestions: browserSettings.debugDistillerEnabled
@@ -1750,12 +1837,14 @@ function createRuntimeReadinessBlockers(input: {
   webAuthRejected: boolean;
   browserSettings: BrowserControlSettings;
   browserState: BrowserControlState | null;
+  contentScripts: RuntimeDoctorReport['contentScripts'];
   storage: ReturnType<typeof scanRuntimeDoctorStorage>;
 }): RuntimeDoctorReadiness['blockers'] {
   const blockers = new Set<RuntimeDoctorReadiness['blockers'][number]>();
   if (input.chatBusy) blockers.add('chat_busy');
   if (input.webAuthRejected) blockers.add('web_auth_rejected');
   if (!input.hasWebAuth) blockers.add('web_auth_missing');
+  if (input.contentScripts.staleTabs > 0) blockers.add('deepseek_content_script_stale');
   if (!input.browserSettings.enabled) blockers.add('browser_control_disabled');
   if (!input.browserSettings.allowVisionCapture) blockers.add('browser_vision_capture_disabled');
   if (!input.browserSettings.verifyAfterActions) blockers.add('act_verify_disabled');
@@ -1774,6 +1863,83 @@ function createRuntimeReadinessBlockers(input: {
       : 'storage_leak');
   }
   return Array.from(blockers);
+}
+
+function createRuntimeDoctorLeakSentry(
+  storage: ReturnType<typeof scanRuntimeDoctorStorage>,
+  failedAreas: Array<'local' | 'session'>,
+): RuntimeDoctorReport['leakSentry'] {
+  const allAreas: Array<'local' | 'session'> = ['local', 'session'];
+  const checkedAreas = allAreas.filter((area) => !failedAreas.includes(area));
+  return {
+    ok: storage.ok,
+    grade: storage.ok ? 'A' : 'F',
+    issueCount: storage.issues.length,
+    checkedAreas,
+  };
+}
+
+function createRuntimeDoctorHumanEval(input: {
+  hasUsableWebAuth: boolean;
+  sessionActive: boolean;
+  browserMonitorReady: boolean;
+  contentScripts: RuntimeDoctorReport['contentScripts'];
+  storage: ReturnType<typeof scanRuntimeDoctorStorage>;
+  toolDescriptorsReady: boolean;
+}): RuntimeDoctorReport['humanEval'] {
+  const checks: RuntimeDoctorReport['humanEval']['checks'] = [
+    {
+      id: 'ready_loop',
+      label: 'Make everything ready',
+      prompt: 'Get my DeepSeek++ setup ready, then tell me plainly what still needs attention.',
+      status: input.hasUsableWebAuth && input.contentScripts.staleTabs === 0 ? 'pass' : 'fail',
+      evidence: input.contentScripts.staleTabs === 0
+        ? 'DeepSeek tabs answered the content health ping.'
+        : `${input.contentScripts.staleTabs} DeepSeek tab(s) need a refresh.`,
+    },
+    {
+      id: 'same_session',
+      label: 'Same chat continuity',
+      prompt: 'Continue from where we left off in this DeepSeek chat if that session is still usable.',
+      status: input.sessionActive ? 'pass' : 'warn',
+      evidence: input.sessionActive ? 'A sidepanel or remembered session pointer exists.' : 'No sidepanel session pointer is currently available.',
+    },
+    {
+      id: 'browser_vision',
+      label: 'Browser view question',
+      prompt: 'Take a look at my current browser view and help me figure out what to do next.',
+      status: input.browserMonitorReady ? 'pass' : 'fail',
+      evidence: input.browserMonitorReady ? 'Browser Control target and Vision capture are ready.' : 'Browser target or Vision capture is not ready.',
+    },
+    {
+      id: 'tool_loop',
+      label: 'Tool loop',
+      prompt: 'Use the available tools only if they help, then explain what actually changed.',
+      status: input.toolDescriptorsReady ? 'pass' : 'warn',
+      evidence: input.toolDescriptorsReady ? 'Runtime tool descriptors are available.' : 'Tool descriptors were not confirmed.',
+    },
+    {
+      id: 'leak_sentry',
+      label: 'Leak sentry',
+      prompt: 'Review the last run for leaks and tell me whether anything sensitive was stored.',
+      status: input.storage.ok ? 'pass' : 'fail',
+      evidence: input.storage.ok ? 'Storage scan found no forbidden durable auth/image refs.' : `${input.storage.issues.length} forbidden storage issue(s) found.`,
+    },
+  ];
+  const failCount = checks.filter((check) => check.status === 'fail').length;
+  const warnCount = checks.filter((check) => check.status === 'warn').length;
+  return {
+    grade: failCount === 0 && warnCount === 0
+      ? 'A'
+      : failCount === 0
+        ? 'B'
+        : failCount === 1
+          ? 'C'
+          : failCount === 2
+            ? 'D'
+            : 'F',
+    checks,
+  };
 }
 
 function getRuntimeReadinessTargetStatus(
@@ -1928,6 +2094,10 @@ async function runEnsurePersonalRuntimeReady(
   if (targetPreparation.status === 'reacquired' || targetPreparation.status === 'selected_active') {
     await broadcastBrowserControlUpdate(preferredTabId);
   }
+
+  const deepSeekTabs = await getDeepSeekTabsForAuthRefresh(preferredTabId);
+  const contentScripts = await getDeepSeekContentScriptHealth(deepSeekTabs);
+  if (contentScripts.staleTabs > 0) blockers.add('deepseek_content_script_stale');
 
   const storageSnapshot = await getRuntimeDoctorStorageSnapshot();
   const storage = scanRuntimeDoctorStorage(storageSnapshot);

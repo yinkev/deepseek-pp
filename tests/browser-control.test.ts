@@ -47,6 +47,7 @@ describe('browser control settings and descriptors', () => {
       enabled: true,
       targetTabId: 12,
       lastTargetHint: null,
+      targetLock: null,
       includeSnapshotAfterActions: false,
       allowVisionCapture: true,
       verifyAfterActions: true,
@@ -200,7 +201,7 @@ describe('browser control settings and descriptors', () => {
         targetTabId: 34,
         lastTargetHint: expect.objectContaining({
           origin: 'https://example.com',
-          title: 'Example',
+          title: '',
         }),
       }),
     });
@@ -277,6 +278,130 @@ describe('browser control settings and descriptors', () => {
     await expect(chromeStub.storage.local.get(BROWSER_CONTROL_STORAGE_KEY)).resolves.toMatchObject({
       [BROWSER_CONTROL_STORAGE_KEY]: expect.objectContaining({ targetTabId: 99 }),
     });
+  });
+
+  it('normalizes target locks without persisting page titles or full URLs', () => {
+    const settings = normalizeBrowserControlSettings({
+      targetLock: {
+        enabled: true,
+        label: 'Dev++ personal browser target with extra text past the cap',
+        targetTabId: 12,
+        windowId: 1,
+        groupId: 4,
+        origin: 'https://example.com',
+        title: 'Sensitive page title',
+        url: 'https://example.com/private?token=secret',
+        updatedAt: 123.9,
+      },
+    });
+
+    expect(settings.targetLock).toEqual({
+      enabled: true,
+      label: 'Dev++ personal browser target with extra',
+      targetTabId: 12,
+      windowId: 1,
+      groupId: 4,
+      origin: 'https://example.com',
+      updatedAt: 123,
+    });
+    expect(JSON.stringify(settings.targetLock)).not.toMatch(/Sensitive|private|token=secret|url/);
+  });
+
+  it('locks the current target as safe origin metadata only', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        title: 'Sensitive page title',
+        url: 'https://example.com/private?token=secret#hash',
+        groupId: 7,
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    await service.lockCurrentTarget('Dev++');
+
+    const stored = storage.get(BROWSER_CONTROL_STORAGE_KEY);
+    expect(stored).toMatchObject({
+      targetLock: {
+        enabled: true,
+        label: 'Dev++',
+        targetTabId: 12,
+        windowId: 1,
+        groupId: 7,
+        origin: 'https://example.com',
+      },
+    });
+    expect(JSON.stringify(stored)).not.toMatch(/Sensitive page title|private|token=secret|#hash/);
+  });
+
+  it('reacquires a locked target by origin without falling back to the active tab', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 99,
+        targetLock: {
+          enabled: true,
+          label: 'Dev++',
+          targetTabId: 99,
+          windowId: 2,
+          groupId: 7,
+          origin: 'https://locked.example',
+          updatedAt: 1,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'Active', url: 'https://active.example/', windowId: 1 }),
+      createTab({ id: 34, active: false, title: 'Locked', url: 'https://locked.example/path?token=secret', windowId: 2, groupId: 7 }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget({ allowActiveFallback: true });
+
+    expect(preparation.status).toBe('reacquired');
+    expect(preparation.target?.id).toBe(34);
+    expect(JSON.stringify(storage.get(BROWSER_CONTROL_STORAGE_KEY))).not.toMatch(/path|token=secret/);
+  });
+
+  it('does not silently choose among ambiguous locked-origin targets', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 99,
+        targetLock: {
+          enabled: true,
+          label: 'Dev++',
+          targetTabId: 99,
+          windowId: null,
+          groupId: null,
+          origin: 'https://locked.example',
+          updatedAt: 1,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 34, active: false, title: 'Locked 1', url: 'https://locked.example/a' }),
+      createTab({ id: 35, active: false, title: 'Locked 2', url: 'https://locked.example/b' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget({ allowActiveFallback: true });
+
+    expect(preparation.status).toBe('missing');
+    expect(preparation.target).toBeNull();
   });
 });
 

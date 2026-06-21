@@ -2,6 +2,10 @@ const REDACTED_MEDIA_VALUE = '[redacted:media]';
 const REDACTED_SECRET_VALUE = '[redacted:secret]';
 const REDACTED_REF_VALUE = '[redacted:vision-ref]';
 const REDACTED_URL_VALUE = '[redacted:url]';
+const REDACTED_MEDIA_KEY = 'redactedMedia';
+const REDACTED_SECRET_KEY = 'redactedCred';
+const REDACTED_REF_KEY = 'redactedVisionRef';
+const REDACTED_PAGE_KEY = 'redactedPage';
 
 const SENSITIVE_MEDIA_KEYS = new Set([
   'base64Data',
@@ -53,19 +57,19 @@ export function redactDurableToolValue(value: unknown): unknown {
   const redacted: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     if (isSensitiveMediaKey(key)) {
-      redacted[key] = typeof item === 'string' && item.length > 0 ? REDACTED_MEDIA_VALUE : item;
+      redacted[REDACTED_MEDIA_KEY] = typeof item === 'string' && item.length > 0 ? REDACTED_MEDIA_VALUE : item;
       continue;
     }
     if (isSensitiveSecretKey(key)) {
-      redacted[key] = item === undefined || item === null || item === '' ? item : REDACTED_SECRET_VALUE;
+      redacted[REDACTED_SECRET_KEY] = item === undefined || item === null || item === '' ? item : REDACTED_SECRET_VALUE;
       continue;
     }
     if (SENSITIVE_REF_KEYS.has(key)) {
-      redacted[key] = Array.isArray(item) ? item.map(() => REDACTED_REF_VALUE) : REDACTED_REF_VALUE;
+      redacted[REDACTED_REF_KEY] = Array.isArray(item) ? item.map(() => REDACTED_REF_VALUE) : REDACTED_REF_VALUE;
       continue;
     }
     if (SENSITIVE_PAGE_KEYS.has(key) && typeof item === 'string' && item) {
-      redacted[key] = REDACTED_URL_VALUE;
+      redacted[REDACTED_PAGE_KEY] = REDACTED_URL_VALUE;
       continue;
     }
     redacted[key] = redactDurableToolValue(item);

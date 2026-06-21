@@ -414,6 +414,7 @@ function createRuntimeDoctorReport(overrides: Partial<{
       | 'chat_busy'
       | 'web_auth_missing'
       | 'web_auth_rejected'
+      | 'deepseek_content_script_stale'
       | 'browser_control_disabled'
       | 'browser_target_missing'
       | 'browser_target_not_controllable'
@@ -460,15 +461,44 @@ function createRuntimeDoctorReport(overrides: Partial<{
     browserControl: {
       enabled: true,
       targetSelected: true,
+      targetLock: {
+        enabled: false,
+        label: null,
+        origin: null,
+        updatedAt: null,
+      },
       visualCaptureAllowed: true,
       actVerifyEnabled: false,
       evidencePacksEnabled: true,
       debugDistillerEnabled: true,
       monitorReady: true,
     },
+    contentScripts: {
+      checked: true,
+      totalTabs: 1,
+      healthyTabs: 1,
+      staleTabs: 0,
+      staleTabIds: [],
+    },
     automation: {
       maxAttempts: 2,
       retryableFailure: overrides.retryableFailure ?? null,
+    },
+    humanEval: {
+      grade: 'A',
+      checks: [{
+        id: 'ready_loop',
+        label: 'Make everything ready',
+        prompt: 'Get my DeepSeek++ setup ready, then tell me plainly what still needs attention.',
+        status: 'pass',
+        evidence: 'DeepSeek tabs answered the content health ping.',
+      }],
+    },
+    leakSentry: {
+      ok: true,
+      grade: 'A',
+      issueCount: 0,
+      checkedAreas: ['local', 'session'],
     },
     debugDistiller: {
       enabled: true,

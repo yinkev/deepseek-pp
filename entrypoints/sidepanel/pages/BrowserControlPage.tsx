@@ -15,12 +15,13 @@ import {
 } from '../components/settings/primitives';
 import { useI18n } from '../i18n';
 
-type BusyState = 'idle' | 'loading' | 'saving' | 'targeting' | 'detaching';
+type BusyState = 'idle' | 'loading' | 'saving' | 'targeting' | 'locking' | 'detaching';
 
 const DEFAULT_SETTINGS: BrowserControlSettings = {
   enabled: true,
   targetTabId: null,
   lastTargetHint: null,
+  targetLock: null,
   includeSnapshotAfterActions: true,
   allowVisionCapture: true,
   verifyAfterActions: true,
@@ -137,8 +138,40 @@ export default function BrowserControlPage() {
     }
   };
 
+  const lockTarget = async () => {
+    setBusy('locking');
+    banner.clear();
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'LOCK_BROWSER_CONTROL_TARGET',
+        payload: { label: 'Dev++' },
+      });
+      if (result?.ok === false) {
+        banner.show('error', String(result.error ?? t('sidepanel.browserControlPage.messages.lockFailed')));
+      } else {
+        banner.show('success', t('sidepanel.browserControlPage.messages.locked'));
+      }
+      await load();
+    } finally {
+      setBusy('idle');
+    }
+  };
+
+  const clearLock = async () => {
+    setBusy('locking');
+    banner.clear();
+    try {
+      await chrome.runtime.sendMessage({ type: 'CLEAR_BROWSER_CONTROL_TARGET_LOCK' });
+      banner.show('success', t('sidepanel.browserControlPage.messages.lockCleared'));
+      await load();
+    } finally {
+      setBusy('idle');
+    }
+  };
+
   const supported = state?.supported === true;
   const activeTarget = targets.find((target) => target.id === settings.targetTabId) ?? null;
+  const targetLock = settings.targetLock;
 
   return (
     <div className="ds-page">
@@ -162,6 +195,39 @@ export default function BrowserControlPage() {
           <Meta label={t('sidepanel.browserControlPage.status.enabled')} value={settings.enabled ? t('common.enabled') : t('common.disabled')} />
           <Meta label={t('sidepanel.browserControlPage.status.attached')} value={state?.attached ? t('common.enabled') : t('common.disabled')} />
           <Meta label={t('sidepanel.browserControlPage.status.target')} value={activeTarget ? String(activeTarget.id) : t('common.none')} />
+        </div>
+
+        <div className="space-y-2 border px-3 py-2" style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)' }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+                {t('sidepanel.browserControlPage.targetLockTitle')}
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-secondary)' }}>
+                {targetLock?.enabled
+                  ? t('sidepanel.browserControlPage.targetLockActive', { label: targetLock.label, origin: targetLock.origin })
+                  : t('sidepanel.browserControlPage.targetLockDescription')}
+              </div>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={lockTarget}
+                disabled={busy !== 'idle' || !settings.enabled || !activeTarget}
+                className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg disabled:opacity-50"
+              >
+                {busy === 'locking' ? t('sidepanel.browserControlPage.locking') : t('sidepanel.browserControlPage.lockTarget')}
+              </button>
+              <button
+                type="button"
+                onClick={clearLock}
+                disabled={busy !== 'idle' || !targetLock}
+                className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg disabled:opacity-50"
+              >
+                {t('sidepanel.browserControlPage.clearLock')}
+              </button>
+            </div>
+          </div>
         </div>
 
         <ToggleRow

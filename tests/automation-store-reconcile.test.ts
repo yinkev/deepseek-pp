@@ -128,7 +128,7 @@ describe('reconcileStaleRuns', () => {
   });
 
   it('sanitizes automation run results before durable storage', async () => {
-    const { chromeStub } = createChromeStub();
+    const { storage, chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
 
     await createAutomationRun({
@@ -177,8 +177,10 @@ describe('reconcileStaleRuns', () => {
       completedAt: 2,
     });
 
+    const rawJson = JSON.stringify(storage.get(STORAGE_KEY));
     const json = JSON.stringify(await getAutomationRunById('run-secret'));
 
+    expect(rawJson).not.toMatch(/file-sensitive|AAAA|BBBB|sid=secret|abc123|token=secret|Authorization|data:image|dataUrl/);
     expect(json).not.toMatch(/file-sensitive|AAAA|BBBB|sid=secret|abc123|token=secret/);
     expect(json).not.toContain('chat.deepseek.com/a/chat/s/session-1?token');
     expect(json).toContain('[redacted:vision-ref]');

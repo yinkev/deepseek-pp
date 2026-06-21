@@ -135,6 +135,35 @@ export class BrowserControlService {
     return target;
   }
 
+  async lockCurrentTarget(label = 'Dev++'): Promise<BrowserControlTarget> {
+    const settings = await getBrowserControlSettings();
+    const tabId = await this.requireSelectedTargetTabId(settings);
+    const target = await this.getTargetOrThrow(tabId);
+    if (!target.controllable || isDeepSeekChatTarget(target.url)) {
+      throw new BrowserControlError(
+        'browser_target_not_controllable',
+        target.reason ?? 'The selected tab cannot be used as the personal browser target.',
+      );
+    }
+    const targetLock = createTargetLock(target, label, this.now());
+    if (!targetLock) {
+      throw new BrowserControlError(
+        'browser_target_lock_failed',
+        'The selected tab does not have a safe origin to lock onto.',
+      );
+    }
+    await saveBrowserControlSettings({
+      targetTabId: tabId,
+      lastTargetHint: createTargetHint(target, this.now()),
+      targetLock,
+    });
+    return target;
+  }
+
+  async clearTargetLock(): Promise<void> {
+    await saveBrowserControlSettings({ targetLock: null });
+  }
+
   async preparePersonalTarget(options: {
     allowActiveFallback?: boolean;
   } = {}): Promise<BrowserControlTargetPreparation> {
@@ -143,6 +172,44 @@ export class BrowserControlService {
     }
 
     const settings = await getBrowserControlSettings();
+    if (settings.targetLock?.enabled) {
+      if (typeof settings.targetLock.targetTabId === 'number') {
+        try {
+          const target = await this.getTargetOrThrow(settings.targetLock.targetTabId);
+          if (matchesTargetLock(target, settings.targetLock) && target.controllable && !isDeepSeekChatTarget(target.url)) {
+            if (settings.targetTabId !== target.id) {
+              await saveBrowserControlSettings({
+                targetTabId: target.id,
+                lastTargetHint: createTargetHint(target, this.now()),
+                targetLock: createTargetLock(target, settings.targetLock.label, this.now()),
+              });
+              return { target, status: 'reacquired' };
+            }
+            await saveBrowserControlSettings({ lastTargetHint: createTargetHint(target, this.now()) });
+            return { target, status: 'ready' };
+          }
+        } catch {
+          // Stale locked tab ids are expected after browser reloads; fall through to origin matching.
+        }
+      }
+      const targets = await this.listTargets();
+      const locked = findLockedTarget(targets, settings.targetLock);
+      if (!locked) return { target: null, status: 'missing' };
+      if (settings.targetTabId !== locked.id) {
+        await saveBrowserControlSettings({
+          targetTabId: locked.id,
+          lastTargetHint: createTargetHint(locked, this.now()),
+          targetLock: createTargetLock(locked, settings.targetLock.label, this.now()),
+        });
+        return { target: locked, status: 'reacquired' };
+      }
+      if (locked.controllable && !isDeepSeekChatTarget(locked.url)) {
+        await saveBrowserControlSettings({ lastTargetHint: createTargetHint(locked, this.now()) });
+        return { target: locked, status: 'ready' };
+      }
+      return { target: locked, status: 'not_controllable' };
+    }
+
     if (typeof settings.targetTabId === 'number') {
       try {
         const target = await this.getTargetOrThrow(settings.targetTabId);
@@ -1188,7 +1255,7 @@ function createTargetHint(target: BrowserControlTarget, updatedAt: number): Brow
   return {
     windowId: target.windowId,
     origin,
-    title: target.title.slice(0, 160),
+    title: '',
     updatedAt,
   };
 }
@@ -1199,7 +1266,26 @@ function createTabHint(tab: chrome.tabs.Tab, updatedAt: number): BrowserControlS
   return {
     windowId: typeof tab.windowId === 'number' ? tab.windowId : null,
     origin,
-    title: (tab.title ?? '').slice(0, 160),
+    title: '',
+    updatedAt,
+  };
+}
+
+function createTargetLock(
+  target: BrowserControlTarget,
+  label: string,
+  updatedAt: number,
+): BrowserControlSettings['targetLock'] {
+  const origin = safeUrlOrigin(target.url);
+  if (!origin) return null;
+  const safeLabel = label.trim().slice(0, 40);
+  return {
+    enabled: true,
+    label: safeLabel || 'Dev++',
+    targetTabId: target.id,
+    windowId: target.windowId,
+    groupId: target.groupId >= 0 ? target.groupId : null,
+    origin,
     updatedAt,
   };
 }
@@ -1224,6 +1310,28 @@ function findHintedTarget(
         ? candidates[0]
         : null;
   return preferred ?? null;
+}
+
+function findLockedTarget(
+  targets: BrowserControlTarget[],
+  lock: NonNullable<BrowserControlSettings['targetLock']>,
+): BrowserControlTarget | null {
+  const candidates = targets.filter((target) => matchesTargetLock(target, lock));
+  if (candidates.length === 0) return null;
+  const sameWindow = candidates.filter((target) => lock.windowId !== null && target.windowId === lock.windowId);
+  if (sameWindow.length === 1) return sameWindow[0];
+  const sameGroup = candidates.filter((target) => lock.groupId !== null && target.groupId === lock.groupId);
+  if (sameGroup.length === 1) return sameGroup[0];
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+function matchesTargetLock(
+  target: BrowserControlTarget,
+  lock: NonNullable<BrowserControlSettings['targetLock']>,
+): boolean {
+  return target.controllable &&
+    !isDeepSeekChatTarget(target.url) &&
+    safeUrlOrigin(target.url) === lock.origin;
 }
 
 function safeUrlOrigin(url: string): string {

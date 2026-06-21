@@ -41,6 +41,7 @@ export interface BrowserControlSettings {
   enabled: boolean;
   targetTabId: number | null;
   lastTargetHint: BrowserControlTargetHint | null;
+  targetLock: BrowserControlTargetLock | null;
   includeSnapshotAfterActions: boolean;
   allowVisionCapture: boolean;
   verifyAfterActions: boolean;
@@ -54,6 +55,16 @@ export interface BrowserControlTargetHint {
   windowId: number | null;
   origin: string;
   title: string;
+  updatedAt: number;
+}
+
+export interface BrowserControlTargetLock {
+  enabled: boolean;
+  label: string;
+  targetTabId: number | null;
+  windowId: number | null;
+  groupId: number | null;
+  origin: string;
   updatedAt: number;
 }
 

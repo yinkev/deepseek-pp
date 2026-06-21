@@ -18,6 +18,8 @@ export default function RuntimeDoctorPage() {
   const [ensuring, setEnsuring] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [repairing, setRepairing] = useState(false);
+  const [reloadingTabs, setReloadingTabs] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
   const [message, setMessage] = useState<{ tone: StatusTone; text: string } | null>(null);
 
   const loadReport = async () => {
@@ -134,6 +136,48 @@ export default function RuntimeDoctorPage() {
     }
   };
 
+  const reloadStaleTabs = async () => {
+    setReloadingTabs(true);
+    setMessage(null);
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'RELOAD_STALE_DEEPSEEK_TABS' });
+      if (isRuntimeDoctorReport(response?.report)) setReport(response.report);
+      if (!response || response.ok !== true) throw new Error(response?.error || 'reload_stale_tabs_failed');
+      setMessage({
+        tone: 'success',
+        text: t('sidepanel.runtimeDoctorPage.reloadStaleTabsSuccess', { count: response.reloaded ?? 0 }),
+      });
+    } catch (error) {
+      setMessage({
+        tone: 'error',
+        text: t('sidepanel.runtimeDoctorPage.ensureReadyFailed', { error: formatError(error) }),
+      });
+    } finally {
+      setReloadingTabs(false);
+    }
+  };
+
+  const runHumanEval = async () => {
+    setEvaluating(true);
+    setMessage(null);
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'RUN_PERSONAL_HUMAN_EVAL' });
+      if (isRuntimeDoctorReport(response?.report)) setReport(response.report);
+      if (!response || response.ok !== true) throw new Error(response?.error || 'human_eval_failed');
+      setMessage({
+        tone: response.leakSentry?.ok === false ? 'error' : 'success',
+        text: `${t('sidepanel.runtimeDoctorPage.humanEvalGrade')}: ${response.humanEval?.grade ?? '?'}`,
+      });
+    } catch (error) {
+      setMessage({
+        tone: 'error',
+        text: t('sidepanel.runtimeDoctorPage.ensureReadyFailed', { error: formatError(error) }),
+      });
+    } finally {
+      setEvaluating(false);
+    }
+  };
+
   useEffect(() => {
     loadReport();
   }, []);
@@ -193,6 +237,22 @@ export default function RuntimeDoctorPage() {
         >
           {repairing ? t('sidepanel.runtimeDoctorPage.repairingAndRetrying') : t('sidepanel.runtimeDoctorPage.repairAndRetry')}
         </button>
+        <button
+          type="button"
+          onClick={reloadStaleTabs}
+          disabled={loading || ensuring || recovering || repairing || reloadingTabs || !report?.contentScripts.staleTabs}
+          className="ds-btn-secondary px-3 py-2 text-[11px] rounded-lg disabled:opacity-50"
+        >
+          {reloadingTabs ? t('sidepanel.runtimeDoctorPage.reloadingStaleTabs') : t('sidepanel.runtimeDoctorPage.reloadStaleTabs')}
+        </button>
+        <button
+          type="button"
+          onClick={runHumanEval}
+          disabled={loading || ensuring || recovering || repairing || reloadingTabs || evaluating}
+          className="ds-btn-secondary px-3 py-2 text-[11px] rounded-lg disabled:opacity-50"
+        >
+          {evaluating ? t('sidepanel.runtimeDoctorPage.evaluating') : t('sidepanel.runtimeDoctorPage.runHumanEval')}
+        </button>
       </div>
 
       {message && (
@@ -222,6 +282,11 @@ export default function RuntimeDoctorPage() {
                 label={t('sidepanel.runtimeDoctorPage.deepSeekTabs')}
                 value={String(report.deepSeekTabCount)}
                 tone={report.deepSeekTabCount > 0 ? 'success' : 'warning'}
+              />
+              <StatusTile
+                label={t('sidepanel.runtimeDoctorPage.contentScripts')}
+                value={`${report.contentScripts.healthyTabs}/${report.contentScripts.totalTabs}`}
+                tone={report.contentScripts.staleTabs === 0 ? 'success' : 'warning'}
               />
               <StatusTile
                 label={t('sidepanel.runtimeDoctorPage.apiFallback')}
@@ -299,6 +364,18 @@ export default function RuntimeDoctorPage() {
                 tone={report.browserControl.monitorReady ? 'success' : 'warning'}
               />
               <StatusTile
+                label={t('sidepanel.runtimeDoctorPage.targetLock')}
+                value={report.browserControl.targetLock.enabled
+                  ? report.browserControl.targetLock.label ?? 'Dev++'
+                  : t('common.disabled')}
+                tone={report.browserControl.targetLock.enabled ? 'success' : 'info'}
+              />
+              <StatusTile
+                label={t('sidepanel.runtimeDoctorPage.staleTabs')}
+                value={String(report.contentScripts.staleTabs)}
+                tone={report.contentScripts.staleTabs === 0 ? 'success' : 'warning'}
+              />
+              <StatusTile
                 label={t('sidepanel.runtimeDoctorPage.actVerify')}
                 value={report.browserControl.actVerifyEnabled ? t('common.enabled') : t('common.disabled')}
                 tone={report.browserControl.actVerifyEnabled ? 'success' : 'info'}
@@ -314,6 +391,39 @@ export default function RuntimeDoctorPage() {
                 tone={report.debugDistiller.enabled ? 'success' : 'info'}
               />
             </StatusGrid>
+          </SettingsSection>
+
+          <SettingsSection
+            title={t('sidepanel.runtimeDoctorPage.humanEval')}
+            description={t('sidepanel.runtimeDoctorPage.humanEvalDescription')}
+          >
+            <StatusGrid>
+              <StatusTile
+                label={t('sidepanel.runtimeDoctorPage.humanEvalGrade')}
+                value={report.humanEval.grade}
+                tone={report.humanEval.grade === 'A' ? 'success' : report.humanEval.grade === 'F' ? 'error' : 'warning'}
+              />
+              <StatusTile
+                label={t('sidepanel.runtimeDoctorPage.leakSentry')}
+                value={report.leakSentry.grade}
+                tone={report.leakSentry.ok ? 'success' : 'error'}
+              />
+            </StatusGrid>
+            <div className="space-y-1.5">
+              {report.humanEval.checks.map((check) => (
+                <div
+                  key={check.id}
+                  className="px-3 py-2 text-[11px] border"
+                  style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)', color: 'var(--ds-text-secondary)' }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium" style={{ color: 'var(--ds-text)' }}>{check.label}</span>
+                    <span>{check.status.toUpperCase()}</span>
+                  </div>
+                  <div>{check.evidence}</div>
+                </div>
+              ))}
+            </div>
           </SettingsSection>
 
           <SettingsSection
@@ -356,12 +466,12 @@ export default function RuntimeDoctorPage() {
           >
             {report.storage.ok ? (
               <StatusMessage tone="success">
-                {t('sidepanel.runtimeDoctorPage.storageClean')}
+                {t('sidepanel.runtimeDoctorPage.leakSentryClean')}
               </StatusMessage>
             ) : (
               <div className="space-y-2">
                 <StatusMessage tone="error">
-                  {t('sidepanel.runtimeDoctorPage.storageIssues', { count: report.storage.issues.length })}
+                  {t('sidepanel.runtimeDoctorPage.leakSentryIssues', { count: report.storage.issues.length })}
                 </StatusMessage>
                 <div className="space-y-1.5">
                   {report.storage.issues.map((issue) => (
@@ -446,6 +556,11 @@ function getReadyChecks(
       key: 'session',
       label: t('sidepanel.runtimeDoctorPage.readyChecks.session'),
       ok: report.sidepanelSession.active || report.personalConvenience?.lastSessionRemembered === true,
+    },
+    {
+      key: 'content-scripts',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.contentScripts'),
+      ok: report.contentScripts.staleTabs === 0,
     },
     {
       key: 'browser',

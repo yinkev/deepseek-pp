@@ -7,6 +7,7 @@ export const DEFAULT_BROWSER_CONTROL_SETTINGS: BrowserControlSettings = {
   enabled: true,
   targetTabId: null,
   lastTargetHint: null,
+  targetLock: null,
   includeSnapshotAfterActions: true,
   allowVisionCapture: true,
   verifyAfterActions: true,
@@ -33,6 +34,7 @@ export function normalizeBrowserControlSettings(input: unknown): BrowserControlS
       ? partial.targetTabId
       : null,
     lastTargetHint: normalizeTargetHint(partial.lastTargetHint),
+    targetLock: normalizeTargetLock(partial.targetLock),
     includeSnapshotAfterActions: partial.includeSnapshotAfterActions !== false,
     allowVisionCapture: partial.allowVisionCapture !== false,
     verifyAfterActions: partial.verifyAfterActions !== false,
@@ -94,6 +96,28 @@ function normalizeTargetHint(value: unknown): BrowserControlSettings['lastTarget
     windowId: typeof hint.windowId === 'number' && Number.isInteger(hint.windowId) ? hint.windowId : null,
     origin,
     title,
+    updatedAt,
+  };
+}
+
+function normalizeTargetLock(value: unknown): BrowserControlSettings['targetLock'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const lock = value as Record<string, unknown>;
+  const origin = typeof lock.origin === 'string' ? lock.origin.trim() : '';
+  if (!origin || origin.length > 240) return null;
+  const updatedAt = typeof lock.updatedAt === 'number' && Number.isFinite(lock.updatedAt)
+    ? Math.max(0, Math.floor(lock.updatedAt))
+    : 0;
+  const rawLabel = typeof lock.label === 'string' ? lock.label.trim() : '';
+  return {
+    enabled: lock.enabled !== false,
+    label: rawLabel ? rawLabel.slice(0, 40) : 'Dev++',
+    targetTabId: typeof lock.targetTabId === 'number' && Number.isInteger(lock.targetTabId)
+      ? lock.targetTabId
+      : null,
+    windowId: typeof lock.windowId === 'number' && Number.isInteger(lock.windowId) ? lock.windowId : null,
+    groupId: typeof lock.groupId === 'number' && Number.isInteger(lock.groupId) ? lock.groupId : null,
+    origin,
     updatedAt,
   };
 }

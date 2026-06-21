@@ -50,16 +50,20 @@ export interface RuntimeDoctorReport {
   browserControl: {
     enabled: boolean;
     targetSelected: boolean;
+    targetLock: RuntimeDoctorTargetLockStatus;
     visualCaptureAllowed: boolean;
     actVerifyEnabled: boolean;
     evidencePacksEnabled: boolean;
     debugDistillerEnabled: boolean;
     monitorReady: boolean;
   };
+  contentScripts: RuntimeDoctorContentScriptHealth;
   automation: {
     maxAttempts: number;
     retryableFailure: RuntimeDoctorAutomationFailure | null;
   };
+  humanEval: RuntimeDoctorHumanEval;
+  leakSentry: RuntimeDoctorLeakSentry;
   debugDistiller: {
     enabled: boolean;
     suggestions: RuntimeDoctorDebugSuggestion[];
@@ -82,6 +86,7 @@ export type RuntimeDoctorReadinessBlocker =
   | 'chat_busy'
   | 'web_auth_missing'
   | 'web_auth_rejected'
+  | 'deepseek_content_script_stale'
   | 'browser_control_disabled'
   | 'browser_target_missing'
   | 'browser_target_not_controllable'
@@ -99,6 +104,41 @@ export interface RuntimeDoctorAutomationFailure {
   message: string;
   phase: string;
   at: number;
+}
+
+export interface RuntimeDoctorTargetLockStatus {
+  enabled: boolean;
+  label: string | null;
+  origin: string | null;
+  updatedAt: number | null;
+}
+
+export interface RuntimeDoctorContentScriptHealth {
+  checked: boolean;
+  totalTabs: number;
+  healthyTabs: number;
+  staleTabs: number;
+  staleTabIds: number[];
+}
+
+export interface RuntimeDoctorHumanEvalCheck {
+  id: 'ready_loop' | 'same_session' | 'browser_vision' | 'tool_loop' | 'leak_sentry';
+  label: string;
+  prompt: string;
+  status: 'pass' | 'warn' | 'fail';
+  evidence: string;
+}
+
+export interface RuntimeDoctorHumanEval {
+  grade: 'A' | 'B' | 'C' | 'D' | 'F';
+  checks: RuntimeDoctorHumanEvalCheck[];
+}
+
+export interface RuntimeDoctorLeakSentry {
+  ok: boolean;
+  grade: 'A' | 'F';
+  issueCount: number;
+  checkedAreas: RuntimeDoctorStorageArea[];
 }
 
 export interface RuntimeDoctorDebugSuggestion {
@@ -270,7 +310,8 @@ function isAllowedVisionRefPath(path: string): boolean {
 }
 
 function isForbiddenDurableMediaString(value: string): boolean {
-  return value.startsWith('data:image/') ||
+  return /data:image\/[a-z0-9.+-]+;base64,/i.test(value) ||
+    /\b(?:dataUrl|dataBase64|base64Data)\b/i.test(value) ||
     value.startsWith('blob:') ||
     value.startsWith('filesystem:');
 }

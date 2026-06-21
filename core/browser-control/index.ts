@@ -25,6 +25,7 @@ export type {
   BrowserControlState,
   BrowserControlTarget,
   BrowserControlTargetHint,
+  BrowserControlTargetLock,
   BrowserControlTargetPreparation,
   BrowserControlToolName,
   BrowserScreenshotCaptureResult,

@@ -65,6 +65,28 @@ describe('runtime doctor storage scan', () => {
     expect(JSON.stringify(scan)).not.toMatch(/signed\.example|files\.example|token=abc|nested-secret|pow-secret|api-secret|secret/);
   });
 
+  it('flags embedded image data and base64-key markers inside longer strings', () => {
+    const scan = scanRuntimeDoctorStorage({
+      local: {
+        note: 'prefix data:image/png;base64,AAAA suffix',
+        recorder: {
+          summary: 'payload mentions dataBase64 and should not be stored durably',
+        },
+        nested: {
+          value: 'base64Data: BBBB',
+        },
+      },
+    });
+
+    expect(scan.ok).toBe(false);
+    expect(scan.issues).toEqual([
+      { area: 'local', path: 'note', reason: 'raw_image_data' },
+      { area: 'local', path: 'recorder.summary', reason: 'raw_image_data' },
+      { area: 'local', path: 'nested.value', reason: 'raw_image_data' },
+    ]);
+    expect(JSON.stringify(scan)).not.toMatch(/AAAA|BBBB|data:image/);
+  });
+
   it('treats storage read failures as scan issues instead of clean state', () => {
     const scan = scanRuntimeDoctorStorage({
       failedAreas: ['local'],

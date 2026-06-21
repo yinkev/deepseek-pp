@@ -578,6 +578,16 @@ export default defineContentScript({
       } else if (message.type === 'CLEAR_DEEPSEEK_CLIENT_HEADERS') {
         forgetDeepSeekClientHeaders();
         sendResponse({ ok: true });
+      } else if (message.type === 'DPP_CONTENT_HEALTH') {
+        sendResponse({
+          ok: true,
+          source: CONTENT_SOURCE,
+          url: location.href,
+          hasLiveExtensionContext: hasLiveExtensionContext(),
+          mainWorldBridgeReady: mainWorldMessageHandler !== null,
+          checkedAt: Date.now(),
+        });
+        return true;
       } else if (message.type === 'DEEPSEEK_EXPORT_PROGRESS') {
         updateConversationExportProgress(message.progress as ConversationExportProgress | undefined);
       } else if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') {

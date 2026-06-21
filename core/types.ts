@@ -532,6 +532,14 @@ export type MessageAction =
   | { type: 'CLEAR_TOOL_CALL_HISTORY' }
   | { type: 'CAPTURE_CURRENT_TAB_IMAGE' }
   | { type: 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE' }
+  | { type: 'GET_BROWSER_CONTROL_SETTINGS' }
+  | { type: 'SAVE_BROWSER_CONTROL_SETTINGS'; payload: Record<string, unknown> }
+  | { type: 'SET_BROWSER_CONTROL_ENABLED'; payload: { enabled: boolean } }
+  | { type: 'GET_BROWSER_CONTROL_STATE' }
+  | { type: 'SET_BROWSER_CONTROL_TARGET'; payload: { tabId: number } }
+  | { type: 'LOCK_BROWSER_CONTROL_TARGET'; payload?: { label?: string } }
+  | { type: 'CLEAR_BROWSER_CONTROL_TARGET_LOCK' }
+  | { type: 'DETACH_BROWSER_CONTROL' }
   | { type: 'GET_PERSONAL_CONVENIENCE_CONFIG' }
   | { type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG'; payload: Partial<PersonalConvenienceConfigType> }
   | { type: 'GET_DEEPSEEK_WEB_SESSION_PREFERENCE' }
@@ -556,6 +564,11 @@ export type MessageAction =
   | { type: 'CLEAR_USAGE_STATS' }
   | { type: 'GET_OFFICIAL_API_CHAT_CONFIG' }
   | { type: 'SAVE_OFFICIAL_API_CHAT_CONFIG'; payload: Partial<OfficialApiChatConfigType> }
+  | { type: 'GET_RUNTIME_DOCTOR_REPORT' }
+  | { type: 'REFRESH_DEEPSEEK_WEB_AUTH' }
+  | { type: 'ENSURE_PERSONAL_RUNTIME_READY' }
+  | { type: 'RELOAD_STALE_DEEPSEEK_TABS' }
+  | { type: 'RUN_PERSONAL_HUMAN_EVAL' }
   | { type: 'TOOL_CALL_EXECUTED'; payload: ToolCall }
   | { type: 'MEMORIES_UPDATED' }
   | { type: 'WEBDAV_TEST'; payload: Omit<SyncConfig, 'lastSyncAt'> }
