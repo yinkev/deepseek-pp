@@ -1333,6 +1333,9 @@ async function handleMessage(
     case 'ENSURE_PERSONAL_RUNTIME_READY':
       return ensurePersonalRuntimeReady(sender.tab?.id, 'manual');
 
+    case 'RUN_PERSONAL_AUTOPILOT_REPAIR':
+      return runPersonalAutopilotRepair(sender.tab?.id);
+
     case 'RELOAD_STALE_DEEPSEEK_TABS':
       return reloadStaleDeepSeekTabs(sender.tab?.id);
 
@@ -1827,6 +1830,7 @@ async function getRuntimeDoctorReport(
         : [],
     },
     readiness,
+    failureExplanations: createRuntimeDoctorFailureExplanations(readiness.blockers),
     storage,
   };
 }
@@ -1863,6 +1867,102 @@ function createRuntimeReadinessBlockers(input: {
       : 'storage_leak');
   }
   return Array.from(blockers);
+}
+
+function createRuntimeDoctorFailureExplanations(
+  blockers: RuntimeDoctorReadiness['blockers'],
+): RuntimeDoctorReport['failureExplanations'] {
+  return blockers.map((blocker) => {
+    const severity = blocker === 'storage_leak' || blocker === 'storage_scan_failed'
+      ? 'blocked' as const
+      : 'attention' as const;
+    switch (blocker) {
+      case 'chat_busy':
+        return {
+          blocker,
+          severity,
+          cause: 'The sidepanel chat loop is still running.',
+          action: 'Wait for the current response to finish, then run Make Ready again.',
+        };
+      case 'web_auth_missing':
+        return {
+          blocker,
+          severity,
+          cause: 'No usable logged-in DeepSeek Web headers were found.',
+          action: 'Open or reload chat.deepseek.com, then run Make Ready.',
+        };
+      case 'web_auth_rejected':
+        return {
+          blocker,
+          severity,
+          cause: 'The last DeepSeek Web request rejected the captured auth state.',
+          action: 'Run Make Ready so the extension clears stale auth and refreshes from a live DeepSeek tab.',
+        };
+      case 'deepseek_content_script_stale':
+        return {
+          blocker,
+          severity,
+          cause: 'At least one DeepSeek tab did not answer the current content-script health ping.',
+          action: 'Use Reload stale tabs, or run Make Ready again after the tabs finish refreshing.',
+        };
+      case 'browser_control_disabled':
+        return {
+          blocker,
+          severity,
+          cause: 'Browser Control is disabled or unavailable.',
+          action: 'Enable Browser Control in the sidepanel, then select or lock your Dev++ target.',
+        };
+      case 'browser_target_missing':
+        return {
+          blocker,
+          severity,
+          cause: 'No usable browser target is selected or locked.',
+          action: 'Select your Studio Display browser tab on Browser Control, then lock it as Dev++.',
+        };
+      case 'browser_target_not_controllable':
+        return {
+          blocker,
+          severity,
+          cause: 'The selected target cannot be controlled or is the DeepSeek chat tab itself.',
+          action: 'Pick the actual page you want the model to inspect, not chat.deepseek.com.',
+        };
+      case 'browser_vision_capture_disabled':
+        return {
+          blocker,
+          severity,
+          cause: 'Browser visual capture is off.',
+          action: 'Enable visual capture so browser-view questions can attach transient Vision images.',
+        };
+      case 'act_verify_disabled':
+        return {
+          blocker,
+          severity,
+          cause: 'Browser action verification is off.',
+          action: 'Enable act-verify so browser actions can be checked with visual evidence.',
+        };
+      case 'evidence_packs_disabled':
+        return {
+          blocker,
+          severity,
+          cause: 'Metadata-only evidence packs are off.',
+          action: 'Enable evidence packs so automation can record what it verified without storing raw screenshots.',
+        };
+      case 'storage_leak':
+        return {
+          blocker,
+          severity,
+          cause: 'Leak Sentry found forbidden durable auth, image, or Vision reference data.',
+          action: 'Inspect the Leak Sentry rows before running more automation.',
+        };
+      case 'storage_scan_failed':
+        return {
+          blocker,
+          severity,
+          cause: 'Runtime Doctor could not read one of the extension storage areas.',
+          action: 'Reload the extension and rerun Runtime Doctor.',
+        };
+    }
+  });
 }
 
 function createRuntimeDoctorLeakSentry(
@@ -2049,6 +2149,29 @@ async function ensurePersonalRuntimeReady(
       personalRuntimeReadySource = null;
     });
   return personalRuntimeReadyPromise;
+}
+
+async function runPersonalAutopilotRepair(preferredTabId?: number) {
+  const repaired: string[] = [];
+  const first = await ensurePersonalRuntimeReady(preferredTabId, 'manual');
+  let report = first.report;
+  if (first.changedSettings) repaired.push('browser_control_defaults');
+  if (first.refreshedAuth) repaired.push('web_auth_refreshed');
+  if (first.targetStatus === 'reacquired' || first.targetStatus === 'selected_active') {
+    repaired.push('browser_target_reacquired');
+  }
+  if (report.contentScripts.staleTabs > 0) {
+    const reload = await reloadStaleDeepSeekTabs(preferredTabId);
+    if (reload.reloaded > 0) repaired.push('stale_deepseek_tabs_reloaded');
+    report = reload.report;
+  }
+  return {
+    ok: true,
+    ready: report.readiness.ready,
+    repaired,
+    blockers: report.readiness.blockers,
+    report,
+  };
 }
 
 async function runEnsurePersonalRuntimeReady(

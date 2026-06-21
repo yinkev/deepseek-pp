@@ -69,6 +69,7 @@ export interface RuntimeDoctorReport {
     suggestions: RuntimeDoctorDebugSuggestion[];
   };
   readiness: RuntimeDoctorReadiness;
+  failureExplanations: RuntimeDoctorFailureExplanation[];
   storage: RuntimeDoctorStorageScan;
 }
 
@@ -139,6 +140,13 @@ export interface RuntimeDoctorLeakSentry {
   grade: 'A' | 'F';
   issueCount: number;
   checkedAreas: RuntimeDoctorStorageArea[];
+}
+
+export interface RuntimeDoctorFailureExplanation {
+  blocker: RuntimeDoctorReadinessBlocker;
+  severity: 'blocked' | 'attention';
+  cause: string;
+  action: string;
 }
 
 export interface RuntimeDoctorDebugSuggestion {

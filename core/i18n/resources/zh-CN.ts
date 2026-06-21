@@ -672,6 +672,8 @@ export const zhCN = {
       storageIssues: '发现 {count} 个存储问题',
       noLeakClean: '无泄漏',
       noLeakIssue: '发现泄漏',
+      failureExplainer: '失败解释',
+      failureExplainerDescription: '为每个就绪阻塞项显示直接原因和下一步动作。',
       targetStatuses: {
         ready: '就绪',
         reacquired: '已找回',

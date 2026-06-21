@@ -70,7 +70,7 @@ export default function RuntimeDoctorPage() {
     setEnsuring(true);
     setMessage(null);
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'ENSURE_PERSONAL_RUNTIME_READY' });
+      const response = await chrome.runtime.sendMessage({ type: 'RUN_PERSONAL_AUTOPILOT_REPAIR' });
       if (isRuntimeDoctorReport(response?.report)) {
         setReport(response.report);
       }
@@ -211,6 +211,29 @@ export default function RuntimeDoctorPage() {
       )}
 
       {report && <ReadinessBanner report={report} />}
+
+      {report && report.failureExplanations.length > 0 && (
+        <SettingsSection
+          title={t('sidepanel.runtimeDoctorPage.failureExplainer')}
+          description={t('sidepanel.runtimeDoctorPage.failureExplainerDescription')}
+        >
+          <div className="space-y-1.5">
+            {report.failureExplanations.map((item) => (
+              <div
+                key={item.blocker}
+                className="px-3 py-2 text-[11px] border"
+                style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)', color: 'var(--ds-text-secondary)' }}
+              >
+                <div className="font-medium" style={{ color: item.severity === 'blocked' ? 'var(--ds-danger)' : 'var(--ds-text)' }}>
+                  {formatReadinessBlocker(item.blocker, t)}
+                </div>
+                <div>{item.cause}</div>
+                <div>{item.action}</div>
+              </div>
+            ))}
+          </div>
+        </SettingsSection>
+      )}
 
       <div className="flex flex-wrap gap-2">
         <button

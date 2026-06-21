@@ -567,6 +567,7 @@ export type MessageAction =
   | { type: 'GET_RUNTIME_DOCTOR_REPORT' }
   | { type: 'REFRESH_DEEPSEEK_WEB_AUTH' }
   | { type: 'ENSURE_PERSONAL_RUNTIME_READY' }
+  | { type: 'RUN_PERSONAL_AUTOPILOT_REPAIR' }
   | { type: 'RELOAD_STALE_DEEPSEEK_TABS' }
   | { type: 'RUN_PERSONAL_HUMAN_EVAL' }
   | { type: 'TOOL_CALL_EXECUTED'; payload: ToolCall }

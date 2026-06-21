@@ -184,7 +184,7 @@ describe('sidepanel interactions', () => {
           noLeak: true,
         },
       });
-      if (message.type === 'ENSURE_PERSONAL_RUNTIME_READY') return ensurePromise;
+      if (message.type === 'RUN_PERSONAL_AUTOPILOT_REPAIR') return ensurePromise;
       return null;
     });
     stubChrome(sendMessage);
@@ -202,7 +202,7 @@ describe('sidepanel interactions', () => {
     await act(async () => {
       ensuringButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'ENSURE_PERSONAL_RUNTIME_READY')).toHaveLength(1);
+    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'RUN_PERSONAL_AUTOPILOT_REPAIR')).toHaveLength(1);
 
     resolveEnsure({
       ok: true,
@@ -513,6 +513,7 @@ function createRuntimeDoctorReport(overrides: Partial<{
       targetStatus: 'ready',
       noLeak: true,
     },
+    failureExplanations: [],
     storage: {
       ok: true,
       issues: [],

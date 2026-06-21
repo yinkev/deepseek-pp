@@ -672,6 +672,8 @@ export const en = {
       storageIssues: '{count} storage issues found',
       noLeakClean: 'No-leak clean',
       noLeakIssue: 'Leak issue found',
+      failureExplainer: 'Failure explainer',
+      failureExplainerDescription: 'Plain cause and next action for each readiness blocker.',
       targetStatuses: {
         ready: 'Ready',
         reacquired: 'Reacquired',
