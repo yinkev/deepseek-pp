@@ -222,6 +222,37 @@ describe('automation readiness', () => {
     expect(fixed.thinkingEnabled).toBe(false);
   });
 
+  it('normalizes visual-monitor runs as Vision-route flag conflicts', () => {
+    const input = createInput({
+      prompt: 'Inspect the browser target visually, evaluate evidence, review risks, grade confidence, iterate once, then stop.',
+      promptOptions: {
+        modelType: null,
+        searchEnabled: true,
+        thinkingEnabled: true,
+        refFileIds: [],
+        visualMonitor: {
+          enabled: true,
+          source: 'browser_control_target',
+          includeEvidencePack: true,
+        },
+      },
+    });
+    const report = evaluateAutomationReadiness(input);
+    const issueCodes = getSafeAutomationReadinessFixes(report);
+
+    expect(report.issues).toContainEqual({
+      code: 'vision_flags_inconsistent',
+      severity: 'warning',
+    });
+    expect(report.issues.some((issue) => issue.code === 'evaluation_without_thinking')).toBe(false);
+
+    const fixed = applySafeAutomationReadinessFixes(input.promptOptions, issueCodes);
+    expect(fixed.modelType).toBeNull();
+    expect(fixed.searchEnabled).toBe(false);
+    expect(fixed.thinkingEnabled).toBe(false);
+    expect(fixed.visualMonitor?.enabled).toBe(true);
+  });
+
   it('keeps scheduled memory hygiene in warning territory instead of silently approving it', () => {
     const report = evaluateAutomationReadiness(createInput({
       prompt: 'Review memory hygiene and delete duplicates. Plan, evaluate, review, grade, iterate, then stop for explicit confirmation.',

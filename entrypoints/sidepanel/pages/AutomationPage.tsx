@@ -507,7 +507,8 @@ function AutomationForm({
   const showReadiness = editing !== null || hasAutomationDraftContent(form, imageAttachments.length);
   const visionRouteLocksFlags = form.modelType === 'vision' ||
     parseVisionRefFileIds(form.refFileIdsText).length > 0 ||
-    imageAttachments.length > 0;
+    imageAttachments.length > 0 ||
+    form.visualMonitorEnabled;
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     onChange({ ...form, [key]: value });
   };

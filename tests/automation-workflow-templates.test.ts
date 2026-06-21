@@ -88,7 +88,7 @@ describe('automation workflow templates', () => {
       expression: null,
       enabled: false,
     });
-    expect(debuggingInput.promptOptions.thinkingEnabled).toBe(true);
+    expect(debuggingInput.promptOptions.thinkingEnabled).toBe(false);
     expect(debuggingInput.promptOptions.visualMonitor?.enabled).toBe(true);
     expect(debuggingInput.prompt).toContain('Debug this failure');
     expect(debuggingInput.prompt).toContain('passing check');

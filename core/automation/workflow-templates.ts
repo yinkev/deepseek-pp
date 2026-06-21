@@ -64,7 +64,7 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
     promptOptions: {
       modelType: null,
       searchEnabled: false,
-      thinkingEnabled: true,
+      thinkingEnabled: false,
       visualMonitorEnabled: true,
     },
     prompt: loopPrompt([
@@ -148,7 +148,7 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
     promptOptions: {
       modelType: null,
       searchEnabled: false,
-      thinkingEnabled: true,
+      thinkingEnabled: false,
       visualMonitorEnabled: true,
     },
     prompt: loopPrompt([
@@ -190,7 +190,7 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
     promptOptions: {
       modelType: null,
       searchEnabled: false,
-      thinkingEnabled: true,
+      thinkingEnabled: false,
       visualMonitorEnabled: true,
     },
     prompt: loopPrompt([

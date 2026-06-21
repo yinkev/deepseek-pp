@@ -300,6 +300,12 @@ describe('sidepanel interactions', () => {
     await flushEffects();
     await clickButton('新建');
     expect(container.textContent).not.toContain('就绪评分');
+    const switches = Array.from(container.querySelectorAll<HTMLButtonElement>('button[role="switch"]'));
+    expect(switches[0].disabled).toBe(true);
+    expect(switches[0].getAttribute('aria-checked')).toBe('false');
+    expect(switches[1].disabled).toBe(true);
+    expect(switches[1].getAttribute('aria-checked')).toBe('false');
+    expect(container.textContent).toContain('DeepSeek Web Vision 使用图片路由');
     await enterText('任务名称', 'Visual check');
     await enterText('输入要定时发送到 DeepSeek 的内容', 'Check whether the selected page still looks healthy.');
     await clickButton('创建');
@@ -340,6 +346,7 @@ describe('sidepanel interactions', () => {
     await renderElement(React.createElement(AutomationPage));
     await flushEffects();
     await clickButton('新建');
+    await toggleVisualMonitor();
     await enterText('任务名称', 'Research review');
     await enterText(
       '输入要定时发送到 DeepSeek 的内容',
@@ -435,6 +442,7 @@ describe('sidepanel interactions', () => {
     await renderElement(React.createElement(AutomationPage));
     await flushEffects();
     await clickButton('新建');
+    await toggleVisualMonitor();
     await enterText('任务名称', 'Prepared workflow');
     await enterText('输入要定时发送到 DeepSeek 的内容', 'Run a workflow to research this source and evaluate it.');
 
@@ -587,7 +595,7 @@ describe('sidepanel interactions', () => {
     expect(createCall?.payload.promptOptions).toMatchObject({
       modelType: null,
       searchEnabled: false,
-      thinkingEnabled: true,
+      thinkingEnabled: false,
       refFileIds: [],
       visualMonitor: {
         enabled: true,
@@ -744,6 +752,14 @@ async function enterText(placeholder: string, value: string) {
 async function clickButton(label: string) {
   const button = Array.from(container.querySelectorAll('button'))
     .find((candidate) => candidate.textContent === label);
+  expect(button).toBeTruthy();
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+async function toggleVisualMonitor() {
+  const button = container.querySelector<HTMLButtonElement>('button.ds-switch');
   expect(button).toBeTruthy();
   await act(async () => {
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));

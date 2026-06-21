@@ -79,6 +79,7 @@ export function evaluateAutomationReadiness(
   const hasVisualMonitor = input.promptOptions.visualMonitor?.enabled === true;
   const refCount = input.promptOptions.refFileIds.length;
   const fileCount = (input.promptOptions.webVisionFiles?.length ?? 0) + Math.max(0, options.transientImageCount ?? 0);
+  const usesVisionRoute = input.promptOptions.modelType === 'vision' || refCount > 0 || fileCount > 0 || hasVisualMonitor;
 
   addIssueIf(!input.name.trim(), issues, 'name_missing', 'blocker');
   addIssueIf(!prompt, issues, 'prompt_missing', 'blocker');
@@ -90,10 +91,10 @@ export function evaluateAutomationReadiness(
   addIssueIf(shouldCheckLoopContract(promptLower, loopCoverage) && loopCoverage < 4, issues, 'loop_contract_weak', 'warning');
   addIssueIf(scheduled && !mentionsAny(promptLower, ['stop', '\u505c\u6b62', 'explicit confirmation', '\u660e\u786e\u786e\u8ba4']), issues, 'scheduled_without_stop_condition', 'warning');
   addIssueIf(scheduled && mentionsAny(promptLower, ['memory', '\u8bb0\u5fc6']) && mentionsAny(promptLower, ['delete', '\u5220\u9664', 'hygiene', '\u536b\u751f']), issues, 'scheduled_memory_review', 'warning');
-  addIssueIf(looksLikeResearch(promptLower) && !input.promptOptions.searchEnabled, issues, 'research_without_search', 'warning');
-  addIssueIf(looksLikeEvaluationLoop(promptLower) && !input.promptOptions.thinkingEnabled, issues, 'evaluation_without_thinking', 'warning');
+  addIssueIf(!usesVisionRoute && looksLikeResearch(promptLower) && !input.promptOptions.searchEnabled, issues, 'research_without_search', 'warning');
+  addIssueIf(!usesVisionRoute && looksLikeEvaluationLoop(promptLower) && !input.promptOptions.thinkingEnabled, issues, 'evaluation_without_thinking', 'warning');
   addIssueIf(input.promptOptions.modelType === 'vision' && refCount === 0 && fileCount === 0 && !hasVisualMonitor, issues, 'vision_without_visual_input', 'blocker');
-  addIssueIf(input.promptOptions.modelType === 'vision' && (input.promptOptions.searchEnabled || input.promptOptions.thinkingEnabled), issues, 'vision_flags_inconsistent', 'warning');
+  addIssueIf(usesVisionRoute && (input.promptOptions.searchEnabled || input.promptOptions.thinkingEnabled), issues, 'vision_flags_inconsistent', 'warning');
   addIssueIf(scheduled && hasVisualMonitor, issues, 'scheduled_visual_monitor', 'info');
 
   if (loopCoverage >= LOOP_TERMS.length) strengths.push('loop_contract');
@@ -161,7 +162,10 @@ export function applySafeAutomationReadinessFixes(
     next = { ...next, thinkingEnabled: true };
   }
   if (issueCodes.includes('vision_flags_inconsistent')) {
-    const shouldDisableVisionFlags = next.modelType === 'vision' || next.refFileIds.length > 0;
+    const shouldDisableVisionFlags = next.modelType === 'vision' ||
+      next.refFileIds.length > 0 ||
+      (next.webVisionFiles?.length ?? 0) > 0 ||
+      next.visualMonitor?.enabled === true;
     const route = createDeepSeekWebVisionRoute({
       modelType: next.modelType,
       refFileIds: next.refFileIds,
