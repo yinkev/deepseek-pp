@@ -43,10 +43,13 @@ const DATA_URL_PATTERN = /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[a-z0-9+/=_-]+/
 const BLOB_URL_PATTERN = /\bblob:[^\s"'<>)}\]]+/gi;
 const FILESYSTEM_URL_PATTERN = /\bfilesystem:[^\s"'<>)}\]]+/gi;
 const SIGNED_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]*(?:signed|token|secret|authorization|signature|x-amz-signature)[^\s"'<>)}\]]*/gi;
+const SIGNED_QUERY_PATTERN = /(?:[?&]|\b)(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token)=[^\s"'<>)}\]]+/gi;
 const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const AUTH_HEADER_PATTERN = /\bAuthorization["']?\s*[:=]\s*["']?(?:Basic|Bearer|Digest|Token)?\s*[A-Za-z0-9._~+/=-]+/gi;
 const COOKIE_HEADER_PATTERN = /\b(?:Cookie|Set-Cookie)["']?\s*[:=]\s*["']?[^"'{}\n\r]+/gi;
 const API_KEY_HEADER_PATTERN = /\b(?:x-api-key|api-key|api_key|apiKey|x-ds-pow-response)["']?\s*[:=]\s*["']?[^"'\s,;}]+/gi;
+const OPENAI_KEY_PATTERN = /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g;
+const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const VISION_REF_PATTERN = /\bfile-[A-Za-z0-9_-]{6,}\b/g;
 
 export function redactDurableToolValue(value: unknown): unknown {
@@ -83,9 +86,12 @@ export function redactDurableToolString(value: string | undefined): string | und
     .replace(BLOB_URL_PATTERN, REDACTED_MEDIA_VALUE)
     .replace(FILESYSTEM_URL_PATTERN, REDACTED_MEDIA_VALUE)
     .replace(SIGNED_URL_PATTERN, REDACTED_URL_VALUE)
+    .replace(SIGNED_QUERY_PATTERN, REDACTED_URL_VALUE)
     .replace(AUTH_HEADER_PATTERN, REDACTED_SECRET_VALUE)
     .replace(COOKIE_HEADER_PATTERN, REDACTED_SECRET_VALUE)
     .replace(API_KEY_HEADER_PATTERN, REDACTED_SECRET_VALUE)
+    .replace(OPENAI_KEY_PATTERN, REDACTED_SECRET_VALUE)
+    .replace(GOOGLE_API_KEY_PATTERN, REDACTED_SECRET_VALUE)
     .replace(BEARER_PATTERN, REDACTED_SECRET_VALUE)
     .replace(VISION_REF_PATTERN, REDACTED_REF_VALUE);
 }

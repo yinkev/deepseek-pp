@@ -3204,6 +3204,28 @@ async function executeAutomationWithContext(
   const sessionResolution = await resolveAutomationSessionPreference(request, personal);
   let workingRequest = sessionResolution.request;
   let recorder = createAutomationFlightRecorder(workingRequest, personal.sameSessionStrategy, sessionResolution.source);
+  if (workingRequest.preflight) {
+    recorder = appendAutomationFlightEvent(recorder, {
+      kind: 'readiness_preflight',
+      status: workingRequest.preflight.blockingIssueCodes.length > 0
+        ? 'error'
+        : workingRequest.preflight.autoFixedIssueCodes.length > 0
+          ? 'warning'
+          : 'success',
+      label: 'Readiness preflight',
+      summary: workingRequest.preflight.autoFixedIssueCodes.length > 0
+        ? 'Automation prompt options were safely adjusted before the run.'
+        : 'Automation readiness preflight completed.',
+      details: {
+        grade: workingRequest.preflight.grade,
+        score: workingRequest.preflight.score,
+        status: workingRequest.preflight.status,
+        issueCodes: workingRequest.preflight.issueCodes,
+        autoFixedIssueCodes: workingRequest.preflight.autoFixedIssueCodes,
+        blockingIssueCodes: workingRequest.preflight.blockingIssueCodes,
+      },
+    });
+  }
   recorder = appendAutomationFlightEvent(recorder, {
     kind: 'request_prepared',
     status: 'info',

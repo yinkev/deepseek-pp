@@ -470,6 +470,23 @@ function normalizeAutomationRunRequest(request: AutomationRunnerRequest | null):
     prompt: redactDurableToolString(request.prompt) ?? '',
     parentMessageId: normalizeStoredMessageId(request.parentMessageId),
     promptOptions: normalizePromptOptions(request.promptOptions),
+    preflight: normalizeAutomationRunPreflight(request.preflight),
+  };
+}
+
+function normalizeAutomationRunPreflight(
+  preflight: AutomationRunnerRequest['preflight'] | undefined,
+): AutomationRunnerRequest['preflight'] | undefined {
+  if (!preflight || typeof preflight !== 'object') return undefined;
+  return {
+    schemaVersion: 1,
+    checkedAt: finiteNumber(preflight.checkedAt) ?? Date.now(),
+    grade: isReadinessGrade(preflight.grade) ? preflight.grade : 'F',
+    score: Math.max(0, Math.min(100, finiteNumber(preflight.score) ?? 0)),
+    status: isReadinessStatus(preflight.status) ? preflight.status : 'blocked',
+    issueCodes: normalizePreflightCodeList(preflight.issueCodes),
+    blockingIssueCodes: normalizePreflightCodeList(preflight.blockingIssueCodes),
+    autoFixedIssueCodes: normalizePreflightCodeList(preflight.autoFixedIssueCodes),
   };
 }
 
@@ -524,7 +541,8 @@ function normalizeFlightEvent(event: unknown): AutomationFlightEvent | null {
 }
 
 function isFlightEventKind(value: unknown): value is AutomationFlightEventKind {
-  return value === 'request_prepared' ||
+  return value === 'readiness_preflight' ||
+    value === 'request_prepared' ||
     value === 'session_resolved' ||
     value === 'auth_resolved' ||
     value === 'visual_monitor_attached' ||
@@ -609,6 +627,26 @@ function isForbiddenFlightRecorderDetailKey(key: string): boolean {
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isReadinessGrade(value: unknown): value is NonNullable<AutomationRunnerRequest['preflight']>['grade'] {
+  return value === 'A' || value === 'B' || value === 'C' || value === 'D' || value === 'F';
+}
+
+function isReadinessStatus(value: unknown): value is NonNullable<AutomationRunnerRequest['preflight']>['status'] {
+  return value === 'ready' || value === 'needs_attention' || value === 'blocked';
+}
+
+function normalizePreflightCodeList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const codes: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const normalized = item.trim().replace(/[^a-z0-9_-]/gi, '').slice(0, 64);
+    if (normalized && !codes.includes(normalized)) codes.push(normalized);
+    if (codes.length >= 16) break;
+  }
+  return codes;
 }
 
 function normalizeAutomationError(error: AutomationErrorState | null | undefined): AutomationErrorState | null {

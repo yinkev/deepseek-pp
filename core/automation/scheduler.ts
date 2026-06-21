@@ -3,15 +3,24 @@ import {
   getAllAutomations,
   getAutomationById,
   reconcileStaleRuns,
+  updateAutomation,
   updateAutomationRun,
   updateAutomationRuntime,
 } from './store';
 import { calculateNextRunAt } from './schedule';
+import { createDeepSeekWebVisionRoute } from '../deepseek/web-vision';
+import {
+  evaluateAutomationReadiness,
+  type AutomationReadinessIssueCode,
+  type AutomationReadinessReport,
+} from './readiness';
 import type {
   Automation,
   AutomationErrorState,
   AutomationId,
+  AutomationPromptOptions,
   AutomationRun,
+  AutomationRunPreflight,
   AutomationRunnerRequest,
   AutomationRunnerResult,
   AutomationTrigger,
@@ -22,6 +31,12 @@ export const AUTOMATION_WAKE_INTERVAL_MINUTES = 1;
 export const AUTOMATION_RUN_TIMEOUT_MS = 180_000;
 export const AUTOMATION_MAX_ATTEMPTS = 2;
 export const AUTOMATION_RETRY_DELAY_MS = 10_000;
+
+const SAFE_PREFLIGHT_FIXES = new Set<AutomationReadinessIssueCode>([
+  'research_without_search',
+  'evaluation_without_thinking',
+  'vision_flags_inconsistent',
+]);
 
 type AutomationRunExecutor = (request: AutomationRunnerRequest) => Promise<AutomationRunnerResult>;
 
@@ -130,27 +145,49 @@ export async function runAutomation(options: RunAutomationOptions): Promise<Auto
   if (activeRunLocks.has(automation.id)) return null;
 
   activeRunLocks.add(automation.id);
-  const now = options.now ?? Date.now();
-  const runId = crypto.randomUUID();
-  const request: AutomationRunnerRequest = {
-    runId,
-    automationId: automation.id,
-    prompt: automation.prompt,
-    trigger: options.trigger,
-    chatSessionId: automation.deepseek.chatSessionId,
-    parentMessageId: automation.deepseek.parentMessageId,
-    promptOptions: automation.promptOptions,
-    requestedAt: now,
-  };
-
   try {
+    const now = options.now ?? Date.now();
+    const runId = crypto.randomUUID();
+    const preflight = await prepareAutomationRunPreflight(automation, now);
+    const workingAutomation = preflight.automation;
+    const request: AutomationRunnerRequest = {
+      runId,
+      automationId: workingAutomation.id,
+      prompt: workingAutomation.prompt,
+      trigger: options.trigger,
+      chatSessionId: workingAutomation.deepseek.chatSessionId,
+      parentMessageId: workingAutomation.deepseek.parentMessageId,
+      promptOptions: workingAutomation.promptOptions,
+      preflight: preflight.summary,
+      requestedAt: now,
+    };
+
     const run = await createAutomationRun({
       id: runId,
-      automationId: automation.id,
+      automationId: workingAutomation.id,
       trigger: options.trigger,
       scheduledFor: options.scheduledFor,
       request,
     });
+
+    if (preflight.blockingError) {
+      const skippedRun = await updateAutomationRun(run.id, {
+        status: 'skipped',
+        error: preflight.blockingError,
+        result: null,
+        startedAt: now,
+        completedAt: now,
+      });
+      await refreshAutomationAfterPreflightSkip(workingAutomation, preflight.blockingError, options.trigger, now);
+      return skippedRun ?? {
+        ...run,
+        status: 'skipped',
+        error: preflight.blockingError,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: Date.now(),
+      };
+    }
 
     await updateAutomationRun(run.id, {
       status: 'running',
@@ -158,8 +195,8 @@ export async function runAutomation(options: RunAutomationOptions): Promise<Auto
     });
 
     const runnerResult = await executeWithRetry(run, request, options.executor);
-    const completedRun = await completeRun(automation, run, runnerResult);
-    await refreshAutomationAfterRun(automation, runnerResult, options.trigger);
+    const completedRun = await completeRun(workingAutomation, run, runnerResult);
+    await refreshAutomationAfterRun(workingAutomation, runnerResult, options.trigger);
     return completedRun;
   } finally {
     activeRunLocks.delete(automation.id);
@@ -322,6 +359,130 @@ async function refreshAutomationAfterRun(
     nextRunAt,
     lastError: result.error,
   });
+}
+
+async function refreshAutomationAfterPreflightSkip(
+  automation: Automation,
+  error: AutomationErrorState,
+  trigger: AutomationTrigger,
+  completedAt: number,
+): Promise<void> {
+  const latestAutomation = await getAutomationById(automation.id);
+  if (!latestAutomation) return;
+  await updateAutomationRuntime(latestAutomation.id, {
+    lastRunAt: completedAt,
+    nextRunAt: trigger === 'schedule'
+      ? nextRunAfterCompletion(latestAutomation, completedAt)
+      : latestAutomation.nextRunAt,
+    lastError: error,
+  });
+}
+
+async function prepareAutomationRunPreflight(
+  automation: Automation,
+  now: number,
+): Promise<{
+  automation: Automation;
+  summary: AutomationRunPreflight;
+  blockingError: AutomationErrorState | null;
+}> {
+  let workingAutomation = automation;
+  let report = evaluateAutomationReadiness(workingAutomation);
+  const autoFixedIssueCodes = getSafePreflightFixes(report);
+
+  if (autoFixedIssueCodes.length > 0) {
+    const promptOptions = applySafePreflightFixes(workingAutomation.promptOptions, autoFixedIssueCodes);
+    const updated = await updateAutomation(workingAutomation.id, { promptOptions });
+    workingAutomation = updated ?? { ...workingAutomation, promptOptions };
+    report = evaluateAutomationReadiness(workingAutomation);
+  }
+
+  const blockingIssueCodes = getBlockingIssueCodes(report);
+  const summary = createAutomationRunPreflight(report, autoFixedIssueCodes, blockingIssueCodes, now);
+  const blockingError = blockingIssueCodes.length > 0
+    ? toAutomationError(
+      'automation_readiness_blocked',
+      `Automation readiness preflight blocked this run: ${blockingIssueCodes.join(', ')}.`,
+      'runner',
+      false,
+      now,
+      {
+        grade: summary.grade,
+        score: summary.score,
+        issueCodes: summary.issueCodes,
+        blockingIssueCodes: summary.blockingIssueCodes,
+        autoFixedIssueCodes: summary.autoFixedIssueCodes,
+      },
+    )
+    : null;
+
+  return { automation: workingAutomation, summary, blockingError };
+}
+
+function getSafePreflightFixes(report: AutomationReadinessReport): AutomationReadinessIssueCode[] {
+  return report.issues
+    .map((issue) => issue.code)
+    .filter((code): code is AutomationReadinessIssueCode => SAFE_PREFLIGHT_FIXES.has(code));
+}
+
+function getBlockingIssueCodes(report: AutomationReadinessReport): AutomationReadinessIssueCode[] {
+  return report.issues
+    .filter((issue) => issue.severity === 'blocker')
+    .map((issue) => issue.code);
+}
+
+function createAutomationRunPreflight(
+  report: AutomationReadinessReport,
+  autoFixedIssueCodes: readonly AutomationReadinessIssueCode[],
+  blockingIssueCodes: readonly AutomationReadinessIssueCode[],
+  checkedAt: number,
+): AutomationRunPreflight {
+  return {
+    schemaVersion: 1,
+    checkedAt,
+    grade: report.grade,
+    score: report.score,
+    status: report.status,
+    issueCodes: report.issues.map((issue) => issue.code),
+    blockingIssueCodes: [...blockingIssueCodes],
+    autoFixedIssueCodes: [...autoFixedIssueCodes],
+  };
+}
+
+function applySafePreflightFixes(
+  promptOptions: AutomationPromptOptions,
+  issueCodes: readonly AutomationReadinessIssueCode[],
+): AutomationPromptOptions {
+  let next: AutomationPromptOptions = {
+    ...promptOptions,
+    refFileIds: [...promptOptions.refFileIds],
+    webVisionFiles: promptOptions.webVisionFiles ? [...promptOptions.webVisionFiles] : [],
+    visualEvidencePacks: promptOptions.visualEvidencePacks ? [...promptOptions.visualEvidencePacks] : undefined,
+  };
+
+  if (issueCodes.includes('research_without_search')) {
+    next = { ...next, searchEnabled: true };
+  }
+  if (issueCodes.includes('evaluation_without_thinking')) {
+    next = { ...next, thinkingEnabled: true };
+  }
+  if (issueCodes.includes('vision_flags_inconsistent')) {
+    const shouldDisableVisionFlags = next.modelType === 'vision' || next.refFileIds.length > 0;
+    const route = createDeepSeekWebVisionRoute({
+      modelType: next.modelType,
+      refFileIds: next.refFileIds,
+      thinkingEnabled: next.thinkingEnabled,
+      searchEnabled: next.searchEnabled,
+    });
+    next = {
+      ...next,
+      ...route,
+      searchEnabled: shouldDisableVisionFlags ? false : route.searchEnabled,
+      thinkingEnabled: shouldDisableVisionFlags ? false : route.thinkingEnabled,
+    };
+  }
+
+  return next;
 }
 
 function nextRunAfterCompletion(automation: Automation, completedAt: number): number | null {

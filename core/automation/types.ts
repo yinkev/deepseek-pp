@@ -110,7 +110,19 @@ export interface AutomationRunnerRequest {
   promptOptions: AutomationPromptOptions;
   locale?: SupportedLocale;
   promptContext?: AutomationPromptContext;
+  preflight?: AutomationRunPreflight;
   requestedAt: number;
+}
+
+export interface AutomationRunPreflight {
+  schemaVersion: 1;
+  checkedAt: number;
+  grade: 'A' | 'B' | 'C' | 'D' | 'F';
+  score: number;
+  status: 'ready' | 'needs_attention' | 'blocked';
+  issueCodes: string[];
+  blockingIssueCodes: string[];
+  autoFixedIssueCodes: string[];
 }
 
 export interface AutomationPromptContext {
@@ -151,6 +163,7 @@ export interface AutomationRunnerFailure {
 export type AutomationRunnerResult = AutomationRunnerSuccess | AutomationRunnerFailure;
 
 export type AutomationFlightEventKind =
+  | 'readiness_preflight'
   | 'request_prepared'
   | 'session_resolved'
   | 'auth_resolved'
