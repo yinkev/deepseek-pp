@@ -1,5 +1,7 @@
 import type { Memory, ToolDescriptor, ToolExecutionRecord } from '../types';
 import type { SupportedLocale } from '../i18n';
+import type { DeepSeekWebVisionFileMetadata } from '../deepseek/web-vision';
+import type { DeepSeekWebVisionEvidencePack } from '../deepseek/vision-evidence';
 
 export type AutomationId = string;
 export type AutomationRunId = string;
@@ -45,6 +47,15 @@ export interface AutomationPromptOptions {
   searchEnabled: boolean;
   thinkingEnabled: boolean;
   refFileIds: string[];
+  webVisionFiles?: DeepSeekWebVisionFileMetadata[];
+  visualMonitor?: AutomationVisualMonitorOptions;
+  visualEvidencePacks?: DeepSeekWebVisionEvidencePack[];
+}
+
+export interface AutomationVisualMonitorOptions {
+  enabled: boolean;
+  source: 'browser_control_target';
+  includeEvidencePack: boolean;
 }
 
 export interface AutomationDeepSeekSession {

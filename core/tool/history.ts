@@ -1,4 +1,5 @@
 import type { ToolCall, ToolCallHistoryRecord, ToolExecutionTrigger, ToolResult } from './types';
+import { redactDurableToolString, redactDurableToolValue } from './redaction';
 
 const STORAGE_KEY = 'deepseek_pp_tool_history';
 const MAX_HISTORY = 200;
@@ -37,23 +38,29 @@ export async function clearToolCallHistory(): Promise<void> {
 }
 
 function sanitizeCall(call: ToolCall): ToolCall {
+  const raw = redactDurableToolString(call.raw) ?? '';
   return {
     ...call,
-    payload: truncateRecord(call.payload, 8_000),
-    raw: call.raw.length > 8_000 ? `${call.raw.slice(0, 8_000)}\n...[truncated]` : call.raw,
+    payload: truncateRecord(redactDurableToolValue(call.payload) as Record<string, unknown>, 8_000),
+    raw: raw.length > 8_000 ? `${raw.slice(0, 8_000)}\n...[truncated]` : raw,
   };
 }
 
 function sanitizeResult(result: ToolResult): ToolResult {
+  const output = result.output === undefined
+    ? undefined
+    : truncateString(JSON.stringify(redactDurableToolValue(result.output)), 16_000);
   return {
     ...result,
-    detail: truncateString(result.detail, 8_000),
-    output: result.output === undefined ? undefined : truncateString(JSON.stringify(result.output), 16_000),
+    detail: truncateString(redactDurableToolString(result.detail), 8_000),
+    output,
     error: result.error
       ? {
         ...result.error,
-        message: truncateString(result.error.message, 4_000) ?? '',
-        details: result.error.details ? truncateRecord(result.error.details, 4_000) : undefined,
+        message: truncateString(redactDurableToolString(result.error.message), 4_000) ?? '',
+        details: result.error.details
+          ? truncateRecord(redactDurableToolValue(result.error.details) as Record<string, unknown>, 4_000)
+          : undefined,
       }
       : undefined,
   };

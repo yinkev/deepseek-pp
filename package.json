@@ -43,6 +43,7 @@
     "smoke:shell": "node scripts/shell-smoke.mjs",
     "smoke:mcp": "node scripts/mcp-smoke.mjs",
     "verify:automation": "node scripts/automation-contract-smoke.mjs",
+    "verify:vision-regression": "node scripts/vision-regression-harness.mjs",
     "verify:mcp:mock": "node scripts/mcp-live-mock.mjs",
     "postinstall": "wxt prepare"
   },

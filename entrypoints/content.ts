@@ -79,9 +79,6 @@ import { startDeepSeekHistoryOrganizer, type HistoryOrganizerController } from '
 import { startDeepSeekProjectSidebarOrganizer, type ProjectSidebarOrganizerController } from './content/adapters/project-sidebar-organizer';
 import { startContentUxPolish, type ContentUxPolishController } from './content/adapters/ux-polish';
 import {
-  MULTIMODAL_MEDIA_IMAGE_MAX_BYTES,
-  MULTIMODAL_MEDIA_MAX_ITEMS_PER_TURN,
-  MULTIMODAL_MEDIA_VIDEO_INLINE_MAX_BYTES,
   buildMultimodalAnalysisPrompt,
   hasDeepSeekChatSessionRoute,
   selectMultimodalMediaRouteKeyForRequest,
@@ -92,10 +89,23 @@ import {
 } from '../core/multimodal/media';
 import {
   calculateMultimodalRequestAugmentationTimeoutMs,
-  canUseMultimodalMediaInput,
 } from '../core/multimodal';
 
-import { buildDeepSeekSessionUrl, createClientHeaders, rememberDeepSeekClientHeaders, saveClientHeadersToStorage } from '../core/deepseek/adapter';
+import {
+  buildDeepSeekSessionUrl,
+  createClientHeaders,
+  createPowHeaders,
+  forgetDeepSeekClientHeaders,
+  rememberDeepSeekClientHeaders,
+} from '../core/deepseek/adapter';
+import {
+  createDeepSeekWebVisionRoute,
+  DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+  normalizeDeepSeekWebVisionRefFileIds,
+  uploadDeepSeekWebVisionImage,
+} from '../core/deepseek/web-vision';
 import type {
   ConversationExportArtifact,
   ConversationExportProgress,
@@ -548,11 +558,7 @@ export default defineContentScript({
       } else if (message.type === 'TOOL_DESCRIPTORS_UPDATED') {
         syncToMainWorld(currentMemories, currentSkills, currentActivePreset, currentModelType, normalizeToolDescriptors(message.toolDescriptors), currentPromptSettings);
       } else if (message.type === 'MCP_SERVERS_UPDATED') {
-        if (Array.isArray(message.servers)) {
-          setMultimodalMediaInputEnabled(shouldEnableMultimodalMediaInput(message.servers));
-        } else {
-          void refreshMultimodalMediaInputAvailability();
-        }
+        void refreshMultimodalMediaInputAvailability();
         sendRuntimeMessage<ToolDescriptor[]>({ type: 'GET_TOOL_DESCRIPTORS' })
           .then((descriptors) => syncToMainWorld(currentMemories, currentSkills, currentActivePreset, currentModelType, normalizeToolDescriptors(descriptors), currentPromptSettings))
           .catch(() => undefined);
@@ -569,6 +575,9 @@ export default defineContentScript({
             error: error instanceof Error ? error.message : String(error),
           }));
         return true;
+      } else if (message.type === 'CLEAR_DEEPSEEK_CLIENT_HEADERS') {
+        forgetDeepSeekClientHeaders();
+        sendResponse({ ok: true });
       } else if (message.type === 'DEEPSEEK_EXPORT_PROGRESS') {
         updateConversationExportProgress(message.progress as ConversationExportProgress | undefined);
       } else if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') {
@@ -842,8 +851,11 @@ async function persistDeepSeekClientHeaders(capturedHeaders?: Record<string, str
     const headers = capturedHeaders ?? createClientHeaders();
     if (headers) {
       rememberDeepSeekClientHeaders(headers);
-      const saved = await saveClientHeadersToStorage();
-      if (!saved) return false;
+      const saved = await sendRuntimeMessage<{ ok?: boolean }>({
+        type: 'STORE_DEEPSEEK_CLIENT_HEADERS',
+        payload: { headers },
+      });
+      if (saved?.ok !== true) return false;
       // Ask the sidepanel to re-check login status.
       chrome.runtime.sendMessage({ type: 'AUTH_STATUS_CHANGED' }).catch(() => {});
       return true;
@@ -1369,21 +1381,7 @@ function getCurrentConversationTitle(): string {
 }
 
 async function refreshMultimodalMediaInputAvailability() {
-  try {
-    const servers = await sendRuntimeMessageStrict<McpServerConfig[]>({ type: 'GET_MCP_SERVERS' });
-    setMultimodalMediaInputEnabled(shouldEnableMultimodalMediaInput(servers));
-  } catch (error) {
-    setMultimodalMediaInputEnabled(false);
-    if (hasLiveExtensionContext()) {
-      console.warn('[DeepSeek++] Failed to load MCP servers for multimodal media input.', error);
-    }
-  }
-}
-
-function shouldEnableMultimodalMediaInput(servers: unknown): boolean {
-  return Array.isArray(servers) &&
-    servers.some((server) => Boolean(server && typeof server === 'object') &&
-      canUseMultimodalMediaInput(server as McpServerConfig));
+  setMultimodalMediaInputEnabled(true);
 }
 
 function setMultimodalMediaInputEnabled(enabled: boolean) {
@@ -1456,7 +1454,7 @@ function mountMultimodalMediaControls() {
   const fileInput = document.createElement('input');
   fileInput.id = MULTIMODAL_MEDIA_FILE_INPUT_ID;
   fileInput.type = 'file';
-  fileInput.accept = 'image/*,video/*';
+  fileInput.accept = 'image/png,image/jpeg,image/webp,image/gif';
   fileInput.multiple = true;
   fileInput.className = 'dpp-mm-file-input';
   fileInput.addEventListener('click', stopMultimodalMediaFileInputEvent, true);
@@ -1523,10 +1521,9 @@ async function openMultimodalMediaPicker(fileInput: HTMLInputElement) {
       excludeAcceptAllOption: false,
       types: [
         {
-          description: 'Images and videos',
+          description: 'Images',
           accept: {
             'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif'],
-            'video/*': ['.mp4', '.mov', '.webm', '.m4v'],
           },
         },
       ],
@@ -1639,7 +1636,7 @@ function renderMultimodalMediaTray() {
     } else {
       const preview = document.createElement('span');
       preview.className = 'dpp-mm-preview dpp-mm-preview-file';
-      preview.textContent = item.kind === 'video' ? 'V' : 'I';
+      preview.textContent = 'I';
       chip.append(preview);
     }
 
@@ -1674,9 +1671,9 @@ async function addPendingMultimodalFiles(files: readonly File[], source: 'picker
   if (mediaFiles.length === 0) return;
 
   const existing = getCurrentRoutePendingMultimodalMedia().length;
-  if (existing + mediaFiles.length > MULTIMODAL_MEDIA_MAX_ITEMS_PER_TURN) {
+  if (existing + mediaFiles.length > DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN) {
     setMultimodalMediaStatus(contentT('content.multimodalMedia.tooMany', {
-      count: MULTIMODAL_MEDIA_MAX_ITEMS_PER_TURN,
+      count: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
     }), 'error');
     return;
   }
@@ -1801,6 +1798,11 @@ async function consumePendingMultimodalMediaForRequest(
   if (!originalPrompt.trim()) {
     throw new Error(contentT('content.multimodalMedia.emptyPrompt'));
   }
+
+  if (media.every((item) => item.kind === 'image')) {
+    return await consumePendingDeepSeekWebVisionImages(body, media, options);
+  }
+
   options.onLongRunning?.(calculateMultimodalRequestAugmentationTimeoutMs(media));
 
   try {
@@ -1836,25 +1838,65 @@ async function consumePendingMultimodalMediaForRequest(
   }
 }
 
-async function readPendingMultimodalMediaInput(item: PendingMultimodalMedia): Promise<MultimodalMediaInput> {
-  if (item.kind === 'image') {
-    return {
-      id: item.id,
-      kind: item.kind,
-      name: item.name,
-      mimeType: item.mimeType,
-      sizeBytes: item.sizeBytes,
-      dataUrl: await readFileAsDataUrl(item.file),
-    };
-  }
+async function consumePendingDeepSeekWebVisionImages(
+  body: Record<string, unknown>,
+  media: PendingMultimodalMedia[],
+  options: { onLongRunning?: (timeoutMs: number) => void } = {},
+): Promise<string> {
+  options.onLongRunning?.(calculateMultimodalRequestAugmentationTimeoutMs(media));
 
+  try {
+    multimodalMediaBusy = true;
+    renderMultimodalMediaTray();
+    setMultimodalMediaStatus(contentT('content.multimodalMedia.analyzing', { count: media.length }), 'info');
+
+    const clientHeaders = createClientHeaders();
+    const powWasmUrl = chrome.runtime.getURL(DEEPSEEK_POW_WASM_PATH);
+    const uploads = [];
+    for (const item of media) {
+      uploads.push(await uploadDeepSeekWebVisionImage({
+        file: item.file,
+        clientHeaders,
+        createPowHeaders: (targetPath) => createPowHeaders(clientHeaders, { wasmUrl: powWasmUrl, targetPath }),
+      }));
+    }
+    const existingRefFileIds = Array.isArray(body.ref_file_ids) ? body.ref_file_ids : [];
+    const route = createDeepSeekWebVisionRoute({
+      modelType: typeof body.model_type === 'string' ? body.model_type : currentModelType,
+      refFileIds: normalizeDeepSeekWebVisionRefFileIds([
+        ...existingRefFileIds,
+        ...uploads.map((upload) => upload.refFileId),
+      ]),
+      thinkingEnabled: body.thinking_enabled === true,
+      searchEnabled: body.search_enabled === true,
+    });
+
+    body.model_type = route.modelType;
+    body.ref_file_ids = route.refFileIds;
+    body.thinking_enabled = route.thinkingEnabled;
+    body.search_enabled = route.searchEnabled;
+
+    clearPendingMultimodalMediaItems(media);
+    setMultimodalMediaStatus(contentT('content.multimodalMedia.analyzed', { count: uploads.length }), 'info');
+    return JSON.stringify(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setMultimodalMediaStatus(contentT('content.multimodalMedia.failed', { message }), 'error');
+    throw error;
+  } finally {
+    multimodalMediaBusy = false;
+    renderMultimodalMediaTray();
+  }
+}
+
+async function readPendingMultimodalMediaInput(item: PendingMultimodalMedia): Promise<MultimodalMediaInput> {
   return {
     id: item.id,
     kind: item.kind,
     name: item.name,
     mimeType: item.mimeType,
     sizeBytes: item.sizeBytes,
-    base64Data: await readFileAsBase64(item.file),
+    dataUrl: await readFileAsDataUrl(item.file),
   };
 }
 
@@ -1870,27 +1912,21 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-async function readFileAsBase64(file: File): Promise<string> {
-  const dataUrl = await readFileAsDataUrl(file);
-  const comma = dataUrl.indexOf(',');
-  return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
-}
-
 function classifyMultimodalFile(file: File): MultimodalMediaKind | null {
   if (file.type.startsWith('image/')) return 'image';
-  if (file.type.startsWith('video/')) return 'video';
   return null;
 }
 
 function validateMultimodalFile(file: File, kind: MultimodalMediaKind): string | null {
   if (!file.type) return contentT('content.multimodalMedia.unsupported', { name: file.name || 'media' });
-  const maxBytes = kind === 'image' ? MULTIMODAL_MEDIA_IMAGE_MAX_BYTES : MULTIMODAL_MEDIA_VIDEO_INLINE_MAX_BYTES;
-  if (file.size > maxBytes) {
+  if (kind !== 'image') return contentT('content.multimodalMedia.unsupported', { name: file.name || 'media' });
+  if (!DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(file.type)) {
+    return contentT('content.multimodalMedia.unsupported', { name: file.name || 'media' });
+  }
+  if (file.size > DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES) {
     return contentT(
-      kind === 'image'
-        ? 'content.multimodalMedia.imageTooLarge'
-        : 'content.multimodalMedia.videoTooLarge',
-      { name: file.name || 'media', limit: formatMultimodalMediaBytes(maxBytes) },
+      'content.multimodalMedia.imageTooLarge',
+      { name: file.name || 'media', limit: formatMultimodalMediaBytes(DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES) },
     );
   }
   return null;

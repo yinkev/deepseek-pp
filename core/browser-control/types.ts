@@ -13,6 +13,7 @@ export const BROWSER_CONTROL_TOOL_NAMES = [
   'browser_select_tab',
   'browser_close_tab',
   'browser_snapshot',
+  'browser_capture_screenshot',
   'browser_click',
   'browser_hover',
   'browser_fill',
@@ -39,9 +40,21 @@ export const BROWSER_CONTROL_PROVIDER: ToolProviderIdentity = {
 export interface BrowserControlSettings {
   enabled: boolean;
   targetTabId: number | null;
+  lastTargetHint: BrowserControlTargetHint | null;
   includeSnapshotAfterActions: boolean;
+  allowVisionCapture: boolean;
+  verifyAfterActions: boolean;
+  collectEvidencePacks: boolean;
+  debugDistillerEnabled: boolean;
   maxSnapshotNodes: number;
   maxSnapshotTextBytes: number;
+}
+
+export interface BrowserControlTargetHint {
+  windowId: number | null;
+  origin: string;
+  title: string;
+  updatedAt: number;
 }
 
 export interface BrowserControlTarget {
@@ -55,6 +68,11 @@ export interface BrowserControlTarget {
   url: string;
   controllable: boolean;
   reason?: string;
+}
+
+export interface BrowserControlTargetPreparation {
+  target: BrowserControlTarget | null;
+  status: 'ready' | 'reacquired' | 'selected_active' | 'missing' | 'unsupported' | 'not_controllable';
 }
 
 export interface BrowserControlState {
@@ -79,6 +97,15 @@ export interface BrowserActionResult {
     details?: Record<string, unknown>;
   };
   snapshot?: BrowserSnapshotResult;
+}
+
+export interface BrowserScreenshotCaptureResult {
+  tabId: number;
+  windowId: number;
+  mimeType: 'image/png';
+  dataBase64: string;
+  sizeBytes: number;
+  capturedAt: number;
 }
 
 export interface BrowserSnapshotNode {

@@ -8,6 +8,8 @@ import type {
   BrowserControlSettings,
   BrowserControlState,
   BrowserControlTarget,
+  BrowserControlTargetPreparation,
+  BrowserScreenshotCaptureResult,
   BrowserControlToolName,
   BrowserSnapshotResult,
 } from './types';
@@ -33,6 +35,10 @@ export type ElementPoint = {
   height: number;
   visible: boolean;
 };
+
+export interface BrowserControlExecuteOptions {
+  requireExplicitTarget?: boolean;
+}
 
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 const MAX_WAIT_TIMEOUT_MS = 60_000;
@@ -122,17 +128,102 @@ export class BrowserControlService {
     if (current.targetTabId !== tabId && this.connection?.attached) {
       await this.connection.detach();
     }
-    await saveBrowserControlSettings({ targetTabId: tabId });
+    await saveBrowserControlSettings({
+      targetTabId: tabId,
+      lastTargetHint: createTargetHint(target, this.now()),
+    });
     return target;
+  }
+
+  async preparePersonalTarget(options: {
+    allowActiveFallback?: boolean;
+  } = {}): Promise<BrowserControlTargetPreparation> {
+    if (!this.isSupported()) {
+      return { target: null, status: 'unsupported' };
+    }
+
+    const settings = await getBrowserControlSettings();
+    if (typeof settings.targetTabId === 'number') {
+      try {
+        const target = await this.getTargetOrThrow(settings.targetTabId);
+        if (target.controllable && !isDeepSeekChatTarget(target.url)) {
+          await saveBrowserControlSettings({ lastTargetHint: createTargetHint(target, this.now()) });
+          return { target, status: 'ready' };
+        }
+        return { target, status: 'not_controllable' };
+      } catch {
+        // A stale tab id is expected after browser reloads; try the saved hint.
+      }
+    }
+
+    const targets = await this.listTargets();
+    const hinted = findHintedTarget(targets, settings.lastTargetHint);
+    if (hinted) {
+      await this.setTarget(hinted.id);
+      return { target: hinted, status: 'reacquired' };
+    }
+
+    if (options.allowActiveFallback) {
+      const active = targets.find((target) =>
+        target.currentWindow && target.controllable && !isDeepSeekChatTarget(target.url)
+      );
+      if (active) {
+        await this.setTarget(active.id);
+        return { target: active, status: 'selected_active' };
+      }
+    }
+
+    return { target: null, status: 'missing' };
   }
 
   async detach(): Promise<void> {
     await this.connection?.detach();
   }
 
+  async captureScreenshotForVision(): Promise<BrowserScreenshotCaptureResult> {
+    const settings = await getBrowserControlSettings();
+    if (!settings.enabled) {
+      throw new BrowserControlError(
+        'browser_control_disabled',
+        'Browser control is disabled. Enable it in the DeepSeek++ side panel before capturing the controlled tab.',
+      );
+    }
+    if (!settings.allowVisionCapture) {
+      throw new BrowserControlError(
+        'browser_vision_capture_disabled',
+        'Browser visual capture is disabled. Enable Visual capture on the Browser Control page before using this tool.',
+      );
+    }
+    const tabId = await this.requireSelectedTargetTabId(settings);
+    await this.ensureAttached(tabId);
+    const tab = await this.requireChromeApi().tabs.get(tabId);
+    const captured = await this.connection!.sendCommand<{ data?: unknown }>('Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    if (typeof captured.data !== 'string' || captured.data.length === 0) {
+      throw new BrowserControlError(
+        'browser_capture_failed',
+        'Chrome did not return screenshot data for the controlled tab.',
+        { retryable: true },
+      );
+    }
+
+    return {
+      tabId,
+      windowId: tab.windowId,
+      mimeType: 'image/png',
+      dataBase64: captured.data,
+      sizeBytes: base64ByteLength(captured.data),
+      capturedAt: this.now(),
+    };
+  }
+
   async execute(
     name: BrowserControlToolName,
     payload: Record<string, unknown>,
+    options: BrowserControlExecuteOptions = {},
   ): Promise<BrowserActionResult> {
     const started = this.now();
     try {
@@ -144,7 +235,8 @@ export class BrowserControlService {
         );
       }
 
-      const result = await this.executeEnabled(name, payload, settings);
+      const executionSettings = await this.prepareExecutionSettings(name, payload, settings, options);
+      const result = await this.executeEnabled(name, payload, executionSettings);
       this.lastError = null;
       return {
         ...result,
@@ -217,6 +309,22 @@ export class BrowserControlService {
     }
   }
 
+  private async prepareExecutionSettings(
+    name: BrowserControlToolName,
+    payload: Record<string, unknown>,
+    settings: BrowserControlSettings,
+    options: BrowserControlExecuteOptions,
+  ): Promise<BrowserControlSettings> {
+    if (!options.requireExplicitTarget || !requiresSelectedTarget(name, payload)) {
+      return settings;
+    }
+    const targetTabId = await this.requireSelectedTargetTabId(
+      settings,
+      'Select an explicit Browser Control target before running automation browser actions.',
+    );
+    return { ...settings, targetTabId };
+  }
+
   private async navigate(
     payload: Record<string, unknown>,
     settings: BrowserControlSettings,
@@ -233,7 +341,7 @@ export class BrowserControlService {
       if (this.connection?.attached) {
         await this.connection.detach();
       }
-      await saveBrowserControlSettings({ targetTabId: tabId });
+      await saveBrowserControlSettings({ targetTabId: tabId, lastTargetHint: createTabHint(tab, this.now()) });
     } else {
       tabId = await this.ensureTargetTabId(settings, { createIfMissing: true, navigateUrl: url });
       await this.ensureAttached(tabId);
@@ -603,14 +711,14 @@ export class BrowserControlService {
     const active = targets.find((target) => target.currentWindow && target.controllable)
       ?? targets.find((target) => target.controllable);
     if (active) {
-      await saveBrowserControlSettings({ targetTabId: active.id });
+      await saveBrowserControlSettings({ targetTabId: active.id, lastTargetHint: createTargetHint(active, this.now()) });
       return active.id;
     }
 
     if (options.createIfMissing && options.navigateUrl) {
       const tab = await this.requireChromeApi().tabs.create({ url: options.navigateUrl, active: true });
       if (typeof tab.id === 'number') {
-        await saveBrowserControlSettings({ targetTabId: tab.id });
+        await saveBrowserControlSettings({ targetTabId: tab.id, lastTargetHint: createTabHint(tab, this.now()) });
         return tab.id;
       }
     }
@@ -618,6 +726,28 @@ export class BrowserControlService {
     throw new BrowserControlError('browser_target_missing', 'No controllable browser tab is available.', {
       retryable: true,
     });
+  }
+
+  private async requireSelectedTargetTabId(
+    settings: BrowserControlSettings,
+    message = 'Select an explicit Browser Control target before capturing visual evidence.',
+  ): Promise<number> {
+    if (typeof settings.targetTabId !== 'number') {
+      throw new BrowserControlError(
+        'browser_target_not_selected',
+        message,
+        { retryable: true },
+      );
+    }
+    const target = await this.getTargetOrThrow(settings.targetTabId);
+    if (!target.controllable) {
+      throw new BrowserControlError(
+        'browser_target_not_controllable',
+        target.reason ?? 'The selected Browser Control target cannot be captured.',
+        { retryable: true },
+      );
+    }
+    return settings.targetTabId;
   }
 
   private async ensureAttached(tabId: number): Promise<void> {
@@ -931,6 +1061,23 @@ function readOptionalBoolean(
   return value;
 }
 
+function requiresSelectedTarget(
+  name: BrowserControlToolName,
+  payload: Record<string, unknown>,
+): boolean {
+  switch (name) {
+    case 'browser_list_tabs':
+    case 'browser_select_tab':
+      return false;
+    case 'browser_navigate':
+      return readOptionalBoolean(payload, 'newTab', true) === false;
+    case 'browser_close_tab':
+      return !Object.prototype.hasOwnProperty.call(payload, 'tabId');
+    default:
+      return true;
+  }
+}
+
 function readString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
 }
@@ -1035,10 +1182,82 @@ function targetToJson(target: BrowserControlTarget): Record<string, unknown> {
   };
 }
 
+function createTargetHint(target: BrowserControlTarget, updatedAt: number): BrowserControlSettings['lastTargetHint'] {
+  const origin = safeUrlOrigin(target.url);
+  if (!origin) return null;
+  return {
+    windowId: target.windowId,
+    origin,
+    title: target.title.slice(0, 160),
+    updatedAt,
+  };
+}
+
+function createTabHint(tab: chrome.tabs.Tab, updatedAt: number): BrowserControlSettings['lastTargetHint'] {
+  const origin = safeUrlOrigin(tab.url ?? tab.pendingUrl ?? '');
+  if (!origin) return null;
+  return {
+    windowId: typeof tab.windowId === 'number' ? tab.windowId : null,
+    origin,
+    title: (tab.title ?? '').slice(0, 160),
+    updatedAt,
+  };
+}
+
+function findHintedTarget(
+  targets: BrowserControlTarget[],
+  hint: BrowserControlSettings['lastTargetHint'],
+): BrowserControlTarget | null {
+  if (!hint) return null;
+  const candidates = targets.filter((target) =>
+    target.controllable && !isDeepSeekChatTarget(target.url) && safeUrlOrigin(target.url) === hint.origin
+  );
+  if (candidates.length === 0) return null;
+
+  const sameWindow = candidates.filter((target) => hint.windowId !== null && target.windowId === hint.windowId);
+  const sameTitle = candidates.filter((target) => hint.title && target.title === hint.title);
+  const preferred = sameWindow.length === 1
+    ? sameWindow[0]
+    : sameTitle.length === 1
+      ? sameTitle[0]
+      : candidates.length === 1
+        ? candidates[0]
+        : null;
+  return preferred ?? null;
+}
+
+function safeUrlOrigin(url: string): string {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.origin;
+    }
+    if (parsed.protocol === 'file:') return 'file://';
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function isDeepSeekChatTarget(url: string): boolean {
+  try {
+    return new URL(url).hostname === 'chat.deepseek.com';
+  } catch {
+    return false;
+  }
+}
+
 function normalizeError(error: unknown): BrowserControlError {
   if (error instanceof BrowserControlError) return error;
   const message = error instanceof Error ? error.message : String(error);
   return new BrowserControlError('browser_control_failed', message, { retryable: true });
+}
+
+function base64ByteLength(value: string): number {
+  const normalized = value.replace(/\s+/g, '');
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }
 
 function toJsonSafe(value: unknown): unknown {

@@ -4,9 +4,14 @@ import {
 } from './types';
 
 export const DEFAULT_BROWSER_CONTROL_SETTINGS: BrowserControlSettings = {
-  enabled: false,
+  enabled: true,
   targetTabId: null,
+  lastTargetHint: null,
   includeSnapshotAfterActions: true,
+  allowVisionCapture: true,
+  verifyAfterActions: true,
+  collectEvidencePacks: true,
+  debugDistillerEnabled: true,
   maxSnapshotNodes: 400,
   maxSnapshotTextBytes: 24_000,
 };
@@ -23,11 +28,16 @@ export function normalizeBrowserControlSettings(input: unknown): BrowserControlS
 
   const partial = input as Partial<BrowserControlSettings>;
   return {
-    enabled: partial.enabled === true,
+    enabled: partial.enabled !== false,
     targetTabId: typeof partial.targetTabId === 'number' && Number.isInteger(partial.targetTabId)
       ? partial.targetTabId
       : null,
+    lastTargetHint: normalizeTargetHint(partial.lastTargetHint),
     includeSnapshotAfterActions: partial.includeSnapshotAfterActions !== false,
+    allowVisionCapture: partial.allowVisionCapture !== false,
+    verifyAfterActions: partial.verifyAfterActions !== false,
+    collectEvidencePacks: partial.collectEvidencePacks !== false,
+    debugDistillerEnabled: partial.debugDistillerEnabled !== false,
     maxSnapshotNodes: clampInteger(
       partial.maxSnapshotNodes,
       DEFAULT_BROWSER_CONTROL_SETTINGS.maxSnapshotNodes,
@@ -69,4 +79,21 @@ function clampInteger(
 ): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function normalizeTargetHint(value: unknown): BrowserControlSettings['lastTargetHint'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const hint = value as Record<string, unknown>;
+  const origin = typeof hint.origin === 'string' ? hint.origin.trim() : '';
+  if (!origin || origin.length > 240) return null;
+  const title = typeof hint.title === 'string' ? hint.title.trim().slice(0, 160) : '';
+  const updatedAt = typeof hint.updatedAt === 'number' && Number.isFinite(hint.updatedAt)
+    ? Math.max(0, Math.floor(hint.updatedAt))
+    : 0;
+  return {
+    windowId: typeof hint.windowId === 'number' && Number.isInteger(hint.windowId) ? hint.windowId : null,
+    origin,
+    title,
+    updatedAt,
+  };
 }

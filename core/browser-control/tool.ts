@@ -3,6 +3,7 @@ import type { ToolCall, ToolDescriptor, ToolProviderIdentity, ToolResult } from 
 import { getCurrentBrowserExtensionEnvironment, isCapabilitySupported } from '../platform';
 import { getBrowserControlSettings } from './settings';
 import { browserControlService } from './service';
+import type { BrowserControlExecuteOptions } from './service';
 import {
   BROWSER_CONTROL_PROVIDER,
   BROWSER_CONTROL_TOOL_NAMES,
@@ -12,6 +13,10 @@ import {
 } from './types';
 
 export { browserControlService };
+export {
+  createBrowserActVerifyPrompt,
+  shouldVerifyAfterBrowserAction,
+} from './act-verify';
 export {
   BROWSER_CONTROL_PROVIDER,
   BROWSER_CONTROL_TOOL_NAMES,
@@ -53,6 +58,10 @@ const COPY_KEYS: Record<BrowserControlToolName, {
   browser_snapshot: {
     title: 'tool.browser.snapshotTitle',
     description: 'tool.browser.snapshotDescription',
+  },
+  browser_capture_screenshot: {
+    title: 'tool.browser.captureScreenshotTitle',
+    description: 'tool.browser.captureScreenshotDescription',
   },
   browser_click: {
     title: 'tool.browser.clickTitle',
@@ -109,11 +118,19 @@ export function createBrowserControlToolProviderIdentity(
   };
 }
 
+export interface BrowserControlToolDescriptorOptions {
+  includeVisionCapture?: boolean;
+}
+
 export function createBrowserControlToolDescriptors(
   locale: SupportedLocale,
+  options: BrowserControlToolDescriptorOptions = { includeVisionCapture: true },
 ): ToolDescriptor[] {
   const provider = createBrowserControlToolProviderIdentity(locale);
-  return BROWSER_CONTROL_TOOL_NAMES.map((name) => ({
+  const names = options.includeVisionCapture === false
+    ? BROWSER_CONTROL_TOOL_NAMES.filter((name) => name !== 'browser_capture_screenshot')
+    : BROWSER_CONTROL_TOOL_NAMES;
+  return names.map((name) => ({
     id: `local:${BROWSER_CONTROL_PROVIDER.id}:${name}`,
     provider,
     name,
@@ -126,11 +143,13 @@ export function createBrowserControlToolDescriptors(
       enabled: true,
       risk: riskForTool(name),
       timeoutMs: timeoutForTool(name),
-      maxResultBytes: name === 'browser_snapshot' ? 40_000 : 60_000,
+      maxResultBytes: name === 'browser_snapshot' ? 40_000 : name === 'browser_capture_screenshot' ? 12_000 : 60_000,
     },
     annotations: {
-      requires: 'chrome.debugger,tabs',
-      output: 'Text Accessibility Tree snapshot; tab group names are included only when the browser exposes them.',
+      requires: name === 'browser_capture_screenshot' ? 'chrome.debugger,tabs,DeepSeek Web Vision' : 'chrome.debugger,tabs',
+      output: name === 'browser_capture_screenshot'
+        ? 'DeepSeek Web Vision ref_file_ids and safe screenshot metadata; raw image bytes are never returned as tool text.'
+        : 'Text Accessibility Tree snapshot; tab group names are included only when the browser exposes them.',
     },
   }));
 }
@@ -142,6 +161,18 @@ export async function shouldExposeBrowserControlTools(): Promise<boolean> {
   return settings.enabled;
 }
 
+export async function getEnabledBrowserControlToolDescriptors(
+  locale: SupportedLocale,
+): Promise<ToolDescriptor[]> {
+  const environment = getCurrentBrowserExtensionEnvironment();
+  if (!isCapabilitySupported(environment, 'browserControl')) return [];
+  const settings = await getBrowserControlSettings();
+  if (!settings.enabled) return [];
+  return createBrowserControlToolDescriptors(locale, {
+    includeVisionCapture: settings.allowVisionCapture,
+  });
+}
+
 export async function getBrowserControlState(): Promise<BrowserControlState> {
   return browserControlService.getState();
 }
@@ -149,6 +180,7 @@ export async function getBrowserControlState(): Promise<BrowserControlState> {
 export async function executeBrowserControlToolCall(
   call: ToolCall,
   locale: SupportedLocale,
+  options: BrowserControlExecuteOptions = {},
 ): Promise<ToolResult> {
   if (!isBrowserControlToolName(call.name)) {
     return {
@@ -165,7 +197,7 @@ export async function executeBrowserControlToolCall(
   }
 
   const startedAt = Date.now();
-  const result = await browserControlService.execute(call.name, call.payload);
+  const result = await browserControlService.execute(call.name, call.payload, options);
   const completedAt = Date.now();
   return {
     ok: result.ok,
@@ -264,6 +296,7 @@ function schemaForTool(name: BrowserControlToolName): ToolDescriptor['inputSchem
     case 'browser_refresh':
     case 'browser_list_tabs':
     case 'browser_snapshot':
+    case 'browser_capture_screenshot':
       return objectSchema({});
   }
 }
@@ -286,6 +319,7 @@ function riskForTool(name: BrowserControlToolName): ToolDescriptor['execution'][
   }
   if (
     name === 'browser_navigate' ||
+    name === 'browser_capture_screenshot' ||
     name === 'browser_click' ||
     name === 'browser_fill' ||
     name === 'browser_fill_form' ||
@@ -300,7 +334,7 @@ function riskForTool(name: BrowserControlToolName): ToolDescriptor['execution'][
 
 function timeoutForTool(name: BrowserControlToolName): number {
   if (name === 'browser_wait_for') return 65_000;
-  if (name === 'browser_snapshot') return 15_000;
+  if (name === 'browser_snapshot' || name === 'browser_capture_screenshot') return 15_000;
   if (name === 'browser_navigate') return 20_000;
   return 10_000;
 }

@@ -227,9 +227,8 @@ function parseJson(text: string, endpoint: string, status: number): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    const preview = text.replace(/\s+/g, ' ').trim().slice(0, 200);
     throw new DeepSeekExportEndpointError(
-      `DeepSeek export endpoint ${endpoint} returned non-JSON HTTP ${status}: ${preview}`,
+      `DeepSeek export endpoint ${endpoint} returned non-JSON HTTP ${status}.`,
       { endpoint, status, retryable: status >= 500, code: 'deepseek_endpoint_non_json' },
     );
   }

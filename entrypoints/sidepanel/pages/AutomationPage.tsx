@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Automation,
   AutomationCreateInput,
@@ -8,6 +8,14 @@ import type {
   AutomationScheduleKind,
 } from '../../../core/automation/types';
 import { validateAutomationSchedule } from '../../../core/automation/schedule';
+import {
+  DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+  createDeepSeekWebVisionRoute,
+  normalizeDeepSeekWebVisionRefFileIds,
+  serializeDeepSeekWebVisionFile,
+} from '../../../core/deepseek/web-vision';
 import type { SupportedLocale } from '../../../core/i18n';
 import PageIntro from '../components/PageIntro';
 import { SkeletonList, ToggleRow, useBanner, useConfirm } from '../components/settings/primitives';
@@ -20,6 +28,12 @@ const DEFAULT_PROMPT_OPTIONS: AutomationPromptOptions = {
   searchEnabled: false,
   thinkingEnabled: false,
   refFileIds: [],
+  webVisionFiles: [],
+  visualMonitor: {
+    enabled: true,
+    source: 'browser_control_target',
+    includeEvidencePack: true,
+  },
 };
 
 type FormState = {
@@ -31,6 +45,16 @@ type FormState = {
   modelType: string;
   searchEnabled: boolean;
   thinkingEnabled: boolean;
+  refFileIdsText: string;
+  visualMonitorEnabled: boolean;
+};
+
+type AutomationImageAttachment = {
+  id: string;
+  file: File;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
 };
 
 const EMPTY_FORM: FormState = {
@@ -42,6 +66,8 @@ const EMPTY_FORM: FormState = {
   modelType: '',
   searchEnabled: false,
   thinkingEnabled: false,
+  refFileIdsText: '',
+  visualMonitorEnabled: true,
 };
 
 export default function AutomationPage() {
@@ -51,6 +77,7 @@ export default function AutomationPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Automation | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [imageAttachments, setImageAttachments] = useState<AutomationImageAttachment[]>([]);
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const banner = useBanner();
@@ -107,6 +134,7 @@ export default function AutomationPage() {
   const startCreate = () => {
     setEditing(null);
     setForm(EMPTY_FORM);
+    setImageAttachments([]);
     banner.clear();
     setShowForm((prev) => !prev);
   };
@@ -114,12 +142,16 @@ export default function AutomationPage() {
   const startEdit = (automation: Automation) => {
     setEditing(automation);
     setForm(fromAutomation(automation));
+    setImageAttachments([]);
     banner.clear();
     setShowForm(true);
   };
 
   const save = async () => {
     const payload = toAutomationInput(form);
+    if (editing?.promptOptions.webVisionFiles?.length) {
+      payload.promptOptions.webVisionFiles = editing.promptOptions.webVisionFiles;
+    }
     if (!payload.name || !payload.prompt) {
       banner.show('error', t('sidepanel.automationPage.namePromptRequired'));
       return;
@@ -134,12 +166,25 @@ export default function AutomationPage() {
       return;
     }
 
+    const images = [];
+    try {
+      for (const attachment of imageAttachments) {
+        images.push(await serializeDeepSeekWebVisionFile(attachment.file));
+      }
+    } catch (err) {
+      banner.show('error', err instanceof Error ? err.message : String(err));
+      return;
+    }
+
     const response = editing
       ? await chrome.runtime.sendMessage({
         type: 'UPDATE_AUTOMATION',
-        payload: { id: editing.id, patch: payload },
+        payload: { id: editing.id, patch: payload, ...(images.length > 0 ? { images } : {}) },
       })
-      : await chrome.runtime.sendMessage({ type: 'CREATE_AUTOMATION', payload });
+      : await chrome.runtime.sendMessage({
+        type: 'CREATE_AUTOMATION',
+        payload: { ...payload, ...(images.length > 0 ? { images } : {}) },
+      });
 
     if (response?.ok === false && response.error) {
       banner.show('error', typeof response.error === 'string' ? response.error : response.error.message);
@@ -153,7 +198,41 @@ export default function AutomationPage() {
     banner.show('success', editing ? t('common.saveChanges') : t('sidepanel.automationPage.created'));
     setShowForm(false);
     setEditing(null);
+    setImageAttachments([]);
     await load();
+  };
+
+  const addImageFiles = (files: FileList | null) => {
+    if (!files) return;
+    const images = Array.from(files).filter((file) =>
+      DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(file.type.toLowerCase()) &&
+      file.size > 0 &&
+      file.size <= DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES
+    );
+    if (images.length === 0) return;
+    const remaining = DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN - imageAttachments.length;
+    if (remaining <= 0) {
+      banner.show('error', `Attach at most ${DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN} images per automation.`);
+      return;
+    }
+    const selected = images.slice(0, remaining);
+    if (images.length > remaining) {
+      banner.show('error', `Attach at most ${DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN} images per automation.`);
+    }
+    setImageAttachments((prev) => [
+      ...prev,
+      ...selected.map((file) => ({
+        id: crypto.randomUUID(),
+        file,
+        name: file.name || 'image',
+        mimeType: file.type || 'application/octet-stream',
+        sizeBytes: file.size,
+      })),
+    ]);
+  };
+
+  const removeImageAttachment = (id: string) => {
+    setImageAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   };
 
   const runNow = async (id: string) => {
@@ -231,9 +310,12 @@ export default function AutomationPage() {
           <AutomationForm
             form={form}
             editing={editing}
+            imageAttachments={imageAttachments}
             onChange={setForm}
+            onAddImages={addImageFiles}
+            onRemoveImage={removeImageAttachment}
             onSave={save}
-            onCancel={() => { setShowForm(false); setEditing(null); banner.clear(); }}
+            onCancel={() => { setShowForm(false); setEditing(null); setImageAttachments([]); banner.clear(); }}
           />
         </div>
       )}
@@ -274,21 +356,32 @@ export default function AutomationPage() {
 function AutomationForm({
   form,
   editing,
+  imageAttachments,
   onChange,
+  onAddImages,
+  onRemoveImage,
   onSave,
   onCancel,
 }: {
   form: FormState;
   editing: Automation | null;
+  imageAttachments: AutomationImageAttachment[];
   onChange: (form: FormState) => void;
+  onAddImages: (files: FileList | null) => void;
+  onRemoveImage: (id: string) => void;
   onSave: () => void;
   onCancel: () => void;
 }) {
   const { t } = useI18n();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const update = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     onChange({ ...form, [key]: value });
   };
   const isScheduled = form.scheduleKind !== 'manual';
+  const handleFiles = (files: FileList | null) => {
+    onAddImages(files);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   return (
     <div className="ds-form rounded-xl p-4 space-y-3">
@@ -314,6 +407,50 @@ function AutomationForm({
             <option value="vision">Vision</option>
           </select>
         </label>
+      </div>
+
+      <label className="space-y-1 block">
+        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>Vision file refs</span>
+        <input
+          value={form.refFileIdsText}
+          onChange={(e) => update('refFileIdsText', e.target.value)}
+          className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+          placeholder="file-..."
+        />
+      </label>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        className="hidden"
+        onChange={(event) => handleFiles(event.currentTarget.files)}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
+        >
+          Attach image
+        </button>
+        {imageAttachments.length > 0 && (
+          <div className="ds-chat-attachment-tray flex-1 justify-end">
+            {imageAttachments.map((attachment) => (
+              <span key={attachment.id} className="ds-chat-attachment-chip">
+                {attachment.name}
+                <button
+                  type="button"
+                  onClick={() => onRemoveImage(attachment.id)}
+                  aria-label={`Remove ${attachment.name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       <label className="space-y-1 block">
@@ -373,6 +510,13 @@ function AutomationForm({
           onToggle={(next) => update('thinkingEnabled', next)}
         />
       </div>
+
+      <ToggleRow
+        title={t('sidepanel.automationPage.form.visualMonitor')}
+        description={t('sidepanel.automationPage.form.visualMonitorDescription')}
+        enabled={form.visualMonitorEnabled}
+        onToggle={(next) => update('visualMonitorEnabled', next)}
+      />
 
       <div className="flex justify-end gap-2 pt-1">
         <button onClick={onCancel} className="ds-btn-cancel px-3 py-1.5 text-xs rounded-lg">
@@ -509,20 +653,37 @@ function fromAutomation(automation: Automation): FormState {
     modelType: normalizeFormModelType(automation.promptOptions.modelType),
     searchEnabled: automation.promptOptions.searchEnabled,
     thinkingEnabled: automation.promptOptions.thinkingEnabled,
+    refFileIdsText: automation.promptOptions.refFileIds.join(', '),
+    visualMonitorEnabled: automation.promptOptions.visualMonitor?.enabled === true,
   };
 }
 
 function toAutomationInput(form: FormState): AutomationCreateInput {
   const schedule = buildSchedule(form);
+  const refFileIds = parseVisionRefFileIds(form.refFileIdsText);
+  const route = createDeepSeekWebVisionRoute({
+    modelType: form.modelType.trim() || null,
+    refFileIds,
+    thinkingEnabled: form.thinkingEnabled,
+    searchEnabled: form.searchEnabled,
+  });
   return {
     name: form.name.trim(),
     prompt: form.prompt.trim(),
     schedule,
     promptOptions: {
       ...DEFAULT_PROMPT_OPTIONS,
-      modelType: form.modelType.trim() || null,
-      searchEnabled: form.searchEnabled,
-      thinkingEnabled: form.thinkingEnabled,
+      modelType: route.modelType,
+      searchEnabled: route.searchEnabled,
+      thinkingEnabled: route.thinkingEnabled,
+      refFileIds: route.refFileIds,
+      visualMonitor: form.visualMonitorEnabled
+        ? {
+          enabled: true,
+          source: 'browser_control_target',
+          includeEvidencePack: true,
+        }
+        : undefined,
     },
   };
 }
@@ -572,4 +733,8 @@ function normalizeFormModelType(modelType: string | null): string {
   if (modelType === 'reasoner' || modelType === 'deepseek_reasoner') return 'expert';
   if (modelType === 'expert' || modelType === 'vision') return modelType;
   return '';
+}
+
+function parseVisionRefFileIds(value: string): string[] {
+  return normalizeDeepSeekWebVisionRefFileIds(value.split(/[\s,]+/));
 }

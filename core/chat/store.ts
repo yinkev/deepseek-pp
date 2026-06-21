@@ -1,3 +1,6 @@
+import { clearSidepanelWebAuthRejected } from './web-auth-state';
+import { clearSidepanelWebChatSessionState } from './web-session';
+
 const STORAGE_KEY = 'deepseek_pp_chat_enabled';
 
 // Must match STORAGE_HEADERS_KEY in core/deepseek/adapter.ts
@@ -11,6 +14,13 @@ export async function getChatEnabled(): Promise<boolean> {
 export async function setChatEnabled(enabled: boolean): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: enabled });
   if (!enabled) {
+    await Promise.all([
+      clearSidepanelWebChatSessionState(),
+      clearSidepanelWebAuthRejected(),
+    ]);
+    try {
+      await chrome.storage.session?.remove(STORAGE_HEADERS_KEY);
+    } catch {}
     try {
       await chrome.storage.local.remove(STORAGE_HEADERS_KEY);
     } catch {}

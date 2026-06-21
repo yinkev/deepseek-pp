@@ -23,6 +23,27 @@ describe('augmentRequestBody', () => {
     expect(result?.usedMemoryIds).toEqual([]);
   });
 
+  it('preserves existing Vision routing when file refs are present', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'describe the image',
+      parent_message_id: null,
+      model_type: 'vision',
+      ref_file_ids: ['file-1'],
+      thinking_enabled: false,
+    }), {
+      memories: [],
+      skills: [],
+      activePreset: null,
+      modelType: 'expert',
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as { model_type?: string; ref_file_ids?: string[] };
+    expect(body.model_type).toBe('vision');
+    expect(body.ref_file_ids).toEqual(['file-1']);
+  });
+
   it('emits English prompt scaffolding while keeping XML tool tags stable', () => {
     const result = buildPromptAugmentation('search latest DeepSeek news', {
       memories: [],

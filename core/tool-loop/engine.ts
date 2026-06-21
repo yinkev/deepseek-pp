@@ -27,7 +27,11 @@ export interface ToolContinuationLoopInput<TTurn> {
   extractToolCalls: (assistantText: string) => ToolCall[];
   executeToolCall: (call: ToolCall, parentMessageId: number) => Promise<ToolExecutionRecord>;
   buildContinuationPrompt: (executions: ToolExecutionRecord[]) => string;
-  submitContinuation: (prompt: string, parentMessageId: number) => Promise<TTurn>;
+  submitContinuation: (
+    prompt: string,
+    parentMessageId: number,
+    executions: ToolExecutionRecord[],
+  ) => Promise<TTurn>;
 }
 
 export async function runToolContinuationLoop<TTurn>(
@@ -53,6 +57,7 @@ export async function runToolContinuationLoop<TTurn>(
     turn = await input.submitContinuation(
       input.buildContinuationPrompt(stepExecutions),
       parentMessageId,
+      stepExecutions,
     );
     parentMessageId = input.getParentMessageId(turn);
   }

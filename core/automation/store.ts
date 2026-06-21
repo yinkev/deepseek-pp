@@ -1,16 +1,24 @@
 import type {
   Automation,
   AutomationCreateInput,
+  AutomationErrorState,
   AutomationId,
+  AutomationPromptOptions,
   AutomationRun,
   AutomationRunCreateInput,
   AutomationRunId,
   AutomationRunListOptions,
+  AutomationRunnerRequest,
+  AutomationRunnerResult,
   AutomationRunUpdateInput,
   AutomationRuntimeUpdate,
   AutomationStatus,
   AutomationUpdateInput,
 } from './types';
+import type { DeepSeekWebVisionEvidencePack } from '../deepseek/vision-evidence';
+import type { DeepSeekWebVisionFileMetadata } from '../deepseek/web-vision';
+import type { ToolError, ToolExecutionRecord } from '../types';
+import { redactDurableToolString, redactDurableToolValue } from '../tool/redaction';
 
 const STORAGE_KEY = 'deepseek_pp_automations';
 const STORAGE_VERSION = 1;
@@ -41,8 +49,9 @@ export async function getAutomationById(id: AutomationId): Promise<Automation | 
 export async function createAutomation(input: AutomationCreateInput): Promise<Automation> {
   const state = await readState();
   const now = Date.now();
+  const safeInput = sanitizeAutomationCreateInput(input);
   const automation: Automation = {
-    ...input,
+    ...safeInput,
     id: crypto.randomUUID(),
     status: 'active',
     deepseek: {
@@ -105,7 +114,7 @@ export async function createAutomationRun(input: AutomationRunCreateInput): Prom
     status: 'queued',
     scheduledFor: input.scheduledFor,
     attempt: input.attempt ?? 1,
-    request: input.request,
+    request: normalizeAutomationRunRequest(input.request),
     result: null,
     error: null,
     createdAt: now,
@@ -120,7 +129,8 @@ export async function createAutomationRun(input: AutomationRunCreateInput): Prom
 
 export async function appendAutomationRun(run: AutomationRun): Promise<void> {
   const state = await readState();
-  const runs = [run, ...state.runs.filter((stored) => stored.id !== run.id)];
+  const safeRun = normalizeAutomationRun(run) ?? run;
+  const runs = [safeRun, ...state.runs.filter((stored) => stored.id !== safeRun.id)];
   await writeState({
     ...state,
     runs: pruneRunHistory(runs),
@@ -132,12 +142,13 @@ export async function updateAutomationRun(
   patch: AutomationRunUpdateInput,
 ): Promise<AutomationRun | null> {
   const state = await readState();
+  const safePatch = sanitizeAutomationRunUpdate(patch);
   let updatedRun: AutomationRun | null = null;
   const runs = state.runs.map((run) => {
     if (run.id !== id) return run;
     updatedRun = {
       ...run,
-      ...patch,
+      ...safePatch,
       updatedAt: Date.now(),
     };
     return updatedRun;
@@ -213,12 +224,13 @@ async function patchAutomation(
   patch: AutomationUpdateInput | AutomationRuntimeUpdate,
 ): Promise<Automation | null> {
   const state = await readState();
+  const safePatch = sanitizeAutomationPatch(patch);
   let updatedAutomation: Automation | null = null;
   const automations = state.automations.map((automation) => {
     if (automation.id !== id) return automation;
     updatedAutomation = {
       ...automation,
-      ...patch,
+      ...safePatch,
       updatedAt: Date.now(),
     };
     return updatedAutomation;
@@ -272,6 +284,7 @@ function normalizeAutomation(raw: unknown): Automation | null {
 
   return {
     ...automation,
+    promptOptions: normalizePromptOptions(automation.promptOptions),
     deepseek: {
       ...deepseek,
       parentMessageId: normalizeStoredMessageId(deepseek.parentMessageId),
@@ -285,14 +298,133 @@ function normalizeAutomationRun(raw: unknown): AutomationRun | null {
   const run = raw as AutomationRun;
   return {
     ...run,
-    request: run.request
-      ? {
-        ...run.request,
-        parentMessageId: normalizeStoredMessageId(run.request.parentMessageId),
-      }
-      : null,
+    request: normalizeAutomationRunRequest(run.request),
     result: normalizeRunResult(run.result),
+    error: normalizeAutomationError(run.error),
   };
+}
+
+function sanitizeAutomationCreateInput(input: AutomationCreateInput): AutomationCreateInput {
+  return {
+    ...input,
+    promptOptions: normalizePromptOptions(input.promptOptions),
+  };
+}
+
+function sanitizeAutomationPatch<T extends AutomationUpdateInput | AutomationRuntimeUpdate>(patch: T): T {
+  const next = { ...patch } as T & {
+    promptOptions?: AutomationPromptOptions;
+    lastError?: AutomationErrorState | null;
+  };
+  if ('promptOptions' in next) {
+    next.promptOptions = normalizePromptOptions(next.promptOptions);
+  }
+  if ('lastError' in next) {
+    next.lastError = normalizeAutomationError(next.lastError);
+  }
+  return next as T;
+}
+
+function sanitizeAutomationRunUpdate(patch: AutomationRunUpdateInput): AutomationRunUpdateInput {
+  const next = { ...patch };
+  if ('request' in next) next.request = normalizeAutomationRunRequest(next.request ?? null);
+  if ('result' in next) next.result = normalizeRunResult(next.result ?? null);
+  if ('error' in next) next.error = normalizeAutomationError(next.error ?? null);
+  return next;
+}
+
+function normalizePromptOptions(value: AutomationPromptOptions | undefined): AutomationPromptOptions {
+  const refFileIds = Array.isArray(value?.refFileIds)
+    ? value.refFileIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+  const refSet = new Set(refFileIds);
+  return {
+    modelType: typeof value?.modelType === 'string' ? value.modelType : null,
+    searchEnabled: value?.searchEnabled === true,
+    thinkingEnabled: value?.thinkingEnabled === true,
+    refFileIds,
+    webVisionFiles: Array.isArray(value?.webVisionFiles)
+      ? value.webVisionFiles
+        .map(normalizeWebVisionFileMetadata)
+        .filter((item): item is DeepSeekWebVisionFileMetadata => item !== null && refSet.has(item.id))
+      : [],
+    visualMonitor: value?.visualMonitor?.enabled === true
+      ? {
+        enabled: true,
+        source: 'browser_control_target',
+        includeEvidencePack: value.visualMonitor.includeEvidencePack !== false,
+      }
+      : undefined,
+    visualEvidencePacks: Array.isArray(value?.visualEvidencePacks)
+      ? value.visualEvidencePacks
+        .map(normalizeVisualEvidencePack)
+        .filter((pack): pack is DeepSeekWebVisionEvidencePack => pack !== null)
+      : [],
+  };
+}
+
+function normalizeWebVisionFileMetadata(value: unknown): DeepSeekWebVisionFileMetadata | null {
+  if (!value || typeof value !== 'object') return null;
+  const file = value as Partial<DeepSeekWebVisionFileMetadata>;
+  if (typeof file.id !== 'string' || !file.id.trim()) return null;
+  return {
+    id: file.id.trim(),
+    name: redactDurableToolString(typeof file.name === 'string' ? file.name : '') ?? '',
+    size: typeof file.size === 'number' && Number.isFinite(file.size) ? file.size : 0,
+    mimeType: redactDurableToolString(typeof file.mimeType === 'string' ? file.mimeType : '') ?? '',
+    status: typeof file.status === 'string' ? file.status as DeepSeekWebVisionFileMetadata['status'] : 'SUCCESS',
+    modelKind: typeof file.modelKind === 'string' ? file.modelKind as DeepSeekWebVisionFileMetadata['modelKind'] : 'VISION',
+    isImage: file.isImage === true,
+    auditResult: typeof file.auditResult === 'string'
+      ? file.auditResult as DeepSeekWebVisionFileMetadata['auditResult']
+      : 'unknown',
+    width: typeof file.width === 'number' && Number.isFinite(file.width) ? file.width : null,
+    height: typeof file.height === 'number' && Number.isFinite(file.height) ? file.height : null,
+  };
+}
+
+function normalizeVisualEvidencePack(value: unknown): DeepSeekWebVisionEvidencePack | null {
+  if (!value || typeof value !== 'object') return null;
+  const pack = value as Partial<DeepSeekWebVisionEvidencePack>;
+  if (pack.storage !== 'metadata_only' || pack.rawImageStored !== false) return null;
+  const refFileIds = Array.isArray(pack.refFileIds)
+    ? pack.refFileIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+    : [];
+  if (refFileIds.length === 0) return null;
+  const refSet = new Set(refFileIds);
+  return {
+    schemaVersion: 1,
+    id: redactDurableToolString(typeof pack.id === 'string' ? pack.id : '') || `stored-evidence-${Date.now()}`,
+    kind: isEvidenceKind(pack.kind) ? pack.kind : 'automation_monitor',
+    createdAt: typeof pack.createdAt === 'number' && Number.isFinite(pack.createdAt) ? pack.createdAt : Date.now(),
+    storage: 'metadata_only',
+    rawImageStored: false,
+    refFileIds,
+    webVisionFiles: Array.isArray(pack.webVisionFiles)
+      ? pack.webVisionFiles
+        .map(normalizeWebVisionFileMetadata)
+        .filter((item): item is DeepSeekWebVisionFileMetadata => item !== null && refSet.has(item.id))
+      : [],
+    source: {
+      ...(typeof pack.source?.toolName === 'string' ? { toolName: redactDurableToolString(pack.source.toolName) ?? '' } : {}),
+      ...(typeof pack.source?.automationId === 'string' ? { automationId: pack.source.automationId } : {}),
+      ...(typeof pack.source?.automationRunId === 'string' ? { automationRunId: pack.source.automationRunId } : {}),
+      ...(typeof pack.source?.tabId === 'number' ? { tabId: pack.source.tabId } : {}),
+      ...(typeof pack.source?.windowId === 'number' ? { windowId: pack.source.windowId } : {}),
+    },
+    image: {
+      name: redactDurableToolString(typeof pack.image?.name === 'string' ? pack.image.name : '') ?? '',
+      mimeType: redactDurableToolString(typeof pack.image?.mimeType === 'string' ? pack.image.mimeType : '') ?? '',
+      sizeBytes: typeof pack.image?.sizeBytes === 'number' && Number.isFinite(pack.image.sizeBytes)
+        ? pack.image.sizeBytes
+        : 0,
+    },
+    ...(typeof pack.prompt === 'string' ? { prompt: redactDurableToolString(pack.prompt) ?? '' } : {}),
+  };
+}
+
+function isEvidenceKind(value: unknown): value is DeepSeekWebVisionEvidencePack['kind'] {
+  return value === 'browser_capture' || value === 'browser_act_verify' || value === 'automation_monitor';
 }
 
 function normalizeRunResult(result: AutomationRun['result']): AutomationRun['result'] {
@@ -300,8 +432,13 @@ function normalizeRunResult(result: AutomationRun['result']): AutomationRun['res
   if (result.ok) {
     return {
       ...result,
+      assistantText: redactDurableToolString(result.assistantText) ?? '',
+      sessionUrl: result.sessionUrl === null ? null : redactDurableToolString(result.sessionUrl) ?? null,
       parentMessageId: normalizeStoredMessageId(result.parentMessageId) ?? 0,
       assistantMessageId: normalizeStoredMessageId(result.assistantMessageId),
+      toolExecutions: Array.isArray(result.toolExecutions)
+        ? result.toolExecutions.map(normalizeToolExecutionRecord)
+        : undefined,
       history: result.history
         ? {
           ...result.history,
@@ -315,7 +452,70 @@ function normalizeRunResult(result: AutomationRun['result']): AutomationRun['res
   return {
     ...result,
     parentMessageId: normalizeStoredMessageId(result.parentMessageId),
+    error: normalizeAutomationError(result.error) ?? result.error,
   };
+}
+
+function normalizeAutomationRunRequest(request: AutomationRunnerRequest | null): AutomationRunnerRequest | null {
+  if (!request) return null;
+  return {
+    ...request,
+    parentMessageId: normalizeStoredMessageId(request.parentMessageId),
+    promptOptions: normalizePromptOptions(request.promptOptions),
+  };
+}
+
+function normalizeAutomationError(error: AutomationErrorState | null | undefined): AutomationErrorState | null {
+  if (!error) return null;
+  return {
+    ...error,
+    message: redactDurableToolString(error.message) ?? '',
+    details: error.details
+      ? redactDurableToolValue(error.details) as Record<string, unknown>
+      : undefined,
+  };
+}
+
+function normalizeToolExecutionRecord(execution: ToolExecutionRecord): ToolExecutionRecord {
+  return {
+    ...execution,
+    result: {
+      ...execution.result,
+      summary: redactDurableToolString(execution.result.summary) ?? '',
+      detail: redactDurableToolString(execution.result.detail),
+      output: normalizeToolExecutionOutput(execution.result.output),
+      error: normalizeToolError(execution.result.error),
+    },
+  };
+}
+
+function normalizeToolExecutionOutput(output: ToolExecutionRecord['result']['output']): ToolExecutionRecord['result']['output'] {
+  if (typeof output === 'string') {
+    const parsed = parseJsonValue(output);
+    if (parsed !== null) return JSON.stringify(redactDurableToolValue(parsed));
+    return redactDurableToolString(output);
+  }
+  if (output === undefined) return undefined;
+  return redactDurableToolValue(output) as ToolExecutionRecord['result']['output'];
+}
+
+function normalizeToolError(error: ToolError | undefined): ToolError | undefined {
+  if (!error) return undefined;
+  return {
+    ...error,
+    message: redactDurableToolString(error.message) ?? '',
+    details: error.details
+      ? redactDurableToolValue(error.details) as Record<string, unknown>
+      : undefined,
+  };
+}
+
+function parseJsonValue(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeStoredMessageId(value: unknown): number | null {

@@ -42,10 +42,9 @@ import {
   isMemoryImportToolName,
 } from '../memory/import-tool';
 import {
-  createBrowserControlToolDescriptors,
+  getEnabledBrowserControlToolDescriptors,
   executeBrowserControlToolCall,
   isBrowserControlToolName,
-  shouldExposeBrowserControlTools,
 } from '../browser-control/tool';
 import { getWebToolSettings } from './web-settings';
 import type { ToolCall, ToolDescriptor, ToolExecutionTrigger, ToolResult } from './types';
@@ -75,9 +74,7 @@ export async function getRuntimeToolDescriptors(
   const enabledWebDescriptors = createWebSearchToolDescriptors(locale).filter(
     (d) => webSettings[d.name as keyof typeof webSettings] !== false,
   );
-  const browserControlDescriptors = await shouldExposeBrowserControlTools()
-    ? createBrowserControlToolDescriptors(locale)
-    : [];
+  const browserControlDescriptors = await getEnabledBrowserControlToolDescriptors(locale);
   return [
     ...createMemoryToolDescriptors(locale),
     ...enabledWebDescriptors,

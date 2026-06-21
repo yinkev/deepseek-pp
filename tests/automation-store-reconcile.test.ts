@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendAutomationRun,
   createAutomation,
+  createAutomationRun,
   getAutomationRunById,
+  getAllAutomations,
   reconcileStaleRuns,
+  updateAutomationRun,
 } from '../core/automation/store';
 import type { AutomationRun } from '../core/automation/types';
 
@@ -55,6 +58,133 @@ function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
 }
 
 describe('reconcileStaleRuns', () => {
+  it('sanitizes automation prompt options before durable storage', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'auto-1' });
+
+    await createAutomation({
+      name: 'Vision monitor',
+      prompt: 'check',
+      schedule: { kind: 'manual', expression: null, timezone: 'UTC', enabled: false, minimumIntervalMinutes: 0 },
+      promptOptions: {
+        modelType: 'vision',
+        searchEnabled: false,
+        thinkingEnabled: false,
+        refFileIds: ['file-allowedref'],
+        webVisionFiles: [{
+          id: 'file-allowedref',
+          name: 'screen.png https://signed.example/file?token=secret',
+          size: 100,
+          mimeType: 'image/png',
+          status: 'SUCCESS',
+          modelKind: 'VISION',
+          isImage: true,
+          auditResult: 'pass',
+          width: 10,
+          height: 10,
+          dataUrl: 'data:image/png;base64,AAAA',
+        }],
+        visualEvidencePacks: [{
+          schemaVersion: 1,
+          id: 'pack-1',
+          kind: 'automation_monitor',
+          createdAt: 123,
+          storage: 'metadata_only',
+          rawImageStored: false,
+          refFileIds: ['file-allowedref'],
+          webVisionFiles: [{
+            id: 'file-allowedref',
+            name: 'screen.png',
+            size: 100,
+            mimeType: 'image/png',
+            status: 'SUCCESS',
+            modelKind: 'VISION',
+            isImage: true,
+            auditResult: 'pass',
+            dataBase64: 'BBBB',
+          }],
+          source: { toolName: 'browser_click Authorization: Basic abc123' },
+          image: {
+            name: 'Cookie: sid=secret',
+            mimeType: 'image/png',
+            sizeBytes: 100,
+          },
+          prompt: 'Cookie: sid=secret',
+          dataUrl: 'data:image/png;base64,CCCC',
+        }],
+        extra: 'data:image/png;base64,DDDD',
+      } as never,
+    });
+
+    const [automation] = await getAllAutomations();
+    const json = JSON.stringify(automation.promptOptions);
+
+    expect(automation.promptOptions.refFileIds).toEqual(['file-allowedref']);
+    expect(json).not.toMatch(/AAAA|BBBB|CCCC|DDDD|signed\.example|token=secret|sid=secret|Basic abc123|extra|dataUrl|dataBase64/);
+    expect(json).toContain('[redacted:secret]');
+    expect(json).toContain('[redacted:url]');
+  });
+
+  it('sanitizes automation run results before durable storage', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+
+    await createAutomationRun({
+      id: 'run-secret',
+      automationId: 'auto-1',
+      trigger: 'manual',
+      scheduledFor: null,
+      request: {
+        runId: 'run-secret',
+        automationId: 'auto-1',
+        prompt: 'check',
+        trigger: 'manual',
+        chatSessionId: null,
+        parentMessageId: null,
+        promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+        requestedAt: 1,
+      },
+    });
+
+    await updateAutomationRun('run-secret', {
+      status: 'succeeded',
+      result: {
+        ok: true,
+        chatSessionId: 'session-1',
+        sessionUrl: 'https://chat.deepseek.com/a/chat/s/session-1?token=secret',
+        parentMessageId: 2,
+        assistantMessageId: 2,
+        assistantText: 'done file-sensitive1',
+        toolExecutions: [{
+          name: 'browser_click',
+          result: {
+            ok: true,
+            summary: 'captured file-sensitive2',
+            detail: 'data:image/png;base64,AAAA Cookie: sid=secret',
+            output: JSON.stringify({
+              refFileIds: ['file-sensitive3'],
+              webVisionFiles: [{ id: 'file-sensitive3', name: 'screen.png' }],
+              dataUrl: 'data:image/png;base64,BBBB',
+              headers: { Authorization: 'Basic abc123' },
+            }),
+          },
+        }],
+        history: null,
+        completedAt: 2,
+      },
+      completedAt: 2,
+    });
+
+    const json = JSON.stringify(await getAutomationRunById('run-secret'));
+
+    expect(json).not.toMatch(/file-sensitive|AAAA|BBBB|sid=secret|abc123|token=secret/);
+    expect(json).not.toContain('chat.deepseek.com/a/chat/s/session-1?token');
+    expect(json).toContain('[redacted:vision-ref]');
+    expect(json).toContain('[redacted:media]');
+    expect(json).toContain('[redacted:secret]');
+  });
+
   it('marks a stale running run as failed with an interrupted error', async () => {
     const { storage, chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);

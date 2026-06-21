@@ -87,7 +87,7 @@ Conservative selections for the Chrome Web Store privacy form:
 Rationale:
 
 - Website content: the extension runs on and reads/modifies the DeepSeek web chat UI to provide user-facing features.
-- Personal communications: DeepSeek chat prompts and responses may include user communications and are processed to inject memory, skills, tool results, multimodal analysis results, and user-requested local conversation exports. User-selected images or videos may also be processed when the user explicitly attaches them for multimodal analysis.
+- Personal communications: DeepSeek chat prompts and responses may include user communications and are processed to inject memory, skills, tool results, multimodal analysis results, and user-requested local conversation exports. User-selected images, videos, or current-tab screenshots may also be processed when the user explicitly attaches or captures them for multimodal analysis.
 - Authentication information: optional DeepSeek API Key, OpenAI/Gemini API keys for multimodal analysis, WebDAV credentials, MCP headers, and native/local tool settings may be stored when the user configures them.
 
 Do not select financial/payment, health, location, or browsing history unless a future version adds those data types explicitly.
@@ -136,6 +136,12 @@ Enables the optional Browser Control feature. When the user enables Browser Cont
 
 ```text
 Lists browser tabs and lets the user choose which tab Browser Control should operate on. Tab titles and URLs are shown only in the extension side panel and returned as browser-control tool context when the user enables the feature. If the browser exposes tab group metadata without an additional permission, DeepSeek++ may show group names only to help users identify the target tab.
+```
+
+#### `activeTab`
+
+```text
+Lets the user capture the currently active tab after user activation and attach that visible screenshot to DeepSeek Web Vision. This avoids requesting broad all-sites host permissions for tab screenshots. Captured image bytes are used only for the immediate upload and are not stored durably by the extension.
 ```
 
 #### `sidePanel`

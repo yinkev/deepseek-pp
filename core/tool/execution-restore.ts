@@ -1,4 +1,5 @@
 import type { JsonValue, ToolCardResult, ToolExecutionRecord } from '../types';
+import { redactDurableToolString, redactDurableToolValue } from './redaction';
 
 const DEFAULT_DETAIL_MAX_LENGTH = 4000;
 const DEFAULT_OUTPUT_MAX_LENGTH = 8000;
@@ -45,16 +46,26 @@ function sanitizeToolCardResultForRestoreStorage(
   const outputMaxLength = limits.outputMaxLength ?? DEFAULT_OUTPUT_MAX_LENGTH;
   return {
     ...result,
-    detail: clampText(result.detail, detailMaxLength),
+    detail: clampText(redactDurableToolString(result.detail), detailMaxLength),
     output: sanitizeOutputForStorage(result.output, outputMaxLength),
+    error: result.error
+      ? {
+        ...result.error,
+        message: redactDurableToolString(result.error.message) ?? '',
+        details: result.error.details
+          ? redactDurableToolValue(result.error.details) as Record<string, unknown>
+          : undefined,
+      }
+      : undefined,
   };
 }
 
 function sanitizeOutputForStorage(output: JsonValue | undefined, maxLength: number): JsonValue | undefined {
   if (output === undefined) return undefined;
 
-  const serialized = safeStringify(output);
-  if (serialized.length <= maxLength) return output;
+  const redacted = redactDurableToolValue(output) as JsonValue;
+  const serialized = safeStringify(redacted);
+  if (serialized.length <= maxLength) return redacted;
   return clampText(serialized, maxLength);
 }
 

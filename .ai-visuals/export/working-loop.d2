@@ -1,0 +1,280 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+  }
+}
+
+direction: right
+
+title: "Autonomous AI Workflow" {
+  shape: text
+  style.font-size: 36
+  style.font-color: "#f7f7f4"
+  style.bold: true
+}
+
+intent: "Intent\nAsk like a human.\nVerify like a system." {
+  shape: rectangle
+  style.fill: "#050607"
+  style.stroke: "#f7f7f4"
+  style.stroke-width: 2
+  style.border-radius: 16
+  style.font-color: "#f7f7f4"
+}
+
+governor_lane: "Pro Governor Path" {
+  style.fill: "#080a0d"
+  style.stroke: "#2b3038"
+  style.border-radius: 18
+
+  user: "You / Codex\nhuman intent" {
+    shape: rectangle
+    style.fill: "#101218"
+    style.stroke: "#f7f7f4"
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  governor: "oracle-governor\nnatural prompts only" {
+    shape: rectangle
+    style.fill: "#0f1a27"
+    style.stroke: "#64a8ff"
+    style.stroke-width: 3
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  wrapper: "Oracle CLI\nuser-local wrapper" {
+    shape: rectangle
+    style.fill: "#0c1420"
+    style.stroke: "#9dccff"
+    style.stroke-width: 2
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  pro: "GPT-5.5 Pro\nbrowser extended thinking" {
+    shape: rectangle
+    style.fill: "#11141f"
+    style.stroke: "#b79cff"
+    style.stroke-width: 3
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  artifacts: "Evidence\nanswer + transcript + spend" {
+    shape: rectangle
+    style.fill: "#211a0d"
+    style.stroke: "#ffe38a"
+    style.stroke-width: 3
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  followup: "Same-session follow-up\npro-vibethinke-loop-review" {
+    shape: rectangle
+    style.fill: "#1d180b"
+    style.stroke: "#ffe38a"
+    style.stroke-dash: 5
+    style.stroke-width: 2
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+}
+
+solver_lane: "Local Solver Path" {
+  style.fill: "#070d0a"
+  style.stroke: "#20362b"
+  style.border-radius: 18
+
+  vibe: "VibeThinker3B\n40k ctx, temp 1.0\ntop-p 0.95, streaming" {
+    shape: rectangle
+    style.fill: "#081710"
+    style.stroke: "#75ffa9"
+    style.stroke-width: 3
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  solver_out: "Bounded solver output\nnot final on truncation" {
+    shape: rectangle
+    style.fill: "#0b1510"
+    style.stroke: "#8ee9ff"
+    style.stroke-width: 2
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+}
+
+trust_lane: "Trust Gate" {
+  style.fill: "#0b0809"
+  style.stroke: "#392125"
+  style.border-radius: 18
+
+  check: "oracle-workflow-check\nwrappers, settings, evidence" {
+    shape: rectangle
+    style.fill: "#11111b"
+    style.stroke: "#b79cff"
+    style.stroke-width: 3
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+
+  blocked: "Rejected shortcuts\nREPEAT OK / --help\ntemp 0 defaults / false finals" {
+    shape: rectangle
+    style.fill: "#1e0c10"
+    style.stroke: "#ff6a74"
+    style.stroke-width: 3
+    style.font-color: "#f7f7f4"
+    style.border-radius: 12
+  }
+}
+
+title -> intent: "operating principle" {
+  style.stroke: "#626871"
+  style.stroke-dash: 4
+}
+
+intent -> governor_lane.user: "start" {
+  style.stroke: "#f7f7f4"
+  style.stroke-width: 2
+}
+
+governor_lane.user -> governor_lane.governor: "human-style question" {
+  style.stroke: "#64a8ff"
+  style.stroke-width: 4
+}
+
+governor_lane.governor -> governor_lane.wrapper: "route" {
+  style.stroke: "#64a8ff"
+  style.stroke-width: 4
+}
+
+governor_lane.wrapper -> governor_lane.pro: "browser session" {
+  style.stroke: "#9dccff"
+  style.stroke-width: 4
+}
+
+governor_lane.pro -> governor_lane.artifacts: "save evidence" {
+  style.stroke: "#ffe38a"
+  style.stroke-width: 4
+}
+
+governor_lane.artifacts -> governor_lane.followup: "continue same thread" {
+  style.stroke: "#ffe38a"
+  style.stroke-width: 3
+  style.stroke-dash: 5
+}
+
+governor_lane.governor -> solver_lane.vibe: "solver prompt" {
+  style.stroke: "#75ffa9"
+  style.stroke-width: 4
+}
+
+solver_lane.vibe -> solver_lane.solver_out: "stream" {
+  style.stroke: "#75ffa9"
+  style.stroke-width: 4
+}
+
+trust_lane.check -> governor_lane.governor: "verify" {
+  style.stroke: "#b79cff"
+  style.stroke-width: 3
+  style.stroke-dash: 5
+}
+
+trust_lane.check -> solver_lane.vibe: "verify" {
+  style.stroke: "#b79cff"
+  style.stroke-width: 3
+  style.stroke-dash: 5
+}
+
+trust_lane.blocked -> governor_lane.governor: "guard" {
+  style.stroke: "#ff6a74"
+  style.stroke-width: 3
+}
+
+trust_lane.blocked -> solver_lane.solver_out: "guard" {
+  style.stroke: "#ff6a74"
+  style.stroke-width: 3
+}
+
+steps: {
+  01: "1. Human question enters governor" {
+    governor_lane.user.style.fill: "#161922"
+    governor_lane.governor.style.fill: "#112642"
+    governor_lane.user -> governor_lane.governor: "1 ask naturally" {
+      style.stroke: "#64a8ff"
+      style.stroke-width: 7
+    }
+  }
+
+  02: "2. Governor routes to Oracle browser wrapper" {
+    governor_lane.governor.style.fill: "#112642"
+    governor_lane.wrapper.style.fill: "#10213a"
+    governor_lane.governor -> governor_lane.wrapper: "2 route" {
+      style.stroke: "#64a8ff"
+      style.stroke-width: 7
+    }
+  }
+
+  03: "3. GPT-5.5 Pro produces advisory judgment" {
+    governor_lane.pro.style.fill: "#1d1730"
+    governor_lane.wrapper -> governor_lane.pro: "3 Pro Extended" {
+      style.stroke: "#9dccff"
+      style.stroke-width: 7
+    }
+  }
+
+  04: "4. Evidence is persisted" {
+    governor_lane.artifacts.style.fill: "#2a220e"
+    governor_lane.pro -> governor_lane.artifacts: "4 save" {
+      style.stroke: "#ffe38a"
+      style.stroke-width: 7
+    }
+  }
+
+  05: "5. Same browser session can continue" {
+    governor_lane.followup.style.fill: "#2b240d"
+    governor_lane.artifacts -> governor_lane.followup: "5 follow-up" {
+      style.stroke: "#ffe38a"
+      style.stroke-width: 6
+      style.stroke-dash: 5
+    }
+  }
+
+  06: "6. VibeThinker handles bounded solver work" {
+    solver_lane.vibe.style.fill: "#0c2416"
+    solver_lane.solver_out.style.fill: "#0c2119"
+    governor_lane.governor -> solver_lane.vibe: "6 solver prompt" {
+      style.stroke: "#75ffa9"
+      style.stroke-width: 7
+    }
+    solver_lane.vibe -> solver_lane.solver_out: "stream" {
+      style.stroke: "#75ffa9"
+      style.stroke-width: 7
+    }
+  }
+
+  07: "7. Gates decide what can be trusted" {
+    trust_lane.check.style.fill: "#17152a"
+    trust_lane.blocked.style.fill: "#2b1116"
+    trust_lane.check -> governor_lane.governor: "verify Pro path" {
+      style.stroke: "#b79cff"
+      style.stroke-width: 6
+      style.stroke-dash: 5
+    }
+    trust_lane.check -> solver_lane.vibe: "verify solver settings" {
+      style.stroke: "#b79cff"
+      style.stroke-width: 6
+      style.stroke-dash: 5
+    }
+    trust_lane.blocked -> governor_lane.governor: "reject fake prompts" {
+      style.stroke: "#ff6a74"
+      style.stroke-width: 6
+    }
+    trust_lane.blocked -> solver_lane.solver_out: "reject false finals" {
+      style.stroke: "#ff6a74"
+      style.stroke-width: 6
+    }
+  }
+}

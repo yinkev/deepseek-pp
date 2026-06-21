@@ -65,7 +65,7 @@ export function augmentRequestBody(
     ? null
     : promptSettings.forceResponseLanguage;
 
-  if (state.modelType) {
+  if (state.modelType && !hasRefFileIds(body.ref_file_ids)) {
     body.model_type = state.modelType;
   }
 
@@ -116,6 +116,10 @@ export function augmentRequestBody(
     usedMemoryIds,
     messageCount,
   };
+}
+
+function hasRefFileIds(value: unknown): boolean {
+  return Array.isArray(value) && value.some((item) => typeof item === 'string' && item.trim());
 }
 
 function resolveSkills(

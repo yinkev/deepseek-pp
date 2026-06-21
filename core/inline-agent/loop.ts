@@ -5,6 +5,12 @@ import {
   type ModelTurn,
   type SubmitPromptInput,
 } from '../deepseek/adapter';
+import {
+  DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+  createDeepSeekWebVisionContinuationRoute,
+  createDeepSeekWebVisionRoute,
+  normalizeDeepSeekWebVisionRefFileIds,
+} from '../deepseek/web-vision';
 import { extractToolCalls } from '../interceptor/tool-parser';
 import { createStreamingToolTextAccumulator } from '../interceptor/streaming-tool-text';
 import { createStreamingToolCallParser } from '../interceptor/streaming-tool-call-parser';
@@ -26,6 +32,7 @@ import {
   INLINE_AGENT_REQUEST_DELAY_MAX_MS,
   INLINE_AGENT_REQUEST_DELAY_MIN_MS,
   INLINE_AGENT_STEP_TIMEOUT_MS,
+  type InlineAgentPromptOptions,
   type InlineAgentLoopCompleteMsg,
   type InlineAgentLoopErrorMsg,
   type InlineAgentStartPayload,
@@ -56,6 +63,10 @@ export async function runInlineAgentLoop(
   const { powWasmUrl } = payload;
   const locale = payload.locale ?? DEFAULT_LOCALE;
   const parsingInput: ToolParsingInput = { descriptors: toolDescriptors };
+  const textContinuationPromptOptions = promptOptions.refFileIds.length > 0
+    ? createDeepSeekWebVisionContinuationRoute()
+    : promptOptions;
+  let currentPromptOptions = textContinuationPromptOptions;
 
   let parentMessageId: number | null = payload.parentMessageId;
   let allExecutions: ToolExecutionRecord[] = [...payload.toolExecutions];
@@ -77,7 +88,7 @@ export async function runInlineAgentLoop(
       }
 
       const prompt = buildContinuationPrompt(payload.originalPrompt, allExecutions, locale);
-      const powHeaders = await createPowHeaders(clientHeaders, powWasmUrl);
+      const powHeaders = await createPowHeaders(clientHeaders, { wasmUrl: powWasmUrl });
       const streamState = createInlineAgentStreamState({
         loopId,
         stepIndex: step,
@@ -91,11 +102,11 @@ export async function runInlineAgentLoop(
       const input: SubmitPromptInput = {
         chatSessionId,
         parentMessageId,
-        modelType: promptOptions.modelType,
+        modelType: currentPromptOptions.modelType,
         prompt,
-        refFileIds: promptOptions.refFileIds,
-        thinkingEnabled: promptOptions.thinkingEnabled,
-        searchEnabled: promptOptions.searchEnabled,
+        refFileIds: currentPromptOptions.refFileIds,
+        thinkingEnabled: currentPromptOptions.thinkingEnabled,
+        searchEnabled: currentPromptOptions.searchEnabled,
         clientHeaders,
         powHeaders,
       };
@@ -112,6 +123,7 @@ export async function runInlineAgentLoop(
       }, stepTimeout.signal);
       stepTimeout.clear();
       const streamSnapshot = streamState.flush();
+      currentPromptOptions = textContinuationPromptOptions;
 
       if (signal.aborted) break;
 
@@ -175,7 +187,7 @@ export async function runInlineAgentLoop(
         await waitBetweenDeepSeekRequests(signal);
         if (signal.aborted) break;
 
-        const nudgePowHeaders = await createPowHeaders(clientHeaders, powWasmUrl);
+        const nudgePowHeaders = await createPowHeaders(clientHeaders, { wasmUrl: powWasmUrl });
         nudgeInput.powHeaders = nudgePowHeaders;
 
         const nudgeStreamState = createInlineAgentStreamState({
@@ -235,6 +247,10 @@ export async function runInlineAgentLoop(
         const nudgeExecs = await executeToolCallsSequentially(nudgeToolCalls, executeTool, { signal });
         allExecutions = [...allExecutions, ...nudgeExecs];
         totalTools += nudgeExecs.length;
+        currentPromptOptions = createVisionPromptOptionsFromToolExecutions(
+          nudgeExecs,
+          textContinuationPromptOptions,
+        );
 
         post('AGENT_STEP_COMPLETE', {
           loopId,
@@ -252,6 +268,10 @@ export async function runInlineAgentLoop(
       const stepExecs = await executeToolCallsSequentially(toolCalls, executeTool, { signal });
       allExecutions = [...allExecutions, ...stepExecs];
       totalTools += stepExecs.length;
+      currentPromptOptions = createVisionPromptOptionsFromToolExecutions(
+        stepExecs,
+        textContinuationPromptOptions,
+      );
 
       post('AGENT_STEP_COMPLETE', {
         loopId,
@@ -282,16 +302,16 @@ export async function runInlineAgentLoop(
           return;
         }
 
-        const powHeaders = await createPowHeaders(clientHeaders, powWasmUrl);
+        const powHeaders = await createPowHeaders(clientHeaders, { wasmUrl: powWasmUrl });
         const finalizationPrompt = buildFinalizationPrompt(payload.originalPrompt, allExecutions, locale);
         const finalInput: SubmitPromptInput = {
           chatSessionId,
           parentMessageId,
-          modelType: promptOptions.modelType,
+          modelType: currentPromptOptions.modelType,
           prompt: finalizationPrompt,
-          refFileIds: promptOptions.refFileIds,
-          thinkingEnabled: promptOptions.thinkingEnabled,
-          searchEnabled: promptOptions.searchEnabled,
+          refFileIds: currentPromptOptions.refFileIds,
+          thinkingEnabled: currentPromptOptions.thinkingEnabled,
+          searchEnabled: currentPromptOptions.searchEnabled,
           clientHeaders,
           powHeaders,
         };
@@ -382,6 +402,46 @@ function postAgentTokenSpeed(
     chatSessionId: payload.chatSessionId,
     modelType: progress.modelType ?? payload.promptOptions.modelType,
   } satisfies ResponseTokenSpeedPayload);
+}
+
+function createVisionPromptOptionsFromToolExecutions(
+  executions: readonly ToolExecutionRecord[],
+  fallback: InlineAgentPromptOptions,
+): InlineAgentPromptOptions {
+  const values: unknown[] = [];
+  for (const execution of executions) {
+    const output = readToolExecutionOutputObject(execution);
+    const refs = output?.refFileIds;
+    if (Array.isArray(refs)) values.push(...refs);
+  }
+  const refFileIds = normalizeDeepSeekWebVisionRefFileIds(values)
+    .slice(0, DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN);
+  if (refFileIds.length === 0) return fallback;
+  return createDeepSeekWebVisionRoute({
+    modelType: fallback.modelType,
+    refFileIds,
+    thinkingEnabled: fallback.thinkingEnabled,
+    searchEnabled: fallback.searchEnabled,
+  });
+}
+
+function readToolExecutionOutputObject(
+  execution: ToolExecutionRecord,
+): Record<string, unknown> | null {
+  const output = execution.result.output;
+  if (!output) return null;
+  if (typeof output === 'object' && !Array.isArray(output)) {
+    return output as Record<string, unknown>;
+  }
+  if (typeof output !== 'string') return null;
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function createInlineAgentStreamState(input: {

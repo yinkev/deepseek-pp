@@ -1100,6 +1100,11 @@ input[type='range'] {
   padding: 8px;
 }
 
+.ds-chat-composer-drop-active {
+  border-color: var(--ds-blue);
+  background: color-mix(in srgb, var(--ds-blue) 8%, var(--ds-card));
+}
+
 .ds-chat-input {
   display: block;
   width: 100%;
@@ -1118,6 +1123,75 @@ input[type='range'] {
 
 .ds-chat-input:focus {
   box-shadow: none !important;
+}
+
+.ds-chat-attachment-tray,
+.ds-chat-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.ds-chat-attachment-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--radius-ctrl);
+  background: var(--ds-surface);
+  color: var(--ds-text-secondary);
+  padding: 4px;
+}
+
+.ds-chat-attachment-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--ds-card);
+}
+
+.ds-chat-attachment-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ds-chat-attachment-name {
+  overflow: hidden;
+  color: var(--ds-text);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-chat-attachment-size {
+  color: var(--ds-text-tertiary);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.ds-chat-attachment-card button {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ds-text-tertiary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+.ds-chat-attachment-card button:hover {
+  background: var(--ds-danger-bg);
+  color: var(--ds-danger);
 }
 
 .ds-chat-composer-actions {

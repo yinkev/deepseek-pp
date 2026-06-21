@@ -13,6 +13,14 @@ import {
   normalizeVoiceSettings,
   type VoiceSettings,
 } from '../../../core/voice/settings';
+import {
+  DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+  createDeepSeekWebVisionFileFromSerializedImage,
+  serializeDeepSeekWebVisionFile,
+  type DeepSeekWebVisionSerializedImage,
+} from '../../../core/deepseek/web-vision';
 import type { ChatMessage as ChatMessageType } from '../../../core/types';
 import ChatMessage from '../components/ChatMessage';
 import { StatusMessage, useConfirm } from '../components/settings/primitives';
@@ -38,6 +46,31 @@ interface ChatStreamMessage extends ChatAuthStatus {
   error?: string;
 }
 
+type ChatImageAttachmentSource = 'picker' | 'paste' | 'drop' | 'capture';
+
+interface ChatImageAttachment {
+  id: string;
+  file: File;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  previewUrl: string;
+  source: ChatImageAttachmentSource;
+}
+
+interface PendingImageSubmission {
+  attachments: ChatImageAttachment[];
+  inputText: string;
+  visibleText: string;
+  optimisticMessageIndex: number;
+}
+
+interface CaptureCurrentTabImageResponse {
+  ok?: boolean;
+  image?: DeepSeekWebVisionSerializedImage;
+  error?: string;
+}
+
 const MODEL_OPTIONS: Array<{ value: OfficialDeepSeekModel; labelKey: 'sidepanel.chatPage.modelFlash' | 'sidepanel.chatPage.modelPro' }> = [
   { value: 'deepseek-v4-flash', labelKey: 'sidepanel.chatPage.modelFlash' },
   { value: 'deepseek-v4-pro', labelKey: 'sidepanel.chatPage.modelPro' },
@@ -57,17 +90,24 @@ export default function ChatPage() {
   const [chatConfig, setChatConfig] = useState<OfficialApiChatConfig>(DEFAULT_OFFICIAL_API_CHAT_CONFIG);
   const [error, setError] = useState<string | null>(null);
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
+  const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
+  const [isDraggingImages, setIsDraggingImages] = useState(false);
+  const [isCapturingTab, setIsCapturingTab] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [msgSeq, setMsgSeq] = useState(0);
   const { confirm, node: confirmNode } = useConfirm();
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<ChatMessageType[]>([]);
+  const imageAttachmentsRef = useRef<ChatImageAttachment[]>([]);
+  const pendingImageSubmissionRef = useRef<PendingImageSubmission | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceSettingsRef = useRef<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const voiceCapabilities = detectVoiceCapabilities(window);
 
-  const apiControlsEnabled = authStatus?.provider === 'official-api';
+  const imageUploadEnabled = authStatus?.hasToken === true;
+  const apiControlsEnabled = authStatus?.provider === 'official-api' && imageAttachments.length === 0;
 
   function updateLastAssistant(update: (message: ChatMessageType) => ChatMessageType) {
     setMessages((prev) => {
@@ -118,6 +158,17 @@ export default function ChatPage() {
   }, [voiceSettings]);
 
   useEffect(() => {
+    imageAttachmentsRef.current = imageAttachments;
+  }, [imageAttachments]);
+
+  useEffect(() => () => {
+    revokeImageAttachmentPreviews(imageAttachmentsRef.current);
+    revokeImageAttachmentPreviews(pendingImageSubmissionRef.current?.attachments ?? []);
+    imageAttachmentsRef.current = [];
+    pendingImageSubmissionRef.current = null;
+  }, []);
+
+  useEffect(() => {
     chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' })
       .then((resp: ChatAuthStatus | undefined) => {
         setAuthStatus(normalizeAuthStatus(resp));
@@ -154,12 +205,14 @@ export default function ChatPage() {
       if (msg.type !== 'CHAT_STREAM_CHUNK') return;
 
       if (msg.error) {
+        restorePendingImageSubmission();
         setError(msg.error);
         setIsStreaming(false);
         return;
       }
 
       if (msg.done) {
+        clearPendingImageSubmission();
         setIsStreaming(false);
         const currentVoiceSettings = voiceSettingsRef.current;
         if (currentVoiceSettings.readAloudEnabled && voiceCapabilities.speechSynthesis) {
@@ -198,30 +251,71 @@ export default function ChatPage() {
     }
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const text = inputText.trim();
-    if (!text || isStreaming) return;
+    if ((!text && imageAttachments.length === 0) || isStreaming) return;
+    if (imageAttachments.length > 0 && !imageUploadEnabled) {
+      setError(t('sidepanel.chatPage.imageAuthRequired'));
+      return;
+    }
+    const attachments = imageUploadEnabled ? imageAttachments : [];
+    const visibleText = text || t('sidepanel.chatPage.imageOnlyDefaultPrompt');
+    const optimisticMessageIndex = messagesRef.current.length;
 
     setMessages((prev) => {
-      const next = [...prev, { role: 'user' as const, text }];
+      const next = [...prev, {
+        role: 'user' as const,
+        text: visibleText,
+        attachments: attachments.map((attachment) => ({
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+        })),
+      }];
       messagesRef.current = next;
       return next;
     });
     setMsgSeq((n) => n + 1);
     setInputText('');
+    pendingImageSubmissionRef.current = attachments.length > 0
+      ? { attachments, inputText: text, visibleText, optimisticMessageIndex }
+      : null;
+    setImageAttachments([]);
     setIsStreaming(true);
     setError(null);
 
-    chrome.runtime.sendMessage({
-      type: 'CHAT_SUBMIT_PROMPT',
-      payload: {
-        text,
-        ...(apiControlsEnabled ? { config: chatConfig } : {}),
-      },
-    }).catch((err: Error) => {
-      setError(err.message);
+    try {
+      const images: DeepSeekWebVisionSerializedImage[] = [];
+      for (const attachment of attachments) {
+        images.push(await serializeImageAttachment(attachment));
+      }
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHAT_SUBMIT_PROMPT',
+        payload: {
+          text: visibleText,
+          ...(images.length > 0 ? { images } : {}),
+          ...(apiControlsEnabled ? { config: chatConfig } : {}),
+        },
+      });
+      if (response?.ok === false) {
+        throw new Error(response.error || 'Chat request failed.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setMessages((prev) => {
+        const next = [...prev];
+        const optimistic = next[optimisticMessageIndex];
+        if (optimistic?.role === 'user' && optimistic.text === visibleText) {
+          next.splice(optimisticMessageIndex, 1);
+        }
+        messagesRef.current = next;
+        return next;
+      });
+      setInputText(text);
+      pendingImageSubmissionRef.current = null;
+      setImageAttachments(attachments);
       setIsStreaming(false);
-    });
+    }
   };
 
   const newSession = async () => {
@@ -241,6 +335,11 @@ export default function ChatPage() {
     setError(null);
     setIsStreaming(false);
     stopVoiceInput();
+    setImageAttachments((prev) => {
+      revokeImageAttachmentPreviews(prev);
+      return [];
+    });
+    clearPendingImageSubmission();
     inputRef.current?.focus();
   };
 
@@ -248,6 +347,9 @@ export default function ChatPage() {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
     setInputText(lastUser.text);
+    if (lastUser.attachments?.length) {
+      setError('Image attachments must be reselected before retrying.');
+    }
     inputRef.current?.focus();
   };
 
@@ -305,6 +407,129 @@ export default function ChatPage() {
       e.preventDefault();
       sendMessage();
     }
+  };
+
+  const handlePaste = (event: React.ClipboardEvent) => {
+    const files = getImageFilesFromTransfer(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    addImageFiles(files, 'paste');
+  };
+
+  const handleDragOver = (event: React.DragEvent) => {
+    if (getImageFilesFromTransfer(event.dataTransfer).length === 0) return;
+    event.preventDefault();
+    setIsDraggingImages(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent) => {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    setIsDraggingImages(false);
+  };
+
+  const handleDrop = (event: React.DragEvent) => {
+    const files = getImageFilesFromTransfer(event.dataTransfer);
+    if (files.length === 0) return;
+    event.preventDefault();
+    setIsDraggingImages(false);
+    addImageFiles(files, 'drop');
+  };
+
+  const captureCurrentTab = async () => {
+    if (isStreaming || isCapturingTab) return;
+    if (!imageUploadEnabled) {
+      setError(t('sidepanel.chatPage.imageAuthRequired'));
+      return;
+    }
+
+    setIsCapturingTab(true);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CAPTURE_CURRENT_TAB_IMAGE',
+      }) as CaptureCurrentTabImageResponse | undefined;
+      if (!response?.ok || !response.image) {
+        throw new Error(response?.error || t('sidepanel.chatPage.captureCurrentTabFailed'));
+      }
+      const file = createDeepSeekWebVisionFileFromSerializedImage(response.image);
+      addImageFiles([file], 'capture');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('sidepanel.chatPage.captureCurrentTabFailed'));
+    } finally {
+      setIsCapturingTab(false);
+    }
+  };
+
+  const addImageFiles = (
+    files: FileList | File[] | null | undefined,
+    source: ChatImageAttachmentSource,
+  ) => {
+    const candidates = Array.from(files ?? []);
+    if (candidates.length === 0 || isStreaming) return;
+    if (!imageUploadEnabled) {
+      setError(t('sidepanel.chatPage.imageAuthRequired'));
+      return;
+    }
+
+    const images = candidates.filter((file) =>
+      DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(file.type.toLowerCase()) &&
+      file.size > 0 &&
+      file.size <= DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES
+    );
+    if (images.length === 0) {
+      setError(t('sidepanel.chatPage.imageInvalid'));
+      return;
+    }
+
+    const remaining = DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN - imageAttachments.length;
+    if (remaining <= 0) {
+      setError(t('sidepanel.chatPage.imageLimit', { count: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN }));
+      return;
+    }
+
+    const selected = images.slice(0, remaining);
+    if (images.length > remaining) {
+      setError(t('sidepanel.chatPage.imageLimit', { count: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN }));
+    } else {
+      setError(null);
+    }
+    setImageAttachments((prev) => [
+      ...prev,
+      ...selected.map((file) => createImageAttachment(file, source)),
+    ]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeImageAttachment = (id: string) => {
+    setImageAttachments((prev) => {
+      const removed = prev.filter((attachment) => attachment.id === id);
+      revokeImageAttachmentPreviews(removed);
+      return prev.filter((attachment) => attachment.id !== id);
+    });
+  };
+
+  const clearPendingImageSubmission = () => {
+    const pending = pendingImageSubmissionRef.current;
+    if (!pending) return;
+    revokeImageAttachmentPreviews(pending.attachments);
+    pendingImageSubmissionRef.current = null;
+  };
+
+  const restorePendingImageSubmission = () => {
+    const pending = pendingImageSubmissionRef.current;
+    if (!pending) return;
+    pendingImageSubmissionRef.current = null;
+    setMessages((prev) => {
+      const next = [...prev];
+      const optimistic = next[pending.optimisticMessageIndex];
+      if (optimistic?.role === 'user' && optimistic.text === pending.visibleText) {
+        next.splice(pending.optimisticMessageIndex, 1);
+      }
+      messagesRef.current = next;
+      return next;
+    });
+    setInputText(pending.inputText);
+    setImageAttachments(pending.attachments);
   };
 
   if (authStatus?.available === false) {
@@ -458,7 +683,50 @@ export default function ChatPage() {
       </div>
 
       <footer className="ds-chat-composer-wrap">
-        <div className="ds-chat-composer">
+        <div
+          className={`ds-chat-composer${isDraggingImages ? ' ds-chat-composer-drop-active' : ''}`}
+          onPaste={handlePaste}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            className="hidden"
+            onChange={(event) => addImageFiles(event.currentTarget.files, 'picker')}
+          />
+          {imageAttachments.length > 0 && (
+            <div className="ds-chat-attachment-tray" aria-label={t('sidepanel.chatPage.attachmentsLabel')}>
+              {imageAttachments.map((attachment) => (
+                <div key={attachment.id} className="ds-chat-attachment-card">
+                  <img
+                    src={attachment.previewUrl}
+                    alt={attachment.name}
+                    className="ds-chat-attachment-thumb"
+                  />
+                  <div className="ds-chat-attachment-meta">
+                    <span className="ds-chat-attachment-name" title={attachment.name}>
+                      {attachment.name}
+                    </span>
+                    <span className="ds-chat-attachment-size">
+                      {formatBytes(attachment.sizeBytes)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeImageAttachment(attachment.id)}
+                    aria-label={t('sidepanel.chatPage.removeImage', { name: attachment.name })}
+                    title={t('sidepanel.chatPage.removeImage', { name: attachment.name })}
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={inputRef}
             value={inputText}
@@ -475,6 +743,37 @@ export default function ChatPage() {
                 : t('sidepanel.chatPage.webProvider')}
             </span>
             <div className="ds-chat-composer-buttons">
+              {imageUploadEnabled && (
+                <>
+                  <button
+                    type="button"
+                    onClick={captureCurrentTab}
+                    className="ds-chat-mic-button"
+                    disabled={isStreaming || isCapturingTab}
+                    title={t('sidepanel.chatPage.captureCurrentTab')}
+                    aria-label={t('sidepanel.chatPage.captureCurrentTab')}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 8a2 2 0 012-2h2l1.5-2h5L16 6h2a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 13a3 3 0 106 0 3 3 0 00-6 0z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="ds-chat-mic-button"
+                    disabled={isStreaming}
+                    title={t('sidepanel.chatPage.attachImage')}
+                    aria-label={t('sidepanel.chatPage.attachImage')}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.5-4.5a2 2 0 012.8 0L16 16" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M14 14l1.5-1.5a2 2 0 012.8 0L20 14" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 5h14v14H5z" />
+                    </svg>
+                  </button>
+                </>
+              )}
               {voiceSettings.inputEnabled && voiceCapabilities.speechRecognition && (
                 <button
                   type="button"
@@ -492,7 +791,7 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={sendMessage}
-                disabled={isStreaming || !inputText.trim()}
+                disabled={isStreaming || (!inputText.trim() && imageAttachments.length === 0)}
                 className="ds-chat-send-button"
                 title={t('sidepanel.chatPage.send')}
                 aria-label={t('sidepanel.chatPage.send')}
@@ -510,6 +809,49 @@ export default function ChatPage() {
         </div>
       </footer>
     </div>
+  );
+}
+
+function serializeImageAttachment(attachment: ChatImageAttachment): Promise<DeepSeekWebVisionSerializedImage> {
+  return serializeDeepSeekWebVisionFile(attachment.file);
+}
+
+function createImageAttachment(file: File, source: ChatImageAttachmentSource): ChatImageAttachment {
+  return {
+    id: crypto.randomUUID(),
+    file,
+    name: file.name || 'image',
+    mimeType: file.type || 'application/octet-stream',
+    sizeBytes: file.size,
+    previewUrl: URL.createObjectURL(file),
+    source,
+  };
+}
+
+function revokeImageAttachmentPreviews(attachments: readonly ChatImageAttachment[]) {
+  const revoked = new Set<string>();
+  for (const attachment of attachments) {
+    if (revoked.has(attachment.previewUrl)) continue;
+    revoked.add(attachment.previewUrl);
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+function getImageFilesFromTransfer(transfer: DataTransfer | null): File[] {
+  if (!transfer) return [];
+  const itemFiles = Array.from(transfer.items ?? [])
+    .filter((item) => item.kind === 'file' && DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(item.type.toLowerCase()))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  if (itemFiles.length > 0) return itemFiles;
+  return Array.from(transfer.files ?? []).filter((file) =>
+    DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(file.type.toLowerCase())
   );
 }
 

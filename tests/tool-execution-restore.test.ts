@@ -77,4 +77,49 @@ describe('tool execution restore storage', () => {
 
     expect(restored.result.output).toBe('{"title":"plain text output"}');
   });
+
+  it('redacts visual refs, media URLs, and secrets before persisting restore data', () => {
+    const execution: ToolExecutionRecord = {
+      name: 'browser_click',
+      result: {
+        ok: true,
+        summary: 'Clicked',
+        detail: 'Captured data:image/png;base64,AAAA from https://signed.example/file?token=secret',
+        output: {
+          refFileIds: ['file-secret'],
+          dataUrl: 'data:image/png;base64,BBBB',
+          tab: {
+            title: 'Private dashboard',
+            url: 'https://example.com/private?token=secret',
+          },
+          headers: {
+            Authorization: 'Bearer secret',
+            Cookie: 'sid=secret',
+          },
+        },
+        error: {
+          code: 'probe',
+          message: 'blob:extension/object Authorization=Bearer error-secret',
+          retryable: true,
+          details: {
+            signedPath: 'https://signed.example/private?token=secret',
+          },
+        },
+      },
+    };
+
+    const json = JSON.stringify(sanitizeToolExecutionForRestoreStorage(execution));
+
+    expect(json).not.toContain('AAAA');
+    expect(json).not.toContain('BBBB');
+    expect(json).not.toContain('file-secret');
+    expect(json).not.toContain('Private dashboard');
+    expect(json).not.toContain('example.com/private');
+    expect(json).not.toContain('signed.example');
+    expect(json).not.toContain('Bearer secret');
+    expect(json).not.toContain('sid=secret');
+    expect(json).toContain('[redacted:media]');
+    expect(json).toContain('[redacted:vision-ref]');
+    expect(json).toContain('[redacted:secret]');
+  });
 });

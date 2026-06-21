@@ -170,6 +170,22 @@ describe('DeepSeek conversation export adapter and service', () => {
     expect(fetchImpl.calls.some((url) => url.includes('lte_cursor.pinned=false'))).toBe(true);
   });
 
+  it('sanitizes non-JSON export endpoint response bodies', async () => {
+    const error = await captureError(() => listDeepSeekSessions({
+      baseUrl: 'https://chat.deepseek.com',
+      clientHeaders: { Authorization: 'Bearer synthetic' },
+      fetchImpl: (async () => new Response(
+        'signed_path=https://signed.example/private Authorization=Bearer secret',
+        { status: 502 },
+      )) as unknown as typeof fetch,
+      pageSize: 1,
+      includeRaw: false,
+    }));
+
+    expect(error?.message).toBe('DeepSeek export endpoint /api/v0/chat_session/fetch_page returned non-JSON HTTP 502.');
+    expect(error?.message).not.toMatch(/signed\.example|Bearer secret/);
+  });
+
   it('keeps official raw payloads only in raw mode', async () => {
     const transport = createDeepSeekConversationExportTransport({
       baseUrl: 'https://chat.deepseek.com',
@@ -304,4 +320,13 @@ function jsonResponse(body: unknown, status = 200): Response {
 function createClock(values: string[]) {
   let index = 0;
   return () => new Date(values[Math.min(index++, values.length - 1)]);
+}
+
+async function captureError(fn: () => Promise<unknown>): Promise<Error | null> {
+  try {
+    await fn();
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
 }

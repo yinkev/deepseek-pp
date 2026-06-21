@@ -14,12 +14,20 @@ export {
   setBrowserControlEnabled,
 } from './settings';
 
+export {
+  createBrowserActVerifyPrompt,
+  shouldVerifyAfterBrowserAction,
+} from './act-verify';
+
 export type {
   BrowserActionResult,
   BrowserControlSettings,
   BrowserControlState,
   BrowserControlTarget,
+  BrowserControlTargetHint,
+  BrowserControlTargetPreparation,
   BrowserControlToolName,
+  BrowserScreenshotCaptureResult,
   BrowserSnapshotNode,
   BrowserSnapshotResult,
 } from './types';

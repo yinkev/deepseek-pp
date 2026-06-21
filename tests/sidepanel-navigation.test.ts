@@ -70,7 +70,7 @@ describe('sidepanel navigation', () => {
 
     unmountRoot();
     await renderElement(React.createElement(CapabilitiesPage));
-    expect(navButtonLabels('能力子导航')).toEqual(['Skill', 'MCP', '工具', '浏览器', '预设', '自动化']);
+    expect(navButtonLabels('能力子导航')).toEqual(['Skill', 'MCP', '工具', '浏览器', '诊断', '预设', '自动化']);
   });
 
   it('keeps the voice settings surface reachable from Settings', async () => {

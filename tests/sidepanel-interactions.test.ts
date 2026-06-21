@@ -7,6 +7,8 @@ import {
   type PromptInjectionSettings,
 } from '../core/prompt/settings';
 import PromptControlPanel from '../entrypoints/sidepanel/components/PromptControlPanel';
+import AutomationPage from '../entrypoints/sidepanel/pages/AutomationPage';
+import RuntimeDoctorPage from '../entrypoints/sidepanel/pages/RuntimeDoctorPage';
 import SavedPage from '../entrypoints/sidepanel/pages/SavedPage';
 
 let container: HTMLDivElement;
@@ -115,12 +117,217 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('保存提示词设置失败：tabs permission unavailable');
     expect((memoryToggle as HTMLButtonElement).getAttribute('style')).toContain('var(--ds-blue)');
   });
+
+  it('loads Runtime Doctor and runs explicit Web auth recovery', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_RUNTIME_DOCTOR_REPORT') return createRuntimeDoctorReport({
+        hasWebAuth: false,
+        webAuthRejected: true,
+      });
+      if (message.type === 'REFRESH_DEEPSEEK_WEB_AUTH') {
+        return {
+          ok: true,
+          refreshed: true,
+          report: createRuntimeDoctorReport({
+            hasWebAuth: true,
+            webAuthRejected: false,
+            provider: 'deepseek-web',
+          }),
+        };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(RuntimeDoctorPage));
+    await flushEffects();
+    expect(container.textContent).toContain('运行诊断');
+    expect(container.textContent).toContain('被拒绝');
+
+    await clickButton('恢复 Web 登录');
+    await flushEffects();
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'REFRESH_DEEPSEEK_WEB_AUTH' });
+    expect(container.textContent).toContain('已从当前 DeepSeek 标签页刷新 Web 登录状态。');
+    expect(container.textContent).toContain('可用');
+    expect(container.textContent).not.toMatch(/Bearer|secret|data:image/);
+  });
+
+  it('disables Runtime Doctor auth recovery while sidepanel chat is busy', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_RUNTIME_DOCTOR_REPORT') return createRuntimeDoctorReport({ chatBusy: true });
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(RuntimeDoctorPage));
+    await flushEffects();
+
+    const recoverButton = buttonByText('恢复 Web 登录');
+    expect(recoverButton.disabled).toBe(true);
+  });
+
+  it('runs the personal ready check and disables duplicate clicks while pending', async () => {
+    let resolveEnsure!: (value: unknown) => void;
+    const ensurePromise = new Promise<unknown>((resolve) => {
+      resolveEnsure = resolve;
+    });
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_RUNTIME_DOCTOR_REPORT') return createRuntimeDoctorReport({
+        readiness: {
+          ready: false,
+          status: 'needs_attention',
+          blockers: ['web_auth_missing', 'browser_target_missing'],
+          lastPreparedAt: null,
+          preparing: false,
+          targetStatus: 'missing',
+          noLeak: true,
+        },
+      });
+      if (message.type === 'ENSURE_PERSONAL_RUNTIME_READY') return ensurePromise;
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(RuntimeDoctorPage));
+    await flushEffects();
+    expect(container.textContent).toContain('需处理');
+    expect(container.textContent).toContain('Web 登录缺失');
+    expect(container.textContent).toContain('目标缺失');
+
+    await clickButton('确保就绪');
+    await flushEffects();
+    const ensuringButton = buttonByText('检查中...');
+    expect(ensuringButton.disabled).toBe(true);
+    await act(async () => {
+      ensuringButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'ENSURE_PERSONAL_RUNTIME_READY')).toHaveLength(1);
+
+    resolveEnsure({
+      ok: true,
+      ready: true,
+      report: createRuntimeDoctorReport({
+        provider: 'deepseek-web',
+        hasWebAuth: true,
+        readiness: {
+          ready: true,
+          status: 'ready',
+          blockers: [],
+          lastPreparedAt: 123,
+          preparing: false,
+          targetStatus: 'ready',
+          noLeak: true,
+        },
+      }),
+    });
+    await flushEffects();
+
+    expect(container.textContent).toContain('视觉会话已就绪。');
+    expect(container.textContent).toContain('就绪');
+    expect(container.textContent).toContain('无泄漏');
+    expect(container.textContent).not.toMatch(/Bearer|secret|data:image/);
+  });
+
+  it('repairs Web auth and retries the latest retryable automation failure', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: { id?: string } }) => {
+      if (message.type === 'GET_RUNTIME_DOCTOR_REPORT') return createRuntimeDoctorReport({
+        provider: 'deepseek-web',
+        retryableFailure: {
+          automationId: 'automation-1',
+          automationName: 'Visual check',
+          runId: 'run-1',
+          code: 'automation_executor_failed',
+          message: 'Authorization Bearer secret data:image/png;base64,AAAA',
+          phase: 'runner',
+          at: 123,
+        },
+      });
+      if (message.type === 'REFRESH_DEEPSEEK_WEB_AUTH') {
+        return {
+          ok: true,
+          refreshed: true,
+          report: createRuntimeDoctorReport({ provider: 'deepseek-web' }),
+        };
+      }
+      if (message.type === 'RUN_AUTOMATION_NOW') {
+        expect(message.payload?.id).toBe('automation-1');
+        return { id: 'run-2', status: 'succeeded' };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(RuntimeDoctorPage));
+    await flushEffects();
+    expect(container.textContent).toContain('Visual check');
+    expect(container.textContent).not.toMatch(/Bearer|data:image|AAAA/);
+
+    await clickButton('修复并重试');
+    await flushEffects();
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'REFRESH_DEEPSEEK_WEB_AUTH' });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'RUN_AUTOMATION_NOW',
+      payload: { id: 'automation-1' },
+    });
+    expect(container.textContent).toContain('已刷新 Web 登录并启动自动化重试。');
+  });
+
+  it('persists the automation visual monitor option without screenshot bytes', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-1',
+        name: 'Visual check',
+        prompt: 'Check whether the selected page still looks healthy.',
+        status: 'active',
+        schedule: { kind: 'manual', expression: null, timezone: 'America/Los_Angeles', enabled: false, minimumIntervalMinutes: 15 },
+        promptOptions: {},
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await enterText('任务名称', 'Visual check');
+    await enterText('输入要定时发送到 DeepSeek 的内容', 'Check whether the selected page still looks healthy.');
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is { type: 'CREATE_AUTOMATION'; payload: { promptOptions: Record<string, unknown> } } =>
+        message.type === 'CREATE_AUTOMATION'
+      );
+    expect(createCall?.payload.promptOptions.visualMonitor).toEqual({
+      enabled: true,
+      source: 'browser_control_target',
+      includeEvidencePack: true,
+    });
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:/);
+  });
 });
 
 async function renderElement(element: React.ReactElement) {
   await act(async () => {
     root = createRoot(container);
     root.render(element);
+  });
+}
+
+async function flushEffects() {
+  await act(async () => {
+    await Promise.resolve();
   });
 }
 
@@ -174,4 +381,111 @@ function setTextControlValue(input: HTMLInputElement | HTMLTextAreaElement, valu
 function setSelectValue(select: HTMLSelectElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
   setter?.call(select, value);
+}
+
+function buttonByText(label: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll('button'))
+    .find((candidate) => candidate.textContent === label);
+  expect(button).toBeTruthy();
+  return button as HTMLButtonElement;
+}
+
+async function clickToggleByTitle(label: string) {
+  const title = Array.from(container.querySelectorAll('div'))
+    .find((candidate) => candidate.textContent === label);
+  expect(title).toBeTruthy();
+  const row = title?.closest('.flex');
+  const button = row?.querySelector('button');
+  expect(button).toBeTruthy();
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+function createRuntimeDoctorReport(overrides: Partial<{
+  hasWebAuth: boolean;
+  webAuthRejected: boolean;
+  provider: 'deepseek-web' | 'official-api' | null;
+  chatBusy: boolean;
+  readiness: {
+    ready: boolean;
+    status: 'ready' | 'needs_attention' | 'blocked';
+    blockers: Array<
+      | 'chat_busy'
+      | 'web_auth_missing'
+      | 'web_auth_rejected'
+      | 'browser_control_disabled'
+      | 'browser_target_missing'
+      | 'browser_target_not_controllable'
+      | 'browser_vision_capture_disabled'
+      | 'act_verify_disabled'
+      | 'evidence_packs_disabled'
+      | 'storage_leak'
+      | 'storage_scan_failed'
+    >;
+    lastPreparedAt: number | null;
+    preparing: boolean;
+    targetStatus: 'ready' | 'reacquired' | 'selected_active' | 'missing' | 'unsupported' | 'not_controllable' | null;
+    noLeak: boolean;
+  };
+  retryableFailure: {
+    automationId: string;
+    automationName: string;
+    runId: string | null;
+    code: string;
+    message: string;
+    phase: string;
+    at: number;
+  } | null;
+}> = {}) {
+  return {
+    ok: true,
+    generatedAt: Date.now(),
+    chatEnabled: true,
+    chatBusy: overrides.chatBusy ?? false,
+    provider: overrides.provider ?? null,
+    hasApiKey: false,
+    hasWebAuth: overrides.hasWebAuth ?? false,
+    webAuthRejected: overrides.webAuthRejected ?? false,
+    deepSeekTabCount: 1,
+    sidepanelSession: {
+      active: false,
+      source: 'none',
+      parentMessageId: null,
+    },
+    vision: {
+      maxImagesPerTurn: 4,
+      rawImagesStoredDurably: false,
+    },
+    browserControl: {
+      enabled: true,
+      targetSelected: true,
+      visualCaptureAllowed: true,
+      actVerifyEnabled: false,
+      evidencePacksEnabled: true,
+      debugDistillerEnabled: true,
+      monitorReady: true,
+    },
+    automation: {
+      maxAttempts: 2,
+      retryableFailure: overrides.retryableFailure ?? null,
+    },
+    debugDistiller: {
+      enabled: true,
+      suggestions: [],
+    },
+    readiness: overrides.readiness ?? {
+      ready: true,
+      status: 'ready',
+      blockers: [],
+      lastPreparedAt: null,
+      preparing: false,
+      targetStatus: 'ready',
+      noLeak: true,
+    },
+    storage: {
+      ok: true,
+      issues: [],
+    },
+  };
 }

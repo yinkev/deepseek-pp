@@ -71,6 +71,11 @@ export interface StreamCallbacks {
   retainAssistantText?: boolean;
 }
 
+export interface CreatePowHeadersOptions {
+  wasmUrl?: string;
+  targetPath?: string;
+}
+
 export class DeepSeekAuthError extends Error {
   constructor(message: string) {
     super(message);
@@ -114,11 +119,11 @@ export async function createChatSession(clientHeaders: Record<string, string>): 
   const chatSessionId = firstString(data?.biz_data?.chat_session?.id);
 
   if (isAuthBizError(data, json)) {
-    throw new DeepSeekAuthError(`DeepSeek auth token was rejected while creating chat session: ${JSON.stringify(data ?? json)}`);
+    throw new DeepSeekAuthError('DeepSeek auth token was rejected while creating chat session.');
   }
 
   if (!response.ok || data?.biz_code !== 0 || !chatSessionId) {
-    throw new DeepSeekSessionError(`Failed to create DeepSeek chat session: ${JSON.stringify(data ?? json)}`);
+    throw new DeepSeekSessionError(`Failed to create DeepSeek chat session with HTTP ${response.status}${formatBizCode(data, json)}.`);
   }
 
   return chatSessionId;
@@ -126,11 +131,12 @@ export async function createChatSession(clientHeaders: Record<string, string>): 
 
 export async function createPowHeaders(
   clientHeaders: Record<string, string>,
-  wasmUrl?: string,
+  options: CreatePowHeadersOptions = {},
 ): Promise<Record<string, string>> {
+  const targetPath = options.targetPath ?? COMPLETION_PATH;
   try {
-    const challenge = await createPowChallenge(clientHeaders);
-    const answer = await solvePowChallenge(challenge, wasmUrl);
+    const challenge = await createPowChallenge(clientHeaders, targetPath);
+    const answer = await solvePowChallenge(challenge, options.wasmUrl);
     return {
       'X-DS-PoW-Response': base64EncodeUtf8(JSON.stringify({
         algorithm: answer.algorithm,
@@ -138,7 +144,7 @@ export async function createPowHeaders(
         salt: answer.salt,
         answer: answer.answer,
         signature: answer.signature,
-        target_path: COMPLETION_PATH,
+        target_path: targetPath,
       })),
     };
   } catch (err) {
@@ -149,9 +155,14 @@ export async function createPowHeaders(
 }
 
 export function createClientHeaders(options?: { missingTokenMessage?: string }): Record<string, string> {
-  if (rememberedClientHeaders) return { ...rememberedClientHeaders };
-
   const token = readDeepSeekUserToken();
+  if (rememberedClientHeaders) {
+    if (!token || rememberedClientHeaders.Authorization === `Bearer ${token}`) {
+      return { ...rememberedClientHeaders };
+    }
+    rememberedClientHeaders = null;
+  }
+
   if (!token) {
     throw new DeepSeekAuthError(
       options?.missingTokenMessage ?? 'DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again.',
@@ -166,6 +177,10 @@ export function createClientHeaders(options?: { missingTokenMessage?: string }):
     'x-client-locale': getDeepSeekLocale(),
     'x-client-timezone-offset': String(-new Date().getTimezoneOffset() * 60),
   };
+}
+
+export function forgetDeepSeekClientHeaders(): void {
+  rememberedClientHeaders = null;
 }
 
 export function rememberDeepSeekClientHeaders(headersInit: HeadersInit | undefined): void {
@@ -186,26 +201,26 @@ export function rememberDeepSeekClientHeaders(headersInit: HeadersInit | undefin
 }
 
 const STORAGE_HEADERS_KEY = 'deepseekCachedClientHeaders';
+type ClientHeaderStorageArea = Pick<chrome.storage.LocalStorageArea, 'get' | 'set' | 'remove'>;
 
 export async function saveClientHeadersToStorage(): Promise<boolean> {
   if (!rememberedClientHeaders) return false;
-  try {
-    await chrome.storage.local.set({ [STORAGE_HEADERS_KEY]: rememberedClientHeaders });
-    return true;
-  } catch {
-    return false;
-  }
+  await removeStoredClientHeaders();
+  return true;
 }
 
 export async function loadClientHeadersFromStorage(): Promise<Record<string, string> | null> {
-  try {
-    const data = await chrome.storage.local.get(STORAGE_HEADERS_KEY);
-    const headers = data[STORAGE_HEADERS_KEY] as Record<string, string> | undefined;
-    if (headers?.Authorization) return headers;
-    return null;
-  } catch {
-    return null;
-  }
+  await removeStoredClientHeaders();
+  return rememberedClientHeaders ? { ...rememberedClientHeaders } : null;
+}
+
+export async function clearClientHeadersFromStorage(): Promise<void> {
+  forgetDeepSeekClientHeaders();
+  await removeStoredClientHeaders();
+}
+
+export async function scrubStoredClientHeaders(): Promise<void> {
+  await removeStoredClientHeaders();
 }
 
 export async function submitPrompt(input: SubmitPromptInput, signal?: AbortSignal): Promise<ModelTurn> {
@@ -344,7 +359,7 @@ export function normalizeMessageId(value: unknown, fieldName = 'message_id'): nu
 }
 
 export function buildDeepSeekSessionUrl(chatSessionId: string): string {
-  return `${location.origin}/a/chat/s/${chatSessionId}`;
+  return `${new URL(DEEPSEEK_API_URL).origin}/a/chat/s/${chatSessionId}`;
 }
 
 async function readCompletionStream(response: Response): Promise<ModelTurn> {
@@ -524,12 +539,35 @@ function normalizeHeaders(headersInit: HeadersInit | undefined): Headers | null 
   }
 }
 
+function getSessionStorageArea(): ClientHeaderStorageArea | null {
+  try {
+    return chrome.storage?.session ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function removeLegacyClientHeadersFromLocalStorage(): Promise<void> {
+  try {
+    await chrome.storage.local.remove(STORAGE_HEADERS_KEY);
+  } catch {}
+}
+
+async function removeStoredClientHeaders(): Promise<void> {
+  await Promise.all([
+    getSessionStorageArea()?.remove(STORAGE_HEADERS_KEY).catch(() => undefined) ?? Promise.resolve(),
+    removeLegacyClientHeadersFromLocalStorage(),
+  ]);
+}
+
 function getDeepSeekAppVersion(): string {
   return DEFAULT_APP_VERSION;
 }
 
 function getDeepSeekLocale(): string {
-  return document.documentElement.lang || navigator.language || 'en-US';
+  const documentLocale = typeof document !== 'undefined' ? document.documentElement.lang : '';
+  const navigatorLocale = typeof navigator !== 'undefined' ? navigator.language : '';
+  return documentLocale || navigatorLocale || 'en-US';
 }
 
 function normalizeModelType(modelType: string | null): string {
@@ -540,23 +578,23 @@ function normalizeModelType(modelType: string | null): string {
   return DEFAULT_MODEL_TYPE;
 }
 
-async function createPowChallenge(clientHeaders: Record<string, string>): Promise<PowChallenge> {
+async function createPowChallenge(clientHeaders: Record<string, string>, targetPath: string): Promise<PowChallenge> {
   const response = await fetch(new URL(POW_CHALLENGE_PATH, DEEPSEEK_API_URL).href, {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json', ...clientHeaders },
-    body: JSON.stringify({ target_path: COMPLETION_PATH }),
+    body: JSON.stringify({ target_path: targetPath }),
   });
   const json = await readJsonResponse(response, 'DeepSeek PoW challenge');
   const data = json?.data;
   const challenge = data?.biz_data?.challenge;
 
   if (isAuthBizError(data, json)) {
-    throw new DeepSeekAuthError(`DeepSeek auth token was rejected while creating PoW challenge: ${JSON.stringify(data ?? json)}`);
+    throw new DeepSeekAuthError('DeepSeek auth token was rejected while creating PoW challenge.');
   }
 
   if (!response.ok || data?.biz_code !== 0 || !challenge) {
-    throw new DeepSeekPowError(`Failed to create DeepSeek PoW challenge: ${JSON.stringify(data ?? json)}`);
+    throw new DeepSeekPowError(`Failed to create DeepSeek PoW challenge with HTTP ${response.status}${formatBizCode(data, json)}.`);
   }
 
   return {
@@ -583,9 +621,14 @@ function isAuthBizError(data: any, json: any): boolean {
   return data?.biz_code === 40002 || data?.biz_code === 40003 || json?.code === 40002 || json?.code === 40003;
 }
 
+function formatBizCode(data: any, json: any): string {
+  const code = data?.biz_code ?? json?.code;
+  if (typeof code !== 'number' && typeof code !== 'string') return '';
+  return `, biz_code ${code}`;
+}
+
 async function readFailureMessage(response: Response): Promise<string> {
-  const text = await response.text().catch(() => '');
-  return text || `DeepSeek completion failed with HTTP ${response.status}.`;
+  return `DeepSeek completion failed with HTTP ${response.status}.`;
 }
 
 async function readJsonResponse(response: Response, label: string): Promise<any> {
@@ -593,8 +636,7 @@ async function readJsonResponse(response: Response, label: string): Promise<any>
   try {
     return JSON.parse(text);
   } catch {
-    const preview = text.replace(/\s+/g, ' ').trim().slice(0, 240);
-    throw new DeepSeekPowError(`${label} returned non-JSON HTTP ${response.status}: ${preview || response.statusText}`);
+    throw new DeepSeekPowError(`${label} returned non-JSON HTTP ${response.status}.`);
   }
 }
 

@@ -5,6 +5,8 @@ import {
   submitOfficialDeepSeekStreaming,
 } from '../core/deepseek/official-api';
 
+type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 describe('DeepSeek official API adapter', () => {
   it('builds current official model and thinking request bodies', () => {
     expect(createOfficialDeepSeekRequestBody({
@@ -36,7 +38,7 @@ describe('DeepSeek official API adapter', () => {
   });
 
   it('streams OpenAI-compatible reasoning and answer deltas with the configured API key', async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => createSseResponse([
+    const fetchImpl = vi.fn<FetchImpl>(async () => createSseResponse([
       'data: {"choices":[{"delta":{"reasoning_content":"Think"},"finish_reason":null}]}',
       'data: {"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}',
       'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":null}]}',
@@ -74,8 +76,10 @@ describe('DeepSeek official API adapter', () => {
       }),
     }));
 
-    const init = fetchImpl.mock.calls[0][1] as RequestInit;
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    const init = fetchImpl.mock.calls[0][1];
+    expect(init).toBeDefined();
+    const requestInit = init as RequestInit;
+    expect(JSON.parse(requestInit.body as string)).toMatchObject({
       model: 'deepseek-v4-flash',
       messages: [{ role: 'user', content: 'hello' }],
       stream: true,
@@ -83,7 +87,7 @@ describe('DeepSeek official API adapter', () => {
   });
 
   it('surfaces official API error messages', async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(
+    const fetchImpl = vi.fn<FetchImpl>(async () => new Response(
       JSON.stringify({ error: { message: 'invalid api key' } }),
       { status: 401 },
     ));

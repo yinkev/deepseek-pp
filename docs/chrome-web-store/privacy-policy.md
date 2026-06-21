@@ -66,6 +66,7 @@ Data may be transferred only as part of user-facing features:
 - To MCP endpoints selected and configured by the user, when the user tests or executes MCP tools.
 - To a local Native Messaging host configured by the user, when local/native MCP or multimodal tooling is enabled.
 - To DeepSeek as text tool results, when Browser Control returns the selected tab's Accessibility Tree snapshot or action result to the active conversation.
+- To DeepSeek Web Vision, when the user explicitly captures the current tab or when an enabled Browser Control tool captures the selected tab for visual inspection. Raw captured image bytes are used only for that immediate upload and are not stored durably by DeepSeek++.
 
 The extension does not transfer user data to advertising platforms, data brokers, information resellers, or unrelated third parties.
 
@@ -80,6 +81,7 @@ DeepSeek++ requests these Chrome permissions for the following purposes:
 - `offscreen`: host an invisible extension document that runs isolated JavaScript, TypeScript, Python, and HTML sandbox requests outside the DeepSeek page, preventing the chat tab from being blocked by sandbox execution.
 - `debugger`: attach to a user-selected browser tab only when Browser Control is enabled, so DeepSeek++ can read an Accessibility Tree snapshot and perform user-visible browser actions requested through `browser_*` tools.
 - `tabs`: list browser tabs and select the target tab for Browser Control. Tab group names may be shown when the browser exposes them without an additional required permission.
+- `activeTab`: capture the currently active tab only after user activation, so the user can attach the visible tab screenshot to DeepSeek Web Vision without granting broad all-sites host access.
 - `sidePanel`: provide the extension management UI in Chrome's side panel.
 - `*://chat.deepseek.com/*`: run on the DeepSeek web app so the extension can apply user-selected context, render tool results, export user-requested conversation history, support local downloads, and support automation inside DeepSeek conversations.
 - `https://api.deepseek.com/*`: send side-panel chat requests to the official DeepSeek API when the user configures an API Key.
@@ -206,6 +208,7 @@ DeepSeek++ 不运营用于收集扩展数据的后台服务。扩展不会出售
 - 当用户测试或执行 MCP 工具时，传输给用户选择并配置的 MCP 端点。
 - 当用户启用本机/Native MCP 或多模态工具时，传输给用户配置的本地 Native Messaging host。
 - 当浏览器控制返回受控标签页的 Accessibility Tree 快照或动作结果时，作为文本工具结果传输给 DeepSeek 当前对话。
+- 当用户明确捕获当前标签页，或启用浏览器控制的视觉捕获工具捕获所选标签页时，传输给 DeepSeek Web Vision。捕获的原始图片字节只用于本次上传，不会被 DeepSeek++ 持久保存。
 
 扩展不会将用户数据传输给广告平台、数据经纪商、信息转售商或无关第三方。
 

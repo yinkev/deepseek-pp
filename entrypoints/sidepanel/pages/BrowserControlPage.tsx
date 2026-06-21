@@ -18,9 +18,14 @@ import { useI18n } from '../i18n';
 type BusyState = 'idle' | 'loading' | 'saving' | 'targeting' | 'detaching';
 
 const DEFAULT_SETTINGS: BrowserControlSettings = {
-  enabled: false,
+  enabled: true,
   targetTabId: null,
+  lastTargetHint: null,
   includeSnapshotAfterActions: true,
+  allowVisionCapture: true,
+  verifyAfterActions: true,
+  collectEvidencePacks: true,
+  debugDistillerEnabled: true,
   maxSnapshotNodes: 400,
   maxSnapshotTextBytes: 24_000,
 };
@@ -158,6 +163,35 @@ export default function BrowserControlPage() {
           <Meta label={t('sidepanel.browserControlPage.status.attached')} value={state?.attached ? t('common.enabled') : t('common.disabled')} />
           <Meta label={t('sidepanel.browserControlPage.status.target')} value={activeTarget ? String(activeTarget.id) : t('common.none')} />
         </div>
+
+        <ToggleRow
+          title={t('sidepanel.browserControlPage.allowVisionCapture')}
+          description={t('sidepanel.browserControlPage.allowVisionCaptureDescription')}
+          enabled={settings.allowVisionCapture}
+          disabled={!settings.enabled || !supported || busy !== 'idle'}
+          onToggle={(next) => savePatch({ allowVisionCapture: next })}
+        />
+        <ToggleRow
+          title={t('sidepanel.browserControlPage.verifyAfterActions')}
+          description={t('sidepanel.browserControlPage.verifyAfterActionsDescription')}
+          enabled={settings.verifyAfterActions}
+          disabled={!settings.enabled || !settings.allowVisionCapture || !supported || busy !== 'idle'}
+          onToggle={(next) => savePatch({ verifyAfterActions: next })}
+        />
+        <ToggleRow
+          title={t('sidepanel.browserControlPage.collectEvidencePacks')}
+          description={t('sidepanel.browserControlPage.collectEvidencePacksDescription')}
+          enabled={settings.collectEvidencePacks}
+          disabled={!settings.enabled || busy !== 'idle'}
+          onToggle={(next) => savePatch({ collectEvidencePacks: next })}
+        />
+        <ToggleRow
+          title={t('sidepanel.browserControlPage.debugDistiller')}
+          description={t('sidepanel.browserControlPage.debugDistillerDescription')}
+          enabled={settings.debugDistillerEnabled}
+          disabled={!settings.enabled || busy !== 'idle'}
+          onToggle={(next) => savePatch({ debugDistillerEnabled: next })}
+        />
 
         <div className="flex flex-wrap gap-2">
           <button

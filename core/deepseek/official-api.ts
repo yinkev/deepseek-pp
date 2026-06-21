@@ -25,11 +25,13 @@ export interface OfficialDeepSeekCallbacks {
   onFinished?(): void;
 }
 
+type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export interface SubmitOfficialDeepSeekInput {
   apiKey: string;
   config?: OfficialApiChatConfig;
   messages: OfficialDeepSeekMessage[];
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchImpl;
   endpoint?: string;
 }
 

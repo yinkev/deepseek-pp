@@ -529,6 +529,7 @@ export type MessageAction =
   | { type: 'RUN_ARTIFACT_CODE'; payload: SandboxRunRequestType }
   | { type: 'GET_TOOL_CALL_HISTORY'; payload?: { limit?: number } }
   | { type: 'CLEAR_TOOL_CALL_HISTORY' }
+  | { type: 'CAPTURE_CURRENT_TAB_IMAGE' }
   | { type: 'GET_PLATFORM_CAPABILITIES' }
   | { type: 'GET_PROJECT_CONTEXT_STATE' }
   | { type: 'CREATE_PROJECT_CONTEXT'; payload: ProjectContextCreateInput }
@@ -581,6 +582,11 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   reasoningText?: string;
+  attachments?: Array<{
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+  }>;
 }
 
 export interface ChatStreamChunk {

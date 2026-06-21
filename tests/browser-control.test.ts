@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createBrowserActVerifyPrompt,
   createBrowserControlToolDescriptors,
+  getEnabledBrowserControlToolDescriptors,
+  shouldVerifyAfterBrowserAction,
   shouldExposeBrowserControlTools,
 } from '../core/browser-control/tool';
 import {
@@ -19,37 +22,65 @@ afterEach(() => {
 });
 
 describe('browser control settings and descriptors', () => {
-  it('normalizes settings with browser control disabled by default', () => {
+  it('normalizes settings with personal convenience defaults', () => {
     const settings = normalizeBrowserControlSettings({
       enabled: true,
       targetTabId: 12,
       includeSnapshotAfterActions: false,
+      allowVisionCapture: true,
+      verifyAfterActions: true,
+      collectEvidencePacks: false,
+      debugDistillerEnabled: false,
       maxSnapshotNodes: 10_000,
       maxSnapshotTextBytes: 1,
     });
 
     expect(normalizeBrowserControlSettings(null)).toEqual(DEFAULT_BROWSER_CONTROL_SETTINGS);
+    expect(normalizeBrowserControlSettings({})).toMatchObject({
+      enabled: true,
+      allowVisionCapture: true,
+      verifyAfterActions: true,
+      collectEvidencePacks: true,
+      debugDistillerEnabled: true,
+    });
     expect(settings).toMatchObject({
       enabled: true,
       targetTabId: 12,
+      lastTargetHint: null,
       includeSnapshotAfterActions: false,
+      allowVisionCapture: true,
+      verifyAfterActions: true,
+      collectEvidencePacks: false,
+      debugDistillerEnabled: false,
       maxSnapshotNodes: 1500,
       maxSnapshotTextBytes: 4000,
     });
   });
 
-  it('exposes the full browser tool set only after explicit enablement', async () => {
+  it('exposes the full browser tool set by default for personal convenience', async () => {
     const storage = new Map<string, unknown>();
     vi.stubGlobal('chrome', createChromeStub(storage));
+
+    expect(await shouldExposeBrowserControlTools()).toBe(true);
+    expect((await getEnabledBrowserControlToolDescriptors('en')).map((tool) => tool.name)).toContain(
+      'browser_capture_screenshot',
+    );
+
+    storage.set(BROWSER_CONTROL_STORAGE_KEY, {
+      ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+      enabled: false,
+    });
 
     expect(await shouldExposeBrowserControlTools()).toBe(false);
 
     storage.set(BROWSER_CONTROL_STORAGE_KEY, {
       ...DEFAULT_BROWSER_CONTROL_SETTINGS,
-      enabled: true,
+      allowVisionCapture: false,
     });
 
-    expect(await shouldExposeBrowserControlTools()).toBe(true);
+    expect((await getEnabledBrowserControlToolDescriptors('en')).map((tool) => tool.name)).not.toContain(
+      'browser_capture_screenshot',
+    );
     expect(createBrowserControlToolDescriptors('en').map((tool) => tool.name)).toEqual([
       'browser_navigate',
       'browser_go_back',
@@ -59,6 +90,7 @@ describe('browser control settings and descriptors', () => {
       'browser_select_tab',
       'browser_close_tab',
       'browser_snapshot',
+      'browser_capture_screenshot',
       'browser_click',
       'browser_hover',
       'browser_fill',
@@ -70,6 +102,181 @@ describe('browser control settings and descriptors', () => {
       'browser_handle_dialog',
       'browser_evaluate_script',
     ]);
+  });
+
+  it('uses natural act-verify prompts for browser actions only', () => {
+    expect(shouldVerifyAfterBrowserAction('browser_click')).toBe(true);
+    expect(shouldVerifyAfterBrowserAction('browser_snapshot')).toBe(false);
+    const prompt = createBrowserActVerifyPrompt({
+      toolName: 'browser_click',
+      summary: 'Clicked Save',
+    });
+
+    expect(prompt).toContain('I just ran browser_click: Clicked Save.');
+    expect(prompt).toContain('Look at the updated page');
+    expect(prompt).not.toMatch(/reply exactly|can you read this image|marker|probe/i);
+  });
+
+  it('requires an explicit target for automation-style browser actions', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService();
+
+    const result = await service.execute('browser_click', { uid: 'e1' }, {
+      requireExplicitTarget: true,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_target_not_selected');
+    expect(chromeStub.debugger.attach).not.toHaveBeenCalled();
+  });
+
+  it('allows automation-style browser navigation to open a fresh controlled tab', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService();
+
+    const result = await service.execute('browser_navigate', { url: 'https://example.com/' }, {
+      requireExplicitTarget: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toMatchObject({
+      url: 'https://example.com/',
+      newTab: true,
+    });
+    expect(storage.get(BROWSER_CONTROL_STORAGE_KEY)).toMatchObject({
+      targetTabId: 100,
+    });
+  });
+
+  it('reacquires a stale target from the last safe target hint', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 12,
+        lastTargetHint: {
+          windowId: 1,
+          origin: 'https://example.com',
+          title: 'Example',
+          updatedAt: 1,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 34, active: true, title: 'Example', url: 'https://example.com/path?token=secret' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget();
+
+    expect(preparation.status).toBe('reacquired');
+    expect(preparation.target?.id).toBe(34);
+    await expect(chromeStub.storage.local.get(BROWSER_CONTROL_STORAGE_KEY)).resolves.toMatchObject({
+      [BROWSER_CONTROL_STORAGE_KEY]: expect.objectContaining({
+        targetTabId: 34,
+        lastTargetHint: expect.objectContaining({
+          origin: 'https://example.com',
+          title: 'Example',
+        }),
+      }),
+    });
+    expect(JSON.stringify(storage.get(BROWSER_CONTROL_STORAGE_KEY))).not.toContain('token=secret');
+  });
+
+  it('does not use the DeepSeek chat tab as the manual active fallback target', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: null,
+        lastTargetHint: null,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'DeepSeek', url: 'https://chat.deepseek.com/a/chat/s/current' }),
+      createTab({ id: 34, active: false, title: 'Example', url: 'https://example.com/' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget({ allowActiveFallback: true });
+
+    expect(preparation.status).toBe('missing');
+    await expect(chromeStub.storage.local.get(BROWSER_CONTROL_STORAGE_KEY)).resolves.toMatchObject({
+      [BROWSER_CONTROL_STORAGE_KEY]: expect.objectContaining({ targetTabId: null }),
+    });
+  });
+
+  it('does not treat a selected DeepSeek chat tab as a ready visual target', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'DeepSeek', url: 'https://chat.deepseek.com/a/chat/s/current' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget();
+
+    expect(preparation.status).toBe('not_controllable');
+    expect(preparation.target?.id).toBe(12);
+  });
+
+  it('does not reacquire DeepSeek chat from a stale readiness hint', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 99,
+        lastTargetHint: {
+          windowId: 1,
+          origin: 'https://chat.deepseek.com',
+          title: 'DeepSeek',
+          updatedAt: 1,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'DeepSeek', url: 'https://chat.deepseek.com/a/chat/s/current' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const preparation = await service.preparePersonalTarget({ allowActiveFallback: true });
+
+    expect(preparation.status).toBe('missing');
+    await expect(chromeStub.storage.local.get(BROWSER_CONTROL_STORAGE_KEY)).resolves.toMatchObject({
+      [BROWSER_CONTROL_STORAGE_KEY]: expect.objectContaining({ targetTabId: 99 }),
+    });
   });
 });
 
@@ -169,6 +376,7 @@ describe('browser navigation tool', () => {
       ...DEFAULT_BROWSER_CONTROL_SETTINGS,
       enabled: true,
       targetTabId: 12,
+      allowVisionCapture: true,
       includeSnapshotAfterActions: false,
     });
     const chromeStub = createChromeStub(storage, [
@@ -206,6 +414,7 @@ describe('browser navigation tool', () => {
       ...DEFAULT_BROWSER_CONTROL_SETTINGS,
       enabled: true,
       targetTabId: 12,
+      allowVisionCapture: true,
       includeSnapshotAfterActions: false,
     });
     const chromeStub = createChromeStub(storage, [
@@ -234,6 +443,67 @@ describe('browser navigation tool', () => {
     );
     await expect(chromeStub.tabs.get(12)).resolves.toMatchObject({
       url: 'https://example.com/',
+    });
+  });
+
+  it('captures the controlled tab screenshot for Vision without returning through generic tool text', async () => {
+    const storage = new Map<string, unknown>();
+    storage.set(BROWSER_CONTROL_STORAGE_KEY, {
+      ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+      enabled: true,
+      targetTabId: 12,
+      allowVisionCapture: true,
+      includeSnapshotAfterActions: false,
+    });
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'Example', url: 'https://example.com/' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+    const capture = await service.captureScreenshotForVision();
+
+    expect(capture).toMatchObject({
+      tabId: 12,
+      mimeType: 'image/png',
+      sizeBytes: 5,
+    });
+    expect(capture).not.toHaveProperty('title');
+    expect(capture).not.toHaveProperty('url');
+    expect(capture.dataBase64).toBe(btoa('probe'));
+    expect(chromeStub.debugger.sendCommand).toHaveBeenCalledWith(
+      { tabId: 12 },
+      'Page.captureScreenshot',
+      {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: false,
+      },
+    );
+  });
+
+  it('does not auto-select the active tab for visual capture', async () => {
+    const storage = new Map<string, unknown>();
+    storage.set(BROWSER_CONTROL_STORAGE_KEY, {
+      ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+      enabled: true,
+      targetTabId: null,
+      allowVisionCapture: true,
+      includeSnapshotAfterActions: false,
+    });
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'Active page', url: 'https://example.com/' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    await expect(service.captureScreenshotForVision()).rejects.toMatchObject({
+      code: 'browser_target_not_selected',
+    });
+    expect(chromeStub.debugger.attach).not.toHaveBeenCalled();
+    await expect(chromeStub.storage.local.get(BROWSER_CONTROL_STORAGE_KEY)).resolves.toMatchObject({
+      [BROWSER_CONTROL_STORAGE_KEY]: expect.objectContaining({ targetTabId: null }),
     });
   });
 });
@@ -320,6 +590,9 @@ function createChromeStub(
           const tab = tabs.get(source.tabId);
           if (tab) tab.url = params.url;
         }
+        if (method === 'Page.captureScreenshot') {
+          return { data: btoa('probe') };
+        }
         return {};
       }),
       onDetach: { addListener: vi.fn() },
@@ -374,7 +647,7 @@ function createChromeStub(
       }),
     },
     tabGroups: {
-      query: vi.fn(),
+      query: vi.fn(async () => []),
     },
   };
 }

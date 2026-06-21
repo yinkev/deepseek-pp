@@ -1,4 +1,10 @@
 import {
+  createDeepSeekWebVisionContinuationRoute,
+  createDeepSeekWebVisionToolContinuationRoute,
+  normalizeDeepSeekWebVisionRefFileIds,
+} from '../deepseek/web-vision';
+import { BROWSER_CONTROL_TOOL_PROVIDER_ID } from '../browser-control/types';
+import {
   DeepSeekAuthError,
   DeepSeekPayloadError,
   DeepSeekPowError,
@@ -31,6 +37,7 @@ const AUTOMATION_MISSING_TOKEN_MESSAGE =
 
 export interface AutomationRunnerOptions {
   executeToolCall?: (call: ToolCall) => Promise<ToolResult>;
+  clientHeaders?: Record<string, string> | null;
 }
 
 export async function runDeepSeekAutomation(
@@ -43,7 +50,9 @@ export async function runDeepSeekAutomation(
 
   try {
     parentMessageId = normalizeMessageId(request.parentMessageId, 'parent_message_id');
-    const clientHeaders = createClientHeaders({ missingTokenMessage: AUTOMATION_MISSING_TOKEN_MESSAGE });
+    const clientHeaders = options?.clientHeaders
+      ? { ...options.clientHeaders }
+      : createClientHeaders({ missingTokenMessage: AUTOMATION_MISSING_TOKEN_MESSAGE });
     chatSessionId ??= await createChatSession(clientHeaders);
     const { augmented: prompt } = buildPromptAugmentation(request.prompt, {
       memories: request.promptContext?.memories ?? [],
@@ -168,7 +177,11 @@ async function runAutomationToolLoop(
     getParentMessageId: (turn) => turn.responseMessageId,
     extractToolCalls: (text) => extractToolCalls(text, {
       descriptors: request.promptContext?.toolDescriptors ?? DEFAULT_TOOL_DESCRIPTORS,
-    }).filter((call) => call.provider?.kind === 'mcp' || call.provider?.id === 'web'),
+    }).filter((call) => (
+      call.provider?.kind === 'mcp' ||
+      call.provider?.id === 'web' ||
+      call.provider?.id === BROWSER_CONTROL_TOOL_PROVIDER_ID
+    )),
     async executeToolCall(call, parentMessageId) {
       const result = await options.executeToolCall!({
         ...call,
@@ -186,8 +199,8 @@ async function runAutomationToolLoop(
       });
     },
     buildContinuationPrompt: (executions) => buildAutomationToolContinuationPrompt(executions, locale),
-    submitContinuation: (prompt, parentMessageId) => submitAutomationPrompt(
-      request,
+    submitContinuation: (prompt, parentMessageId, executions) => submitAutomationPrompt(
+      createAutomationContinuationRequest(request, executions),
       chatSessionId,
       parentMessageId,
       prompt,
@@ -196,6 +209,38 @@ async function runAutomationToolLoop(
   });
 
   return { stream: loop.turn, executions: loop.executions };
+}
+
+function createAutomationContinuationRequest(
+  request: AutomationRunnerRequest,
+  executions: ToolExecutionRecord[],
+): AutomationRunnerRequest {
+  const toolRoute = createDeepSeekWebVisionToolContinuationRoute({
+    executions,
+    modelType: request.promptOptions.modelType,
+    thinkingEnabled: request.promptOptions.thinkingEnabled,
+    searchEnabled: request.promptOptions.searchEnabled,
+  });
+  if (toolRoute.refFileIds.length > 0) {
+    return {
+      ...request,
+      promptOptions: {
+        ...request.promptOptions,
+        ...toolRoute,
+      },
+    };
+  }
+
+  if (normalizeDeepSeekWebVisionRefFileIds(request.promptOptions.refFileIds).length === 0) {
+    return request;
+  }
+  return {
+    ...request,
+    promptOptions: {
+      ...request.promptOptions,
+      ...createDeepSeekWebVisionContinuationRoute(),
+    },
+  };
 }
 
 export function buildAutomationToolContinuationPrompt(

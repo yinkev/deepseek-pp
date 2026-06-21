@@ -61,7 +61,8 @@ import {
   validateSkill,
   validateStoredMemory,
 } from '../core/sync/schema';
-import { clearToolCallHistory, getToolCallHistory } from '../core/tool/history';
+import { appendToolCallHistory, clearToolCallHistory, getToolCallHistory } from '../core/tool/history';
+import { redactDurableToolString } from '../core/tool/redaction';
 import {
   executeRuntimeToolCall,
   getRuntimeToolDescriptors,
@@ -70,12 +71,19 @@ import {
 } from '../core/tool/runtime';
 import {
   browserControlService,
+  createBrowserActVerifyPrompt,
+  executeBrowserControlToolCall,
   getBrowserControlSettings,
   getBrowserControlState,
+  isBrowserControlToolName,
+  shouldVerifyAfterBrowserAction,
   saveBrowserControlSettings,
-  setBrowserControlEnabled,
-  type BrowserControlSettings,
-} from '../core/browser-control';
+	  setBrowserControlEnabled,
+	  type BrowserControlSettings,
+	  type BrowserControlState,
+	  type BrowserControlTargetPreparation,
+	  type BrowserScreenshotCaptureResult,
+	} from '../core/browser-control';
 import { filterSidepanelChatToolDescriptors } from '../core/tool/sidepanel';
 import {
   addConversationToProject,
@@ -152,6 +160,23 @@ import {
 import { getWebToolSettings, setWebToolEnabled } from '../core/tool/web-settings';
 import { getAllScenarios, applyScenarioTemplate } from '../core/scenario/store';
 import { getChatEnabled } from '../core/chat/store';
+import { selectSidepanelChatProvider } from '../core/chat/provider';
+import {
+	  scanRuntimeDoctorStorage,
+	  type RuntimeDoctorReport,
+	  type RuntimeDoctorReadiness,
+	} from '../core/chat/runtime-doctor';
+import {
+  clearSidepanelWebAuthRejected,
+  isSidepanelWebAuthRejected,
+  markSidepanelWebAuthRejected,
+} from '../core/chat/web-auth-state';
+import {
+  clearSidepanelWebChatSessionState,
+  getOrCreateSidepanelWebChatSession,
+  loadSidepanelWebChatSessionState,
+  saveSidepanelWebChatSessionState,
+} from '../core/chat/web-session';
 import {
   markChatLoopFinished,
   markChatLoopStarted,
@@ -179,22 +204,48 @@ import {
   getAutomationRuns,
   setAutomationStatus,
   updateAutomation,
+  updateAutomationRun,
 } from '../core/automation/store';
 import { runDeepSeekAutomation } from '../core/automation/runner';
 import {
   AUTOMATION_WAKE_ALARM_NAME,
   AUTOMATION_WAKE_INTERVAL_MINUTES,
+  AUTOMATION_MAX_ATTEMPTS,
   refreshAutomationNextRunAt,
   runAutomation,
   scanDueAutomations,
 } from '../core/automation/scheduler';
 import { validateAutomationSchedule } from '../core/automation/schedule';
 import {
+  DeepSeekAuthError,
+  DeepSeekPayloadError,
+  DeepSeekPowError,
+  DeepSeekSessionError,
   createChatSession,
   createPowHeaders,
   submitPromptStreaming,
+  rememberDeepSeekClientHeaders,
+  saveClientHeadersToStorage,
   loadClientHeadersFromStorage,
+  clearClientHeadersFromStorage,
+  scrubStoredClientHeaders,
 } from '../core/deepseek/adapter';
+import {
+  DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+  DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
+  DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
+  DeepSeekWebVisionUploadError,
+  createDeepSeekWebVisionFileFromSerializedImage,
+  createDeepSeekWebVisionContinuationRoute,
+  createDeepSeekWebVisionRoute,
+  createDeepSeekWebVisionToolContinuationRoute,
+  normalizeDeepSeekWebVisionRefFileIds,
+  normalizeDeepSeekWebVisionSerializedImages,
+  uploadDeepSeekWebVisionImage,
+  type DeepSeekWebVisionFileMetadata,
+  type DeepSeekWebVisionSerializedImage,
+} from '../core/deepseek/web-vision';
+import { createDeepSeekWebVisionEvidencePack } from '../core/deepseek/vision-evidence';
 import {
   submitOfficialDeepSeekStreaming,
   type OfficialDeepSeekMessage,
@@ -228,13 +279,18 @@ import type { ConversationExportProgress, ConversationExportResult } from '../co
 const DEEPSEEK_HOME_URL = 'https://chat.deepseek.com/';
 const DEEPSEEK_TAB_URL_PATTERN = '*://chat.deepseek.com/*';
 const REFRESH_AUTH_MESSAGE = { type: 'REFRESH_DEEPSEEK_AUTH' } as const;
+const BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME = 'browser_capture_screenshot';
 let chatSessionId: string | null = null;
 let chatParentMessageId: number | null = null;
 let officialApiChatMessages: OfficialDeepSeekMessage[] = [];
+let sidepanelChatSubmitPromise: Promise<void> | null = null;
 const conversationExportControllers = new Map<string, AbortController>();
 let currentBackgroundLocale: SupportedLocale = DEFAULT_LOCALE;
 let currentBackgroundTranslator = createTranslator(DEFAULT_LOCALE);
 let sandboxOffscreenCreation: Promise<void> | null = null;
+let personalRuntimeReadyPromise: Promise<EnsurePersonalRuntimeReadyResult> | null = null;
+let personalRuntimeReadySource: EnsurePersonalRuntimeReadySource | null = null;
+let lastPersonalRuntimeReadiness: RuntimeDoctorReadiness | null = null;
 const SANDBOX_OFFSCREEN_URL = 'sandbox-offscreen.html';
 const SANDBOX_OFFSCREEN_PORT = 'sandbox-offscreen';
 const browserSandboxRuntime: SandboxToolRuntime = {
@@ -268,9 +324,30 @@ type SyncDataSnapshot = {
   savedItems: Awaited<ReturnType<typeof getSavedItemsState>> | null;
 };
 
+type CapturedTabInfo = {
+  id: number;
+  windowId: number;
+  title: string;
+  url: string;
+};
+
+type EnsurePersonalRuntimeReadySource = 'manual' | 'startup';
+
+type EnsurePersonalRuntimeReadyResult = {
+  ok: true;
+  ready: boolean;
+  source: EnsurePersonalRuntimeReadySource;
+  changedSettings: boolean;
+  refreshedAuth: boolean;
+  targetStatus: RuntimeDoctorReadiness['targetStatus'];
+  blockers: RuntimeDoctorReadiness['blockers'];
+  report: RuntimeDoctorReport;
+};
+
 export default defineBackground(() => {
   enableSidePanelActionClick();
   registerWhatsNewInstallListener();
+  registerDeepSeekHeaderScrubListeners();
   registerAutomationAlarmListener();
   refreshBackgroundLocale()
     .then(() => createContextMenus())
@@ -290,6 +367,8 @@ export default defineBackground(() => {
   refreshWhatsNewBadge().catch((error) => reportBackgroundStartupError('whats_new_badge_failed', error));
   ensureAutomationWakeAlarm().catch((error) => reportBackgroundStartupError('automation_alarm_create_failed', error));
   reconcileInterruptedChatLoopOnWake().catch((error) => reportBackgroundStartupError('chat_loop_reconcile_failed', error));
+  scrubStoredClientHeaders().catch((error) => reportBackgroundStartupError('client_header_scrub_failed', error));
+  ensurePersonalRuntimeReady(undefined, 'startup').catch((error) => reportBackgroundStartupError('personal_runtime_ready_failed', error));
   scanDueAutomationsFromWake().catch((error) => reportBackgroundStartupError('automation_startup_scan_failed', error));
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -306,6 +385,17 @@ export default defineBackground(() => {
     }
   });
 });
+
+function registerDeepSeekHeaderScrubListeners() {
+  chrome.runtime.onInstalled.addListener(() => {
+    scrubStoredClientHeaders()
+      .catch((error) => reportBackgroundStartupError('client_header_scrub_install_failed', error));
+  });
+  chrome.runtime.onStartup.addListener(() => {
+    scrubStoredClientHeaders()
+      .catch((error) => reportBackgroundStartupError('client_header_scrub_startup_failed', error));
+  });
+}
 
 function registerAutomationAlarmListener() {
   chrome.alarms.onAlarm.addListener((alarm) => {
@@ -1129,26 +1219,68 @@ async function handleMessage(
       return { ok: true, lastSyncAt: now, counts: getSyncCounts(snapshot) };
     }
 
+    case 'CAPTURE_CURRENT_TAB_IMAGE': {
+      try {
+        return { ok: true, ...await captureCurrentTabImage() };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
     case 'CHAT_SUBMIT_PROMPT': {
-      const { text, config } = message.payload as { text: string; config?: Partial<OfficialApiChatConfig> };
+      const { text, config, images } = message.payload as {
+        text: string;
+        config?: Partial<OfficialApiChatConfig>;
+        images?: unknown;
+      };
       if (!(await getChatEnabled())) {
         return { ok: false, error: 'chat_disabled' };
       }
-      if (!text?.trim()) return { ok: false, error: 'empty_prompt' };
+      let imagePayloads: DeepSeekWebVisionSerializedImage[];
+      try {
+        imagePayloads = normalizeDeepSeekWebVisionSerializedImages(images);
+      } catch (err) {
+        return { ok: false, error: formatSidepanelChatError(err, true) };
+      }
+      if (!text?.trim() && imagePayloads.length === 0) return { ok: false, error: 'empty_prompt' };
+      if (sidepanelChatSubmitPromise) return { ok: false, error: 'chat_busy' };
       // Fire and forget — the streaming response is broadcast
-      handleChatSubmitPrompt(text, config, sender.tab?.id).catch(() => {});
+      sidepanelChatSubmitPromise = handleChatSubmitPrompt(
+        text?.trim() || 'Describe the attached image.',
+        config,
+        sender.tab?.id,
+        imagePayloads,
+      )
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          broadcastChatChunk({ text: '', done: true, error: msg }, sender.tab?.id);
+        })
+        .finally(() => {
+          sidepanelChatSubmitPromise = null;
+        });
       return { ok: true };
     }
 
     case 'CHAT_NEW_SESSION':
-      chatSessionId = null;
-      chatParentMessageId = null;
+      await Promise.all([
+        clearSidepanelChatSession(),
+        clearSidepanelWebAuthRejected(),
+      ]);
       officialApiChatMessages = [];
       return { ok: true };
 
     case 'GET_AUTH_STATUS': {
       return getChatAuthStatus(sender.tab?.id);
     }
+
+    case 'GET_RUNTIME_DOCTOR_REPORT':
+      return getRuntimeDoctorReport(sender.tab?.id);
+
+    case 'REFRESH_DEEPSEEK_WEB_AUTH':
+      return refreshDeepSeekWebAuth(sender.tab?.id);
+
+    case 'ENSURE_PERSONAL_RUNTIME_READY':
+      return ensurePersonalRuntimeReady(sender.tab?.id, 'manual');
 
     case 'GET_OFFICIAL_API_CHAT_CONFIG':
       return getOfficialApiChatConfig();
@@ -1182,6 +1314,17 @@ async function handleMessage(
       return { ok: true };
     }
 
+    case 'STORE_DEEPSEEK_CLIENT_HEADERS': {
+      const payload = message.payload as { headers?: unknown };
+      const headers = normalizeStoredClientHeaders(payload.headers);
+      if (!headers) return { ok: false, error: 'invalid_client_headers' };
+      rememberDeepSeekClientHeaders(headers);
+      const ok = await saveClientHeadersToStorage();
+      if (ok) await clearSidepanelWebAuthRejected();
+      await broadcastChatAuthStatus(sender.tab?.id);
+      return { ok };
+    }
+
     case 'GET_AUTOMATIONS':
       return getAllAutomations();
 
@@ -1191,22 +1334,36 @@ async function handleMessage(
     }
 
     case 'CREATE_AUTOMATION': {
-      const input = message.payload as AutomationCreateInput;
-      validateAutomationInput(input);
-      const automation = await createAutomation(input);
-      const refreshed = await refreshAutomationNextRunAt(automation.id);
-      await broadcastAutomationUpdate(sender.tab?.id);
-      return refreshed ?? automation;
+      const payload = message.payload as AutomationCreateInput & { images?: unknown };
+      const hasImages = Array.isArray(payload.images) && payload.images.length > 0;
+      try {
+        const { images, ...automationInput } = payload;
+        const input = await prepareAutomationVisionInput(automationInput, images);
+        validateAutomationInput(input);
+        const automation = await createAutomation(input);
+        const refreshed = await refreshAutomationNextRunAt(automation.id);
+        await broadcastAutomationUpdate(sender.tab?.id);
+        return refreshed ?? automation;
+      } catch (err) {
+        return { ok: false, error: formatSidepanelChatError(err, hasImages) };
+      }
     }
 
     case 'UPDATE_AUTOMATION': {
-      const { id, patch } = message.payload as { id: string; patch: AutomationUpdateInput };
-      validateAutomationPatch(patch);
-      const automation = await updateAutomation(id, patch);
-      if (!automation) return { ok: false, error: 'automation_not_found' };
-      const refreshed = await refreshAutomationNextRunAt(id);
-      await broadcastAutomationUpdate(sender.tab?.id);
-      return refreshed ?? automation;
+      const payload = message.payload as { id: string; patch: AutomationUpdateInput; images?: unknown };
+      const hasImages = Array.isArray(payload.images) && payload.images.length > 0;
+      try {
+        const { id, patch, images } = payload;
+        const preparedPatch = await prepareAutomationVisionPatch(patch, images);
+        validateAutomationPatch(preparedPatch);
+        const automation = await updateAutomation(id, preparedPatch);
+        if (!automation) return { ok: false, error: 'automation_not_found' };
+        const refreshed = await refreshAutomationNextRunAt(id);
+        await broadcastAutomationUpdate(sender.tab?.id);
+        return refreshed ?? automation;
+      } catch (err) {
+        return { ok: false, error: formatSidepanelChatError(err, hasImages) };
+      }
     }
 
     case 'SET_AUTOMATION_STATUS': {
@@ -1252,11 +1409,26 @@ async function broadcastToTabs(payload: Record<string, unknown>, excludeTabId?: 
 }
 
 async function loadOrRefreshClientHeaders(preferredTabId?: number): Promise<Record<string, string> | null> {
+  if (await isSidepanelWebAuthRejected()) return null;
   const cached = await loadClientHeadersFromStorage();
   if (cached) return cached;
 
   await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
   return loadClientHeadersFromStorage();
+}
+
+function normalizeStoredClientHeaders(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== 'object') return null;
+  const headers = value as Record<string, unknown>;
+  const authorization = headers.Authorization;
+  if (typeof authorization !== 'string' || !authorization) return null;
+
+  const normalized: Record<string, string> = { Authorization: authorization };
+  for (const [key, entry] of Object.entries(headers)) {
+    if (key === 'Authorization') continue;
+    if (typeof entry === 'string' && entry) normalized[key] = entry;
+  }
+  return normalized;
 }
 
 async function refreshClientHeadersFromDeepSeekTabs(preferredTabId?: number): Promise<boolean> {
@@ -1271,6 +1443,18 @@ async function refreshClientHeadersFromDeepSeekTabs(preferredTabId?: number): Pr
     }
   }
   return false;
+}
+
+async function forgetClientHeadersInDeepSeekTabs(preferredTabId?: number): Promise<void> {
+  const tabs = await getDeepSeekTabsForAuthRefresh(preferredTabId);
+  await Promise.all(tabs.map(async (tab) => {
+    if (!tab.id) return;
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_DEEPSEEK_CLIENT_HEADERS' });
+    } catch {
+      // Content scripts may be absent on stale or restricted tabs.
+    }
+  }));
 }
 
 async function getDeepSeekTabsForAuthRefresh(preferredTabId?: number): Promise<chrome.tabs.Tab[]> {
@@ -1333,7 +1517,7 @@ async function broadcastProjectContextUpdate(excludeTabId?: number) {
 async function getCurrentDeepSeekConversation(): Promise<
   { ok: true; conversation: CurrentDeepSeekConversation } | { ok: false; error: string }
 > {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const tab = tabs.find((item) => item.id != null && isDeepSeekChatUrl(item.url));
   if (!tab?.id) return { ok: false, error: 'no_active_deepseek_conversation' };
 
@@ -1378,25 +1562,420 @@ async function broadcastAutomationRunsUpdate(excludeTabId?: number) {
 }
 
 async function getChatAuthStatus(preferredTabId?: number) {
-  const hasApiKey = await hasDeepSeekApiKey();
-  if (hasApiKey) {
-    return {
-      ok: true,
-      available: true,
-      provider: 'official-api',
-      hasApiKey: true,
-      hasToken: false,
-    };
-  }
-
-  const headers = await loadOrRefreshClientHeaders(preferredTabId);
+  const [hasApiKey, headers] = await Promise.all([
+    hasDeepSeekApiKey(),
+    loadOrRefreshClientHeaders(preferredTabId),
+  ]);
+  const provider = selectSidepanelChatProvider({
+    hasApiKey,
+    hasWebHeaders: !!headers,
+  });
   return {
     ok: true,
-    available: !!headers,
-    provider: headers ? 'deepseek-web' : null,
-    hasApiKey: false,
+    available: provider !== null,
+    provider,
+    hasApiKey,
     hasToken: !!headers,
   };
+}
+
+async function getRuntimeDoctorReport(
+  preferredTabId?: number,
+  readinessOverride?: RuntimeDoctorReadiness,
+): Promise<RuntimeDoctorReport> {
+  const storageSnapshot = await getRuntimeDoctorStorageSnapshot();
+  const storage = scanRuntimeDoctorStorage(storageSnapshot);
+  const [
+    chatEnabled,
+    hasApiKey,
+    webAuthRejected,
+    storedSession,
+    deepSeekTabs,
+    browserSettings,
+    browserState,
+    retryableFailure,
+  ] = await Promise.all([
+    getChatEnabled(),
+    hasDeepSeekApiKey(),
+    isSidepanelWebAuthRejected(),
+    loadSidepanelWebChatSessionState(),
+    getDeepSeekTabsForAuthRefresh(preferredTabId),
+    getBrowserControlSettings(),
+    getBrowserControlState().catch(() => null),
+    findLatestRetryableAutomationFailure(),
+  ]);
+  let headers = await loadClientHeadersFromStorage();
+  if (!headers && !webAuthRejected) {
+    await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
+    headers = await loadClientHeadersFromStorage();
+  }
+  const hasUsableWebAuth = !!headers && !webAuthRejected;
+  const provider = selectSidepanelChatProvider({
+    hasApiKey,
+    hasWebHeaders: hasUsableWebAuth,
+  });
+  const sessionSource = chatSessionId
+    ? 'memory'
+    : storedSession?.chatSessionId
+      ? 'session'
+      : 'none';
+  const parentMessageId = sessionSource === 'memory'
+    ? chatParentMessageId
+    : storedSession?.parentMessageId ?? null;
+
+  const readiness = readinessOverride ?? createRuntimeReadiness({
+    blockers: createRuntimeReadinessBlockers({
+      chatBusy: sidepanelChatSubmitPromise !== null,
+      hasWebAuth: hasUsableWebAuth,
+      webAuthRejected,
+      browserSettings,
+      browserState,
+      storage,
+    }),
+    lastPreparedAt: lastPersonalRuntimeReadiness?.lastPreparedAt ?? null,
+    preparing: personalRuntimeReadyPromise !== null,
+    targetStatus: getRuntimeReadinessTargetStatus(browserSettings, browserState),
+    noLeak: storage.ok,
+  });
+
+  return {
+    ok: true,
+    generatedAt: Date.now(),
+    chatEnabled,
+    chatBusy: sidepanelChatSubmitPromise !== null,
+    provider,
+    hasApiKey,
+    hasWebAuth: hasUsableWebAuth,
+    webAuthRejected,
+    deepSeekTabCount: deepSeekTabs.length,
+    sidepanelSession: {
+      active: sessionSource !== 'none',
+      source: sessionSource,
+      parentMessageId,
+    },
+    vision: {
+      maxImagesPerTurn: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+      rawImagesStoredDurably: storage.issues.some((issue) => issue.reason === 'raw_image_data'),
+    },
+    browserControl: {
+      enabled: browserSettings.enabled,
+      targetSelected: typeof browserSettings.targetTabId === 'number',
+      visualCaptureAllowed: browserSettings.allowVisionCapture,
+      actVerifyEnabled: browserSettings.verifyAfterActions,
+      evidencePacksEnabled: browserSettings.collectEvidencePacks,
+      debugDistillerEnabled: browserSettings.debugDistillerEnabled,
+      monitorReady: browserSettings.enabled &&
+        browserSettings.allowVisionCapture &&
+        typeof browserSettings.targetTabId === 'number' &&
+        browserState?.target?.controllable === true &&
+        !isDeepSeekWebTargetUrl(browserState.target.url),
+    },
+    automation: {
+      maxAttempts: AUTOMATION_MAX_ATTEMPTS,
+      retryableFailure,
+    },
+    debugDistiller: {
+      enabled: browserSettings.debugDistillerEnabled,
+      suggestions: browserSettings.debugDistillerEnabled
+        ? createRuntimeDoctorDebugSuggestions(retryableFailure)
+        : [],
+    },
+    readiness,
+    storage,
+  };
+}
+
+function createRuntimeReadinessBlockers(input: {
+  chatBusy: boolean;
+  hasWebAuth: boolean;
+  webAuthRejected: boolean;
+  browserSettings: BrowserControlSettings;
+  browserState: BrowserControlState | null;
+  storage: ReturnType<typeof scanRuntimeDoctorStorage>;
+}): RuntimeDoctorReadiness['blockers'] {
+  const blockers = new Set<RuntimeDoctorReadiness['blockers'][number]>();
+  if (input.chatBusy) blockers.add('chat_busy');
+  if (input.webAuthRejected) blockers.add('web_auth_rejected');
+  if (!input.hasWebAuth) blockers.add('web_auth_missing');
+  if (!input.browserSettings.enabled) blockers.add('browser_control_disabled');
+  if (!input.browserSettings.allowVisionCapture) blockers.add('browser_vision_capture_disabled');
+  if (!input.browserSettings.verifyAfterActions) blockers.add('act_verify_disabled');
+  if (!input.browserSettings.collectEvidencePacks) blockers.add('evidence_packs_disabled');
+  if (typeof input.browserSettings.targetTabId !== 'number' || !input.browserState?.target) {
+    blockers.add('browser_target_missing');
+  } else if (
+    input.browserState.target.controllable !== true ||
+    isDeepSeekWebTargetUrl(input.browserState.target.url)
+  ) {
+    blockers.add('browser_target_not_controllable');
+  }
+  if (!input.storage.ok) {
+    blockers.add(input.storage.issues.some((issue) => issue.reason === 'storage_read_failed')
+      ? 'storage_scan_failed'
+      : 'storage_leak');
+  }
+  return Array.from(blockers);
+}
+
+function getRuntimeReadinessTargetStatus(
+  browserSettings: BrowserControlSettings,
+  browserState: BrowserControlState | null,
+): RuntimeDoctorReadiness['targetStatus'] {
+  if (!browserState?.supported) return 'unsupported';
+  if (typeof browserSettings.targetTabId !== 'number' || !browserState.target) return 'missing';
+  return browserState.target.controllable && !isDeepSeekWebTargetUrl(browserState.target.url)
+    ? 'ready'
+    : 'not_controllable';
+}
+
+function isDeepSeekWebTargetUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname === 'chat.deepseek.com';
+  } catch {
+    return false;
+  }
+}
+
+async function findLatestRetryableAutomationFailure(): Promise<RuntimeDoctorReport['automation']['retryableFailure']> {
+  const automations = await getAllAutomations();
+  const candidates = automations
+    .filter((automation) => automation.lastError?.retryable === true)
+    .sort((a, b) => (b.lastError?.at ?? 0) - (a.lastError?.at ?? 0));
+  const automation = candidates[0];
+  if (!automation?.lastError) return null;
+  const runs = await getAutomationRuns({ automationId: automation.id, limit: 1 }).catch(() => []);
+  return {
+    automationId: automation.id,
+    automationName: redactDurableToolString(automation.name) ?? 'Automation',
+    runId: runs[0]?.id ?? null,
+    code: automation.lastError.code,
+    message: redactDurableToolString(automation.lastError.message) ?? '',
+    phase: automation.lastError.phase,
+    at: automation.lastError.at,
+  };
+}
+
+function createRuntimeDoctorDebugSuggestions(
+  failure: RuntimeDoctorReport['automation']['retryableFailure'],
+): RuntimeDoctorReport['debugDistiller']['suggestions'] {
+  if (!failure) return [];
+  return [{
+    id: `automation-failure-${failure.automationId}`,
+    kind: 'memory',
+    title: `Remember automation recovery: ${failure.automationName}`,
+    preview: `When automation "${failure.automationName}" fails in phase "${failure.phase}" with "${failure.code}", refresh DeepSeek Web auth and retry the run before changing the task.`,
+    reason: 'Latest retryable automation failure can become a personal recovery memory.',
+  }];
+}
+
+async function refreshDeepSeekWebAuth(preferredTabId?: number) {
+  if (sidepanelChatSubmitPromise) {
+    return {
+      ok: false,
+      error: 'chat_busy',
+      report: await getRuntimeDoctorReport(preferredTabId),
+    };
+  }
+  await clearSidepanelWebAuthRejected();
+  await clearSidepanelChatSession();
+  await clearClientHeadersFromStorage();
+  await forgetClientHeadersInDeepSeekTabs(preferredTabId);
+  const refreshed = await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
+  await broadcastChatAuthStatus(preferredTabId);
+  return {
+    ok: true,
+    refreshed,
+    report: await getRuntimeDoctorReport(preferredTabId),
+  };
+}
+
+async function ensurePersonalRuntimeReady(
+  preferredTabId: number | undefined,
+  source: EnsurePersonalRuntimeReadySource,
+): Promise<EnsurePersonalRuntimeReadyResult> {
+  if (personalRuntimeReadyPromise) {
+    if (source === 'manual' && personalRuntimeReadySource === 'startup') {
+      await personalRuntimeReadyPromise.catch(() => null);
+      return ensurePersonalRuntimeReady(preferredTabId, 'manual');
+    }
+    return personalRuntimeReadyPromise;
+  }
+  personalRuntimeReadySource = source;
+  personalRuntimeReadyPromise = runEnsurePersonalRuntimeReady(preferredTabId, source)
+    .finally(() => {
+      personalRuntimeReadyPromise = null;
+      personalRuntimeReadySource = null;
+    });
+  return personalRuntimeReadyPromise;
+}
+
+async function runEnsurePersonalRuntimeReady(
+  preferredTabId: number | undefined,
+  source: EnsurePersonalRuntimeReadySource,
+): Promise<EnsurePersonalRuntimeReadyResult> {
+  const preparedAt = Date.now();
+  const blockers = new Set<RuntimeDoctorReadiness['blockers'][number]>();
+  const changedSettings = await ensurePersonalBrowserControlDefaults();
+  if (changedSettings) {
+    await broadcastToolDescriptorsUpdate(preferredTabId);
+    await broadcastBrowserControlUpdate(preferredTabId);
+  }
+
+  let refreshedAuth = false;
+  let hasWebAuth = false;
+  let webAuthRejected = await isSidepanelWebAuthRejected();
+  if (sidepanelChatSubmitPromise) {
+    blockers.add('chat_busy');
+    hasWebAuth = !!(await loadClientHeadersFromStorage());
+  } else if (source === 'startup') {
+    hasWebAuth = !!(await loadClientHeadersFromStorage());
+    if (!hasWebAuth) blockers.add('web_auth_missing');
+  } else {
+    if (webAuthRejected) {
+      await clearSidepanelWebAuthRejected();
+      webAuthRejected = false;
+    }
+    let headers = await loadClientHeadersFromStorage();
+    if (!headers) {
+      refreshedAuth = await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
+      headers = await loadClientHeadersFromStorage();
+    }
+    hasWebAuth = !!headers;
+    if (!hasWebAuth) blockers.add('web_auth_missing');
+  }
+  if (webAuthRejected) blockers.add('web_auth_rejected');
+
+  const targetPreparation = await browserControlService.preparePersonalTarget({
+    allowActiveFallback: source === 'manual',
+  });
+  addTargetPreparationBlocker(blockers, targetPreparation);
+  if (targetPreparation.status === 'reacquired' || targetPreparation.status === 'selected_active') {
+    await broadcastBrowserControlUpdate(preferredTabId);
+  }
+
+  const storageSnapshot = await getRuntimeDoctorStorageSnapshot();
+  const storage = scanRuntimeDoctorStorage(storageSnapshot);
+  if (!storage.ok) {
+    blockers.add(storage.issues.some((issue) => issue.reason === 'storage_read_failed')
+      ? 'storage_scan_failed'
+      : 'storage_leak');
+  }
+
+  const settings = await getBrowserControlSettings();
+  if (!settings.enabled) blockers.add('browser_control_disabled');
+  if (!settings.allowVisionCapture) blockers.add('browser_vision_capture_disabled');
+  if (!settings.verifyAfterActions) blockers.add('act_verify_disabled');
+  if (!settings.collectEvidencePacks) blockers.add('evidence_packs_disabled');
+
+  const readiness = createRuntimeReadiness({
+    blockers: Array.from(blockers),
+    lastPreparedAt: preparedAt,
+    preparing: false,
+    targetStatus: targetPreparation.status,
+    noLeak: storage.ok,
+  });
+  lastPersonalRuntimeReadiness = readiness;
+  const report = await getRuntimeDoctorReport(preferredTabId, readiness);
+
+  return {
+    ok: true,
+    ready: report.readiness.ready,
+    source,
+    changedSettings,
+    refreshedAuth,
+    targetStatus: targetPreparation.status,
+    blockers: report.readiness.blockers,
+    report,
+  };
+}
+
+async function ensurePersonalBrowserControlDefaults(): Promise<boolean> {
+  const current = await getBrowserControlSettings();
+  const patch: Partial<BrowserControlSettings> = {
+    enabled: true,
+    allowVisionCapture: true,
+    verifyAfterActions: true,
+    collectEvidencePacks: true,
+    debugDistillerEnabled: true,
+  };
+  const changed = current.enabled !== true ||
+    current.allowVisionCapture !== true ||
+    current.verifyAfterActions !== true ||
+    current.collectEvidencePacks !== true ||
+    current.debugDistillerEnabled !== true;
+  if (!changed) return false;
+  await saveBrowserControlSettings(patch);
+  return true;
+}
+
+function addTargetPreparationBlocker(
+  blockers: Set<RuntimeDoctorReadiness['blockers'][number]>,
+  preparation: BrowserControlTargetPreparation,
+): void {
+  if (preparation.status === 'missing') blockers.add('browser_target_missing');
+  if (preparation.status === 'unsupported') blockers.add('browser_control_disabled');
+  if (preparation.status === 'not_controllable') blockers.add('browser_target_not_controllable');
+}
+
+function createRuntimeReadiness(input: {
+  blockers: RuntimeDoctorReadiness['blockers'];
+  lastPreparedAt: number | null;
+  preparing: boolean;
+  targetStatus: RuntimeDoctorReadiness['targetStatus'];
+  noLeak: boolean;
+}): RuntimeDoctorReadiness {
+  const blockers = Array.from(new Set(input.blockers));
+  return {
+    ready: blockers.length === 0,
+    status: blockers.length === 0
+      ? 'ready'
+      : blockers.some((blocker) => blocker === 'storage_leak' || blocker === 'storage_scan_failed')
+        ? 'blocked'
+        : 'needs_attention',
+    blockers,
+    lastPreparedAt: input.lastPreparedAt,
+    preparing: input.preparing,
+    targetStatus: input.targetStatus,
+    noLeak: input.noLeak,
+  };
+}
+
+async function getRuntimeDoctorStorageSnapshot(): Promise<{
+  local: Record<string, unknown>;
+  session: Record<string, unknown>;
+  failedAreas: Array<'local' | 'session'>;
+}> {
+  const [localSnapshot, sessionSnapshot] = await Promise.all([
+    readStorageAreaSnapshot(chrome.storage.local),
+    chrome.storage.session
+      ? readStorageAreaSnapshot(chrome.storage.session)
+      : Promise.resolve({ data: {}, failed: false }),
+  ]);
+  const failedAreas: Array<'local' | 'session'> = [];
+  if (localSnapshot.failed) failedAreas.push('local');
+  if (sessionSnapshot.failed) failedAreas.push('session');
+  return {
+    local: localSnapshot.data,
+    session: sessionSnapshot.data,
+    failedAreas,
+  };
+}
+
+async function readStorageAreaSnapshot(
+  storage: Pick<chrome.storage.StorageArea, 'get'>,
+): Promise<{ data: Record<string, unknown>; failed: boolean }> {
+  try {
+    return {
+      data: await storage.get(null) as Record<string, unknown>,
+      failed: false,
+    };
+  } catch {
+    return {
+      data: {},
+      failed: true,
+    };
+  }
 }
 
 async function broadcastChatAuthStatus(preferredTabId?: number) {
@@ -1416,7 +1995,295 @@ async function executeBackgroundRuntimeToolCall(
   source: ToolExecutionTrigger,
   options?: RuntimeToolCallOptions,
 ): Promise<ToolResult> {
+  if (call.name === BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME) {
+    const result = await executeBrowserScreenshotVisionTool(call);
+    await appendToolCallHistory(call, result, source);
+    return result;
+  }
+  if (isBrowserControlToolName(call.name)) {
+    const result = await executeBrowserControlToolCall(call, currentBackgroundLocale, {
+      requireExplicitTarget: source === 'automation',
+    });
+    const wrapped = await maybeAttachActVerifyCapture(call, result);
+    await appendToolCallHistory(call, wrapped, source);
+    return wrapped;
+  }
   return executeRuntimeToolCall(call, source, currentBackgroundLocale, options);
+}
+
+async function maybeAttachActVerifyCapture(call: ToolCall, result: ToolResult): Promise<ToolResult> {
+  if (!result.ok || !shouldVerifyAfterBrowserAction(call.name)) return result;
+  const settings = await getBrowserControlSettings();
+  if (!settings.allowVisionCapture || !settings.verifyAfterActions) return result;
+
+  const prompt = createBrowserActVerifyPrompt({
+    toolName: call.name,
+    summary: result.summary,
+  });
+  const startedAt = Date.now();
+  try {
+    const capture = await browserControlService.captureScreenshotForVision();
+    const uploaded = await uploadBrowserScreenshotCapture(capture);
+    const evidencePack = settings.collectEvidencePacks
+      ? createDeepSeekWebVisionEvidencePack({
+        kind: 'browser_act_verify',
+        createdAt: capture.capturedAt,
+        refFileIds: [uploaded.upload.refFileId],
+        webVisionFiles: [uploaded.upload.metadata],
+        source: {
+          toolName: call.name,
+          tabId: capture.tabId,
+          windowId: capture.windowId,
+        },
+        image: uploaded.image,
+        prompt,
+      })
+      : undefined;
+
+    return {
+      ...result,
+      detail: [
+        result.detail ?? result.summary,
+        'A visual verification capture was attached for the next DeepSeek Web Vision continuation.',
+      ].join('\n\n'),
+      output: toToolOutput({
+        ...toOutputObject(result.output),
+        refFileIds: [uploaded.upload.refFileId],
+        webVisionFiles: [toToolVisionMetadata(uploaded.upload.metadata)],
+        actVerify: {
+          ok: true,
+          prompt,
+          capturedAt: capture.capturedAt,
+          image: uploaded.image,
+          ...(evidencePack ? { evidencePack } : {}),
+        },
+      }),
+    };
+  } catch (err) {
+    const error = normalizeVisionCaptureToolError(err);
+    return {
+      ...result,
+      output: toToolOutput({
+        ...toOutputObject(result.output),
+        actVerify: {
+          ok: false,
+          prompt,
+          attemptedAt: startedAt,
+          error,
+        },
+      }),
+    };
+  }
+}
+
+async function captureCurrentTabImage(): Promise<{
+  image: DeepSeekWebVisionSerializedImage;
+  tab: CapturedTabInfo;
+}> {
+  const captureVisibleTab = readOptionalChromeApi(() => chrome.tabs.captureVisibleTab);
+  if (!captureVisibleTab) {
+    throw new Error('Current-tab capture is not available in this browser.');
+  }
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs.find((item) => typeof item.id === 'number' && typeof item.windowId === 'number');
+  if (!tab) {
+    throw new Error('No active tab is available to capture.');
+  }
+
+  const dataUrl = await captureVisibleTab(tab.windowId, { format: 'png' });
+  return {
+    image: createCapturedTabSerializedImage(dataUrl, `current-tab-${Date.now()}.png`),
+    tab: sanitizeCapturedTab(tab),
+  };
+}
+
+async function executeBrowserScreenshotVisionTool(call: ToolCall): Promise<ToolResult> {
+  const startedAt = Date.now();
+  try {
+    const capture = await browserControlService.captureScreenshotForVision();
+    const uploaded = await uploadBrowserScreenshotCapture(capture);
+    const settings = await getBrowserControlSettings();
+    const evidencePack = settings.collectEvidencePacks
+      ? createDeepSeekWebVisionEvidencePack({
+        kind: 'browser_capture',
+        createdAt: capture.capturedAt,
+        refFileIds: [uploaded.upload.refFileId],
+        webVisionFiles: [uploaded.upload.metadata],
+        source: {
+          toolName: call.name,
+          tabId: capture.tabId,
+          windowId: capture.windowId,
+        },
+        image: uploaded.image,
+      })
+      : undefined;
+    const completedAt = Date.now();
+    return {
+      ok: true,
+      name: call.name,
+      provider: call.provider,
+      descriptorId: call.descriptorId,
+      summary: 'Captured the controlled tab for DeepSeek Web Vision',
+      detail: `Captured tab ${capture.tabId} and uploaded it as a transient DeepSeek Web Vision file ref.`,
+      output: toToolOutput({
+        kind: 'deepseek_web_vision_capture',
+        refFileIds: [uploaded.upload.refFileId],
+        webVisionFiles: [toToolVisionMetadata(uploaded.upload.metadata)],
+        tab: {
+          id: capture.tabId,
+          windowId: capture.windowId,
+        },
+        image: uploaded.image,
+        capturedAt: capture.capturedAt,
+        ...(evidencePack ? { evidencePack } : {}),
+      }),
+      startedAt,
+      completedAt,
+      durationMs: completedAt - startedAt,
+    };
+  } catch (err) {
+    const completedAt = Date.now();
+    const error = normalizeVisionCaptureToolError(err);
+    return {
+      ok: false,
+      name: call.name,
+      provider: call.provider,
+      descriptorId: call.descriptorId,
+      summary: error.message,
+      detail: error.message,
+      error,
+      startedAt,
+      completedAt,
+      durationMs: completedAt - startedAt,
+    };
+  }
+}
+
+async function uploadBrowserScreenshotCapture(
+  capture: BrowserScreenshotCaptureResult,
+): Promise<{
+  image: { name: string; mimeType: string; sizeBytes: number };
+  upload: { refFileId: string; metadata: DeepSeekWebVisionFileMetadata };
+}> {
+  const headers = await loadOrRefreshClientHeaders();
+  if (!headers) throw new DeepSeekAuthError(backgroundT('background.auth.missingDeepSeek'));
+  return uploadBrowserScreenshotCaptureWithHeaders(capture, headers);
+}
+
+async function uploadBrowserScreenshotCaptureWithHeaders(
+  capture: BrowserScreenshotCaptureResult,
+  headers: Record<string, string>,
+): Promise<{
+  image: { name: string; mimeType: string; sizeBytes: number };
+  upload: { refFileId: string; metadata: DeepSeekWebVisionFileMetadata };
+}> {
+  const image = createCapturedTabSerializedImage(
+    `data:${capture.mimeType};base64,${capture.dataBase64}`,
+    `browser-capture-${capture.tabId}-${capture.capturedAt}.png`,
+  );
+  const file = createDeepSeekWebVisionFileFromSerializedImage(image);
+  const upload = await uploadDeepSeekWebVisionImage({
+    file,
+    clientHeaders: headers,
+    createPowHeaders: (targetPath) => createPowHeaders(headers, { targetPath }),
+  });
+  return {
+    image: {
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+    },
+    upload,
+  };
+}
+
+function createCapturedTabSerializedImage(
+  dataUrl: string,
+  name: string,
+): DeepSeekWebVisionSerializedImage {
+  const marker = ';base64,';
+  const markerIndex = dataUrl.indexOf(marker);
+  if (!dataUrl.startsWith('data:') || markerIndex <= 5) {
+    throw new Error('Captured tab image is not a base64 data URL.');
+  }
+  const mimeType = dataUrl.slice('data:'.length, markerIndex).toLowerCase();
+  if (!DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(mimeType)) {
+    throw new Error('Captured tab image type is not supported by DeepSeek Web Vision.');
+  }
+  const base64 = dataUrl.slice(markerIndex + marker.length);
+  if (!base64) {
+    throw new Error('Captured tab image is empty.');
+  }
+  const sizeBytes = base64ByteLength(base64);
+  if (sizeBytes > DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES) {
+    throw new Error('Captured tab image is larger than the DeepSeek Web Vision 8 MiB limit.');
+  }
+  return {
+    name,
+    mimeType,
+    sizeBytes,
+    dataUrl,
+  };
+}
+
+function sanitizeCapturedTab(tab: chrome.tabs.Tab): CapturedTabInfo {
+  return {
+    id: tab.id ?? -1,
+    windowId: tab.windowId,
+    title: tab.title ?? '',
+    url: tab.url ?? '',
+  };
+}
+
+function normalizeVisionCaptureToolError(err: unknown): NonNullable<ToolResult['error']> {
+  if (err && typeof err === 'object') {
+    const code = typeof (err as { code?: unknown }).code === 'string'
+      ? (err as { code: string }).code
+      : 'browser_vision_capture_failed';
+    const message = err instanceof Error ? err.message : String(err);
+    const retryable = typeof (err as { retryable?: unknown }).retryable === 'boolean'
+      ? (err as { retryable: boolean }).retryable
+      : true;
+    return { code, message, retryable };
+  }
+  return {
+    code: 'browser_vision_capture_failed',
+    message: String(err),
+    retryable: true,
+  };
+}
+
+function toToolVisionMetadata(
+  metadata: DeepSeekWebVisionFileMetadata,
+): Record<string, string | number | boolean | null> {
+  return {
+    id: metadata.id,
+    name: metadata.name,
+    size: metadata.size,
+    mimeType: metadata.mimeType,
+    status: metadata.status,
+    modelKind: metadata.modelKind,
+    isImage: metadata.isImage,
+    auditResult: metadata.auditResult,
+    width: metadata.width,
+    height: metadata.height,
+  };
+}
+
+function toOutputObject(value: ToolResult['output']): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function toToolOutput(value: Record<string, unknown>): ToolResult['output'] {
+  return JSON.parse(JSON.stringify(value)) as ToolResult['output'];
+}
+
+function base64ByteLength(value: string): number {
+  const normalized = value.replace(/\s+/g, '');
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
 }
 
 async function analyzeMultimodalMedia(
@@ -1864,12 +2731,17 @@ async function runAutomationNow(id: string, excludeTabId?: number) {
 async function executeAutomationWithContext(
   request: AutomationRunnerRequest,
 ): Promise<AutomationRunnerResult> {
+  const clientHeaders = await loadOrRefreshClientHeaders();
+  const requestWithRuntimeMonitor = await prepareAutomationRuntimeMonitorRequest(request, clientHeaders);
   const [memories, activePreset, toolDescriptors] = await Promise.all([
     getAllMemories(),
     getActivePreset(),
     getRuntimeToolDescriptors(currentBackgroundLocale),
   ]);
-  const enabledDescriptors = toolDescriptors.filter((descriptor) => descriptor.execution.enabled);
+  const enabledDescriptors = toolDescriptors.filter((descriptor) =>
+    descriptor.execution.enabled &&
+    descriptor.name !== BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME
+  );
   const [project, projectPromptContext] = request.chatSessionId
     ? await Promise.all([
       getProjectForConversation(request.chatSessionId),
@@ -1878,7 +2750,7 @@ async function executeAutomationWithContext(
     : [null, null];
 
   return runDeepSeekAutomation({
-    ...request,
+    ...requestWithRuntimeMonitor,
     locale: currentBackgroundLocale,
     promptContext: {
       memories: filterMemoriesByProjectScope(memories, project?.id ?? null),
@@ -1887,8 +2759,197 @@ async function executeAutomationWithContext(
       toolDescriptors: enabledDescriptors,
     },
   }, {
+    clientHeaders,
     executeToolCall: (call) => executeBackgroundRuntimeToolCall(call, 'automation'),
   });
+}
+
+async function prepareAutomationRuntimeMonitorRequest(
+  request: AutomationRunnerRequest,
+  clientHeaders: Record<string, string> | null,
+): Promise<AutomationRunnerRequest> {
+  const monitor = request.promptOptions.visualMonitor;
+  if (!monitor?.enabled) return request;
+  if (!clientHeaders) throw new DeepSeekAuthError(backgroundT('background.auth.missingDeepSeek'));
+
+  const capture = await browserControlService.captureScreenshotForVision();
+  const uploaded = await uploadBrowserScreenshotCaptureWithHeaders(capture, clientHeaders);
+  const existingRefFileIds = normalizeDeepSeekWebVisionRefFileIds(request.promptOptions.refFileIds ?? []);
+  const refFileIds = normalizeDeepSeekWebVisionRefFileIds([
+    ...existingRefFileIds,
+    uploaded.upload.refFileId,
+  ]);
+  const existingMetadata = Array.isArray(request.promptOptions.webVisionFiles)
+    ? request.promptOptions.webVisionFiles.filter((metadata) => refFileIds.includes(metadata.id))
+    : [];
+  const route = createDeepSeekWebVisionRoute({
+    modelType: request.promptOptions.modelType ?? null,
+    refFileIds,
+    thinkingEnabled: request.promptOptions.thinkingEnabled,
+    searchEnabled: request.promptOptions.searchEnabled,
+  });
+  const evidencePack = monitor.includeEvidencePack
+    ? createDeepSeekWebVisionEvidencePack({
+      kind: 'automation_monitor',
+      createdAt: capture.capturedAt,
+      refFileIds: [uploaded.upload.refFileId],
+      webVisionFiles: [uploaded.upload.metadata],
+      source: {
+        automationId: request.automationId,
+        automationRunId: request.runId,
+        tabId: capture.tabId,
+        windowId: capture.windowId,
+      },
+      image: uploaded.image,
+      prompt: 'Look at the current browser state and use it as the visual input for this scheduled check.',
+    })
+    : undefined;
+  const visualEvidencePacks = evidencePack
+    ? [...(request.promptOptions.visualEvidencePacks ?? []), evidencePack]
+    : request.promptOptions.visualEvidencePacks;
+
+  const preparedRequest: AutomationRunnerRequest = {
+    ...request,
+    promptOptions: {
+      ...request.promptOptions,
+      ...route,
+      webVisionFiles: [
+        ...existingMetadata,
+        uploaded.upload.metadata,
+      ],
+      visualMonitor: monitor,
+      visualEvidencePacks,
+    },
+  };
+  await updateAutomationRun(request.runId, { request: preparedRequest });
+  return preparedRequest;
+}
+
+async function prepareAutomationVisionInput(
+  input: AutomationCreateInput,
+  images: unknown,
+): Promise<AutomationCreateInput> {
+  return {
+    ...input,
+    promptOptions: await prepareAutomationVisionPromptOptions(input.promptOptions, images),
+  };
+}
+
+async function prepareAutomationVisionPatch(
+  patch: AutomationUpdateInput,
+  images: unknown,
+): Promise<AutomationUpdateInput> {
+  const imagePayloads = normalizeDeepSeekWebVisionSerializedImages(images);
+  if (!patch.promptOptions && imagePayloads.length === 0) return patch;
+
+  return {
+    ...patch,
+    promptOptions: await prepareAutomationVisionPromptOptions(
+      patch.promptOptions ?? {
+        modelType: null,
+        searchEnabled: false,
+        thinkingEnabled: false,
+        refFileIds: [],
+      },
+      imagePayloads,
+    ),
+  };
+}
+
+async function prepareAutomationVisionPromptOptions(
+  promptOptions: AutomationCreateInput['promptOptions'],
+  images: unknown,
+): Promise<AutomationCreateInput['promptOptions']> {
+  const imagePayloads = Array.isArray(images)
+    ? normalizeDeepSeekWebVisionSerializedImages(images)
+    : images;
+  const serializedImages = normalizeDeepSeekWebVisionSerializedImages(imagePayloads);
+  const existingRefFileIds = normalizeDeepSeekWebVisionRefFileIds(promptOptions.refFileIds ?? []);
+  const existingMetadata = normalizeAutomationVisionMetadata(promptOptions.webVisionFiles, existingRefFileIds);
+
+  if (serializedImages.length === 0) {
+    return applyAutomationVisionRoute(promptOptions, existingRefFileIds, existingMetadata);
+  }
+
+  const headers = await loadOrRefreshClientHeaders();
+  if (!headers) throw new DeepSeekAuthError(backgroundT('background.auth.missingDeepSeek'));
+
+  const uploadResults = [];
+  for (const image of serializedImages) {
+    const file = createDeepSeekWebVisionFileFromSerializedImage(image);
+    uploadResults.push(await uploadDeepSeekWebVisionImage({
+      file,
+      clientHeaders: headers,
+      createPowHeaders: (targetPath) => createPowHeaders(headers, { targetPath }),
+    }));
+  }
+
+  const refFileIds = normalizeDeepSeekWebVisionRefFileIds([
+    ...existingRefFileIds,
+    ...uploadResults.map((result) => result.refFileId),
+  ]);
+  return applyAutomationVisionRoute(promptOptions, refFileIds, mergeVisionMetadata(
+    existingMetadata,
+    uploadResults.map((result) => result.metadata),
+  ));
+}
+
+function applyAutomationVisionRoute(
+  promptOptions: AutomationCreateInput['promptOptions'],
+  refFileIds: string[],
+  webVisionFiles: DeepSeekWebVisionFileMetadata[],
+): AutomationCreateInput['promptOptions'] {
+  const route = createDeepSeekWebVisionRoute({
+    modelType: promptOptions.modelType ?? null,
+    refFileIds,
+    thinkingEnabled: promptOptions.thinkingEnabled === true,
+    searchEnabled: promptOptions.searchEnabled === true,
+  });
+  return {
+    ...promptOptions,
+    modelType: route.modelType,
+    refFileIds: route.refFileIds,
+    thinkingEnabled: route.thinkingEnabled,
+    searchEnabled: route.searchEnabled,
+    webVisionFiles,
+  };
+}
+
+function normalizeAutomationVisionMetadata(
+  value: unknown,
+  refFileIds: readonly string[],
+): DeepSeekWebVisionFileMetadata[] {
+  if (!Array.isArray(value)) return [];
+  const refSet = new Set(refFileIds);
+  return value
+    .filter((item): item is DeepSeekWebVisionFileMetadata => (
+      !!item &&
+      typeof item === 'object' &&
+      typeof (item as DeepSeekWebVisionFileMetadata).id === 'string' &&
+      refSet.has((item as DeepSeekWebVisionFileMetadata).id)
+    ))
+    .map((item) => ({
+      id: item.id,
+      name: typeof item.name === 'string' ? item.name : null,
+      size: typeof item.size === 'number' && Number.isFinite(item.size) ? item.size : null,
+      mimeType: typeof item.mimeType === 'string' ? item.mimeType : null,
+      status: typeof item.status === 'string' ? item.status : null,
+      modelKind: typeof item.modelKind === 'string' ? item.modelKind : null,
+      isImage: typeof item.isImage === 'boolean' ? item.isImage : null,
+      auditResult: typeof item.auditResult === 'string' ? item.auditResult : null,
+      width: typeof item.width === 'number' && Number.isFinite(item.width) ? item.width : null,
+      height: typeof item.height === 'number' && Number.isFinite(item.height) ? item.height : null,
+    }));
+}
+
+function mergeVisionMetadata(
+  existing: DeepSeekWebVisionFileMetadata[],
+  next: DeepSeekWebVisionFileMetadata[],
+): DeepSeekWebVisionFileMetadata[] {
+  const byId = new Map<string, DeepSeekWebVisionFileMetadata>();
+  for (const item of existing) byId.set(item.id, item);
+  for (const item of next) byId.set(item.id, item);
+  return [...byId.values()];
 }
 
 function validateAutomationInput(input: AutomationCreateInput) {
@@ -2049,12 +3110,21 @@ async function handleChatSubmitPrompt(
   prompt: string,
   configInput?: Partial<OfficialApiChatConfig>,
   excludeTabId?: number,
+  images: DeepSeekWebVisionSerializedImage[] = [],
 ) {
-  const apiKey = await getDeepSeekApiKey();
-  const provider: ChatLoopProvider = apiKey ? 'official-api' : 'web';
-  await markChatLoopStarted(provider);
+  const [apiKey, webHeaders] = await Promise.all([
+    getDeepSeekApiKey(),
+    loadOrRefreshClientHeaders(excludeTabId),
+  ]);
+  const provider = selectSidepanelChatProvider({
+    hasApiKey: !!apiKey,
+    hasWebHeaders: !!webHeaders,
+    hasImages: images.length > 0,
+  });
+  const loopProvider: ChatLoopProvider = provider === 'official-api' ? 'official-api' : 'web';
+  await markChatLoopStarted(loopProvider);
   try {
-    if (apiKey) {
+    if (provider === 'official-api' && apiKey) {
       const config = configInput
         ? normalizeOfficialApiChatConfig(configInput)
         : await getOfficialApiChatConfig();
@@ -2062,46 +3132,109 @@ async function handleChatSubmitPrompt(
       return;
     }
 
-    await handleWebChatSubmitPrompt(prompt, excludeTabId);
+    await handleWebChatSubmitPrompt(prompt, excludeTabId, images, webHeaders);
   } finally {
     await markChatLoopFinished();
   }
 }
 
-async function handleWebChatSubmitPrompt(prompt: string, excludeTabId?: number) {
-  const headers = await loadOrRefreshClientHeaders(excludeTabId);
+async function handleWebChatSubmitPrompt(
+  prompt: string,
+  excludeTabId?: number,
+  images: DeepSeekWebVisionSerializedImage[] = [],
+  clientHeaders?: Record<string, string> | null,
+) {
+  const headers = clientHeaders ?? await loadOrRefreshClientHeaders(excludeTabId);
   if (!headers) {
+    await clearSidepanelChatSession();
     broadcastChatChunk({ text: '', done: true, error: backgroundT('background.auth.missingDeepSeek') }, excludeTabId);
     return;
   }
 
   try {
-    if (!chatSessionId) {
-      chatSessionId = await createChatSession(headers);
-      chatParentMessageId = null;
-    }
+    const sessionState = await getOrCreateSidepanelWebChatSession({
+      chatSessionId,
+      parentMessageId: chatParentMessageId,
+    }, () => createChatSession(headers));
+    chatSessionId = sessionState.chatSessionId;
+    chatParentMessageId = sessionState.parentMessageId;
 
     const { augmented, enabledDescriptors } = await buildSidepanelPrompt(prompt);
+    const uploadResults = [];
+    for (const image of images) {
+      const file = createDeepSeekWebVisionFileFromSerializedImage(image);
+      uploadResults.push(await uploadDeepSeekWebVisionImage({
+        file,
+        clientHeaders: headers,
+        createPowHeaders: (targetPath) => createPowHeaders(headers, { targetPath }),
+      }));
+    }
+    const route = createDeepSeekWebVisionRoute({
+      modelType: null,
+      refFileIds: normalizeDeepSeekWebVisionRefFileIds(uploadResults.map((upload) => upload.refFileId)),
+      thinkingEnabled: false,
+      searchEnabled: false,
+    });
 
     const initialInput = {
       chatSessionId,
       parentMessageId: chatParentMessageId,
-      modelType: null,
+      modelType: route.modelType,
       prompt: augmented,
-      refFileIds: [],
-      thinkingEnabled: false,
-      searchEnabled: false,
+      refFileIds: route.refFileIds,
+      thinkingEnabled: route.thinkingEnabled,
+      searchEnabled: route.searchEnabled,
       clientHeaders: headers,
     };
 
     await runSidepanelToolLoop(initialInput, enabledDescriptors, excludeTabId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatSidepanelChatError(err, images.length > 0);
     broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId);
-    if (msg.includes('auth') || msg.includes('token') || msg.includes('401')) {
-      chatSessionId = null;
+    if (shouldResetSidepanelChatSession(err, msg)) {
+      await clearSidepanelWebAuthState(excludeTabId);
     }
   }
+}
+
+function formatSidepanelChatError(err: unknown, hasImages = false): string {
+  if (hasImages) {
+    if (err instanceof DeepSeekWebVisionUploadError) {
+      if (err.code === 'invalid_image') {
+        return 'DeepSeek Web Vision only supports PNG, JPEG, WebP, or GIF images up to 8 MiB.';
+      }
+      if (err.code === 'file_not_ready') {
+        return 'DeepSeek Web Vision could not finish preparing the image. Try again with a smaller image or refresh chat.deepseek.com.';
+      }
+      return 'DeepSeek Web Vision image upload failed. Refresh chat.deepseek.com and try again.';
+    }
+    if (err instanceof DeepSeekAuthError) {
+      return backgroundT('background.auth.missingDeepSeek');
+    }
+    if (err instanceof DeepSeekSessionError) {
+      return 'DeepSeek Web Vision session could not be created. Refresh chat.deepseek.com and try again.';
+    }
+    if (err instanceof DeepSeekPowError) {
+      return 'DeepSeek Web Vision verification failed. Refresh chat.deepseek.com and try again.';
+    }
+    if (err instanceof DeepSeekPayloadError) {
+      return 'DeepSeek Web Vision request failed. Refresh chat.deepseek.com and try again.';
+    }
+    return 'DeepSeek Web Vision request failed. Refresh chat.deepseek.com and try again.';
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+function shouldResetSidepanelChatSession(err: unknown, message: string): boolean {
+  if (err instanceof DeepSeekAuthError || err instanceof DeepSeekSessionError) return true;
+  if (
+    err instanceof DeepSeekWebVisionUploadError &&
+    (err.httpStatus === 401 || err.httpStatus === 403)
+  ) {
+    return true;
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  return /auth|token|401|403/i.test(raw) || /auth|token|401|403/i.test(message);
 }
 
 async function handleOfficialApiChatSubmitPrompt(
@@ -2280,7 +3413,12 @@ async function runSidepanelToolLoop(
       },
     });
 
+    if (turn.responseMessageId === null) {
+      await clearSidepanelChatSession();
+      throw new DeepSeekPayloadError('DeepSeek Web response did not include a response message id.');
+    }
     chatParentMessageId = turn.responseMessageId;
+    await persistSidepanelChatSession();
     const fullText = accumulated || turn.assistantText;
 
     if (!fullText) {
@@ -2319,11 +3457,18 @@ async function runSidepanelToolLoop(
     const continuationPrompt = backgroundT('background.chat.continueWithToolResults', {
       toolResults: toolResultsText,
     });
+    const continuationRoute = createDeepSeekWebVisionToolContinuationRoute({
+      executions: execs,
+      modelType: currentInput.modelType,
+      thinkingEnabled: currentInput.thinkingEnabled,
+      searchEnabled: currentInput.searchEnabled,
+    });
 
     currentInput = {
       ...currentInput,
       prompt: continuationPrompt,
       parentMessageId: chatParentMessageId,
+      ...continuationRoute,
     };
   }
 
@@ -2350,8 +3495,32 @@ function broadcastChatChunk(
 async function reconcileInterruptedChatLoopOnWake() {
   const interrupted = await reconcileInterruptedChatLoop();
   if (!interrupted) return;
-  chatSessionId = null;
-  chatParentMessageId = null;
+  await clearSidepanelChatSession();
   officialApiChatMessages = [];
   broadcastChatChunk({ text: '', done: true, error: backgroundT('background.chat.interrupted') });
+}
+
+async function persistSidepanelChatSession(): Promise<void> {
+  if (!chatSessionId) return;
+  await saveSidepanelWebChatSessionState({
+    chatSessionId,
+    parentMessageId: chatParentMessageId,
+  });
+}
+
+async function clearSidepanelChatSession(): Promise<void> {
+  chatSessionId = null;
+  chatParentMessageId = null;
+  await clearSidepanelWebChatSessionState();
+}
+
+async function clearSidepanelWebAuthState(preferredTabId?: number): Promise<void> {
+  chatSessionId = null;
+  chatParentMessageId = null;
+  await Promise.all([
+    clearSidepanelWebChatSessionState(),
+    clearClientHeadersFromStorage(),
+    markSidepanelWebAuthRejected(),
+    forgetClientHeadersInDeepSeekTabs(preferredTabId),
+  ]);
 }
