@@ -65,6 +65,8 @@ export const PROMPT_AUTOMATION_READINESS_FIXES = new Set<AutomationReadinessIssu
 
 const AUTOMATION_LOOP_CONTRACT =
   'Workflow contract: Plan the work, evaluate evidence, review risks, grade confidence, iterate once if useful, then stop with the next concrete action. Do not take irreversible actions without explicit confirmation.';
+const AUTOMATION_REVIEW_GATE_CONTRACT =
+  'Review gate: After the first draft, self-review correctness, evidence, safety, and usefulness; grade confidence A-F; iterate once when the grade is below A or a material gap remains; then stop with the final answer and next action.';
 
 export function evaluateAutomationReadiness(
   input: Pick<AutomationCreateInput, 'name' | 'prompt' | 'schedule' | 'promptOptions'>,
@@ -142,6 +144,16 @@ export function applyPromptAutomationReadinessFixes(
   }
   if (trimmed.toLowerCase().includes('workflow contract:')) return trimmed;
   return trimmed ? `${trimmed}\n\n${AUTOMATION_LOOP_CONTRACT}` : AUTOMATION_LOOP_CONTRACT;
+}
+
+export function hasAutomationReviewGate(prompt: string): boolean {
+  return prompt.toLowerCase().includes('review gate:');
+}
+
+export function applyAutomationReviewGate(prompt: string): string {
+  const trimmed = prompt.trim();
+  if (hasAutomationReviewGate(trimmed)) return trimmed;
+  return trimmed ? `${trimmed}\n\n${AUTOMATION_REVIEW_GATE_CONTRACT}` : AUTOMATION_REVIEW_GATE_CONTRACT;
 }
 
 export function applySafeAutomationReadinessFixes(

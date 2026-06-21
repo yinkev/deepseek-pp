@@ -1163,6 +1163,8 @@ export const en = {
         chain: 'Run follow-ups after success',
         chainDescription: 'Queue selected automations after this one succeeds. Cycles and deep chains are blocked automatically.',
         chainPlaceholder: 'Follow-up automation IDs',
+        reviewGate: 'Self-review / grade / iterate',
+        reviewGateDescription: 'Append a visible evaluator contract so the run critiques itself, grades confidence, iterates once when useful, then stops.',
         create: 'Create',
       },
       status: {

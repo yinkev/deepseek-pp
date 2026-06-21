@@ -1163,6 +1163,8 @@ export const zhCN = {
         chain: '成功后运行后续任务',
         chainDescription: '此任务成功后自动排队选中的自动化。循环和过深链路会自动阻断。',
         chainPlaceholder: '后续自动化 ID',
+        reviewGate: '自评 / 评分 / 迭代',
+        reviewGateDescription: '追加可见的评审契约，让运行先自我批判、评分，有必要时迭代一次，然后停止。',
         create: '创建',
       },
       status: {

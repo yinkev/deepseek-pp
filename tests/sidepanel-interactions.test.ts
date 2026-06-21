@@ -490,6 +490,50 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('adds a visible self-review gate when enabled', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-review-gate',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await enterText('任务名称', 'Self reviewer');
+    await enterText(
+      '输入要定时发送到 DeepSeek 的内容',
+      'Plan the work, evaluate evidence, review risks, grade confidence, iterate once, then stop.',
+    );
+    await toggleRow('自评 / 评分 / 迭代');
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: { prompt: string };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.prompt).toContain('Review gate: After the first draft');
+    expect(createCall?.payload.prompt).toContain('grade confidence A-F');
+    expect(createCall?.payload.prompt).toContain('iterate once when the grade is below A');
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
+  });
+
   it('auto-applies safe automation readiness fixes on save', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];

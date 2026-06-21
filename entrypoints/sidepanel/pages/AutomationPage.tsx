@@ -22,10 +22,12 @@ import {
 } from '../../../core/automation/workflow-templates';
 import {
   applyPromptAutomationReadinessFixes,
+  applyAutomationReviewGate,
   applySafeAutomationReadinessFixes,
   evaluateAutomationReadiness,
   getPromptAutomationReadinessFixes,
   getSafeAutomationReadinessFixes,
+  hasAutomationReviewGate,
   type AutomationReadinessIssueCode,
   type AutomationReadinessReport,
 } from '../../../core/automation/readiness';
@@ -86,6 +88,7 @@ type FormState = {
   visualMonitorEnabled: boolean;
   chainEnabled: boolean;
   chainSuccessIdsText: string;
+  reviewGateEnabled: boolean;
 };
 
 type AutomationImageAttachment = {
@@ -109,6 +112,7 @@ const EMPTY_FORM: FormState = {
   visualMonitorEnabled: true,
   chainEnabled: false,
   chainSuccessIdsText: '',
+  reviewGateEnabled: false,
 };
 
 export default function AutomationPage() {
@@ -915,6 +919,13 @@ function AutomationForm({
         </div>
       )}
 
+      <ToggleRow
+        title={t('sidepanel.automationPage.form.reviewGate')}
+        description={t('sidepanel.automationPage.form.reviewGateDescription')}
+        enabled={form.reviewGateEnabled}
+        onToggle={(next) => update('reviewGateEnabled', next)}
+      />
+
       {showReadiness && (
         <AutomationReadinessPanel
           report={readiness}
@@ -1322,6 +1333,7 @@ function fromAutomation(automation: Automation): FormState {
     visualMonitorEnabled: automation.promptOptions.visualMonitor?.enabled === true,
     chainEnabled: automation.chain.enabled,
     chainSuccessIdsText: automation.chain.onSuccessAutomationIds.join(', '),
+    reviewGateEnabled: hasAutomationReviewGate(automation.prompt),
   };
 }
 
@@ -1339,6 +1351,7 @@ function fromAutomationInput(input: AutomationCreateInput): FormState {
     visualMonitorEnabled: input.promptOptions.visualMonitor?.enabled === true,
     chainEnabled: input.chain?.enabled === true,
     chainSuccessIdsText: input.chain?.onSuccessAutomationIds.join(', ') ?? '',
+    reviewGateEnabled: hasAutomationReviewGate(input.prompt),
   };
 }
 
@@ -1362,6 +1375,7 @@ function hasAutomationDraftContent(form: FormState, imageAttachmentCount: number
     form.refFileIdsText.trim() ||
     form.chainSuccessIdsText.trim() ||
     form.chainEnabled ||
+    form.reviewGateEnabled ||
     form.modelType ||
     form.scheduleKind !== 'manual' ||
     imageAttachmentCount > 0,
@@ -1420,7 +1434,7 @@ function toAutomationInput(form: FormState): AutomationCreateInput {
   });
   return {
     name: form.name.trim(),
-    prompt: form.prompt.trim(),
+    prompt: form.reviewGateEnabled ? applyAutomationReviewGate(form.prompt) : form.prompt.trim(),
     schedule,
     chain: {
       enabled: form.chainEnabled,

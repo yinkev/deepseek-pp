@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyPromptAutomationReadinessFixes,
+  applyAutomationReviewGate,
   applySafeAutomationReadinessFixes,
   evaluateAutomationReadiness,
   getPromptAutomationReadinessFixes,
   getSafeAutomationReadinessFixes,
+  hasAutomationReviewGate,
 } from '../core/automation/readiness';
 import { AUTOMATION_WORKFLOW_TEMPLATES, createAutomationInputFromWorkflowTemplate } from '../core/automation/workflow-templates';
 import type { AutomationCreateInput } from '../core/automation/types';
@@ -168,6 +170,17 @@ describe('automation readiness', () => {
     const fixedReport = evaluateAutomationReadiness({ ...input, prompt: fixedPrompt });
     expect(fixedReport.issues.some((issue) => issue.code === 'loop_contract_weak')).toBe(false);
     expect(applyPromptAutomationReadinessFixes(fixedPrompt, issueCodes)).toBe(fixedPrompt);
+  });
+
+  it('adds a deterministic self-review gate once', () => {
+    const prompt = 'Plan, evaluate, review, grade, iterate, then stop.';
+    const gated = applyAutomationReviewGate(prompt);
+
+    expect(gated).toContain(prompt);
+    expect(gated).toContain('Review gate: After the first draft');
+    expect(gated).toContain('grade confidence A-F');
+    expect(hasAutomationReviewGate(gated)).toBe(true);
+    expect(applyAutomationReviewGate(gated)).toBe(gated);
   });
 
   it('adds an explicit stop rule for scheduled prompts', () => {
