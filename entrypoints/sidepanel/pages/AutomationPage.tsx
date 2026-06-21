@@ -70,6 +70,8 @@ const TEMPLATE_CATEGORY_FILTERS: Array<'all' | AutomationWorkflowTemplateCategor
   'memory',
 ];
 const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
+const AUTOMATION_LIST_FILTERS = ['all', 'active', 'paused', 'blocked'] as const;
+type AutomationListFilter = typeof AUTOMATION_LIST_FILTERS[number];
 
 type FormState = {
   name: string;
@@ -115,6 +117,7 @@ export default function AutomationPage() {
   const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
   const [imageAttachments, setImageAttachments] = useState<AutomationImageAttachment[]>([]);
   const [automationQuery, setAutomationQuery] = useState('');
+  const [automationListFilter, setAutomationListFilter] = useState<AutomationListFilter>('all');
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const banner = useBanner();
@@ -126,12 +129,15 @@ export default function AutomationPage() {
   );
   const filteredAutomations = useMemo(() => {
     const query = automationQuery.trim().toLowerCase();
-    if (!query) return automations;
-    return automations.filter((automation) =>
-      automation.name.toLowerCase().includes(query) ||
-      automation.prompt.toLowerCase().includes(query)
-    );
-  }, [automations, automationQuery]);
+    return automations.filter((automation) => {
+      if (automationListFilter === 'active' && automation.status !== 'active') return false;
+      if (automationListFilter === 'paused' && automation.status !== 'paused') return false;
+      if (automationListFilter === 'blocked' && evaluateAutomationReadiness(automation).status !== 'blocked') return false;
+      if (!query) return true;
+      return automation.name.toLowerCase().includes(query) ||
+        automation.prompt.toLowerCase().includes(query);
+    });
+  }, [automations, automationListFilter, automationQuery]);
 
   const load = async () => {
     const list: Automation[] = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATIONS' });
@@ -449,12 +455,29 @@ export default function AutomationPage() {
       )}
 
       {!showForm && automations.length > 0 && (
-        <input
-          value={automationQuery}
-          onChange={(event) => setAutomationQuery(event.target.value)}
-          className="ds-input w-full px-3 py-2 text-xs rounded-lg"
-          placeholder={t('sidepanel.automationPage.filterPlaceholder')}
-        />
+        <div className="space-y-2">
+          <input
+            value={automationQuery}
+            onChange={(event) => setAutomationQuery(event.target.value)}
+            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+            placeholder={t('sidepanel.automationPage.filterPlaceholder')}
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {AUTOMATION_LIST_FILTERS.map((filter) => {
+              const selected = automationListFilter === filter;
+              return (
+                <button
+                  key={filter}
+                  type="button"
+                  onClick={() => setAutomationListFilter(filter)}
+                  className={`px-2 py-1 text-[11px] rounded-md ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
+                >
+                  {t(`sidepanel.automationPage.filters.${filter}` as LocaleMessageKey)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {loading ? (

@@ -1005,6 +1005,12 @@ export const en = {
       emptyHelp: 'Create a task to track information, review content, or repeat a fixed prompt on schedule.',
       filterPlaceholder: 'Search automations',
       filterNoResults: 'No matching automations',
+      filters: {
+        all: 'All',
+        active: 'Active',
+        paused: 'Paused',
+        blocked: 'Blocked',
+      },
       namePromptRequired: 'Name and prompt are required',
       expressionRequired: 'Enter a schedule expression',
       runFailed: 'Run failed',

@@ -828,7 +828,14 @@ describe('sidepanel interactions', () => {
         createAutomationForPage({
           id: 'automation-visual',
           name: 'Visual page check',
+          status: 'paused',
           prompt: 'Inspect browser target visually and stop.',
+        }),
+        createAutomationForPage({
+          id: 'automation-blocked',
+          name: 'Blocked vision',
+          prompt: 'Look at the current page and stop.',
+          promptOptions: { modelType: 'vision', searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
         }),
       ];
       if (message.type === 'GET_AUTOMATION_RUNS') return [];
@@ -840,17 +847,36 @@ describe('sidepanel interactions', () => {
     await flushEffects();
     expect(container.textContent).toContain('Research digest');
     expect(container.textContent).toContain('Visual page check');
+    expect(container.textContent).toContain('Blocked vision');
 
     await enterText('搜索自动化', 'visual');
     expect(container.textContent).not.toContain('Research digest');
     expect(container.textContent).toContain('Visual page check');
+    expect(container.textContent).not.toContain('Blocked vision');
 
     await enterText('搜索自动化', 'updates');
     expect(container.textContent).toContain('Research digest');
     expect(container.textContent).not.toContain('Visual page check');
+    expect(container.textContent).not.toContain('Blocked vision');
 
     await enterText('搜索自动化', 'missing');
     expect(container.textContent).toContain('没有匹配的自动化');
+
+    await enterText('搜索自动化', '');
+    await clickAutomationListFilter('暂停');
+    expect(container.textContent).not.toContain('Research digest');
+    expect(container.textContent).toContain('Visual page check');
+    expect(container.textContent).not.toContain('Blocked vision');
+
+    await clickAutomationListFilter('阻塞');
+    expect(container.textContent).not.toContain('Research digest');
+    expect(container.textContent).not.toContain('Visual page check');
+    expect(container.textContent).toContain('Blocked vision');
+
+    await clickAutomationListFilter('全部');
+    expect(container.textContent).toContain('Research digest');
+    expect(container.textContent).toContain('Visual page check');
+    expect(container.textContent).toContain('Blocked vision');
   });
 
   it('prepares an existing automation from its card', async () => {
@@ -1045,6 +1071,16 @@ async function enterText(placeholder: string, value: string) {
 
 async function clickButton(label: string) {
   const button = Array.from(container.querySelectorAll('button'))
+    .find((candidate) => candidate.textContent === label);
+  expect(button).toBeTruthy();
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+async function clickAutomationListFilter(label: string) {
+  const search = inputByPlaceholder('搜索自动化');
+  const button = Array.from(search.parentElement?.querySelectorAll('button') ?? [])
     .find((candidate) => candidate.textContent === label);
   expect(button).toBeTruthy();
   await act(async () => {
