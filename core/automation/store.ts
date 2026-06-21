@@ -6,9 +6,11 @@ import type {
   AutomationFlightEventKind,
   AutomationFlightEventStatus,
   AutomationFlightRecorder,
+  AutomationChainPolicy,
   AutomationId,
   AutomationPromptOptions,
   AutomationRun,
+  AutomationRunChainContext,
   AutomationRunCreateInput,
   AutomationRunId,
   AutomationRunListOptions,
@@ -27,6 +29,9 @@ import { redactDurableToolString, redactDurableToolValue } from '../tool/redacti
 const STORAGE_KEY = 'deepseek_pp_automations';
 const STORAGE_VERSION = 1;
 const DEFAULT_RUN_HISTORY_LIMIT = 100;
+const DEFAULT_CHAIN_MAX_DEPTH = 3;
+const MAX_CHAIN_DEPTH = 8;
+const MAX_CHAIN_FOLLOW_UPS = 12;
 
 interface AutomationStorageState {
   version: number;
@@ -56,6 +61,7 @@ export async function createAutomation(input: AutomationCreateInput): Promise<Au
   const safeInput = sanitizeAutomationCreateInput(input);
   const automation: Automation = {
     ...safeInput,
+    chain: safeInput.chain ?? normalizeAutomationChain(undefined),
     id: crypto.randomUUID(),
     status: 'active',
     deepseek: {
@@ -290,6 +296,7 @@ function normalizeAutomation(raw: unknown): Automation | null {
   return {
     ...automation,
     promptOptions: normalizePromptOptions(automation.promptOptions),
+    chain: normalizeAutomationChain(automation.chain),
     deepseek: {
       ...deepseek,
       parentMessageId: normalizeStoredMessageId(deepseek.parentMessageId),
@@ -314,6 +321,7 @@ function sanitizeAutomationCreateInput(input: AutomationCreateInput): Automation
   return {
     ...input,
     promptOptions: normalizePromptOptions(input.promptOptions),
+    chain: normalizeAutomationChain(input.chain),
   };
 }
 
@@ -325,10 +333,39 @@ function sanitizeAutomationPatch<T extends AutomationUpdateInput | AutomationRun
   if ('promptOptions' in next) {
     next.promptOptions = normalizePromptOptions(next.promptOptions);
   }
+  if ('chain' in next) {
+    next.chain = normalizeAutomationChain(next.chain);
+  }
   if ('lastError' in next) {
     next.lastError = normalizeAutomationError(next.lastError);
   }
   return next as T;
+}
+
+function normalizeAutomationChain(value: AutomationChainPolicy | undefined): AutomationChainPolicy {
+  const ids = Array.isArray(value?.onSuccessAutomationIds)
+    ? uniqueAutomationIds(value.onSuccessAutomationIds).slice(0, MAX_CHAIN_FOLLOW_UPS)
+    : [];
+  return {
+    enabled: value?.enabled === true && ids.length > 0,
+    onSuccessAutomationIds: ids,
+    maxDepth: normalizeChainDepth(value?.maxDepth),
+  };
+}
+
+function normalizeChainDepth(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_CHAIN_MAX_DEPTH;
+  return Math.max(1, Math.min(MAX_CHAIN_DEPTH, Math.floor(value)));
+}
+
+function uniqueAutomationIds(value: unknown[]): AutomationId[] {
+  const ids: AutomationId[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const normalized = item.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+    if (normalized && !ids.includes(normalized)) ids.push(normalized);
+  }
+  return ids;
 }
 
 function sanitizeAutomationRunUpdate(patch: AutomationRunUpdateInput): AutomationRunUpdateInput {
@@ -471,6 +508,25 @@ function normalizeAutomationRunRequest(request: AutomationRunnerRequest | null):
     parentMessageId: normalizeStoredMessageId(request.parentMessageId),
     promptOptions: normalizePromptOptions(request.promptOptions),
     preflight: normalizeAutomationRunPreflight(request.preflight),
+    chain: normalizeAutomationRunChainContext(request.chain),
+  };
+}
+
+function normalizeAutomationRunChainContext(
+  chain: AutomationRunChainContext | undefined,
+): AutomationRunChainContext | undefined {
+  if (!chain || typeof chain !== 'object') return undefined;
+  return {
+    parentAutomationId: typeof chain.parentAutomationId === 'string' && chain.parentAutomationId.trim()
+      ? chain.parentAutomationId.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128)
+      : null,
+    parentRunId: typeof chain.parentRunId === 'string' && chain.parentRunId.trim()
+      ? chain.parentRunId.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128)
+      : null,
+    depth: normalizeChainDepth(chain.depth),
+    visitedAutomationIds: uniqueAutomationIds(
+      Array.isArray(chain.visitedAutomationIds) ? chain.visitedAutomationIds : [],
+    ),
   };
 }
 

@@ -20,6 +20,7 @@ import type {
   AutomationErrorState,
   AutomationId,
   AutomationRun,
+  AutomationRunChainContext,
   AutomationRunPreflight,
   AutomationRunnerRequest,
   AutomationRunnerResult,
@@ -40,6 +41,7 @@ interface RunAutomationOptions {
   scheduledFor: number | null;
   now?: number;
   executor: AutomationRunExecutor;
+  chainContext?: AutomationRunChainContext;
 }
 
 export interface ScanDueAutomationsResult {
@@ -153,6 +155,7 @@ export async function runAutomation(options: RunAutomationOptions): Promise<Auto
       parentMessageId: workingAutomation.deepseek.parentMessageId,
       promptOptions: workingAutomation.promptOptions,
       preflight: preflight.summary,
+      chain: options.chainContext,
       requestedAt: now,
     };
 
@@ -191,6 +194,9 @@ export async function runAutomation(options: RunAutomationOptions): Promise<Auto
     const runnerResult = await executeWithRetry(run, request, options.executor);
     const completedRun = await completeRun(workingAutomation, run, runnerResult);
     await refreshAutomationAfterRun(workingAutomation, runnerResult, options.trigger);
+    if (runnerResult.ok) {
+      await runAutomationChainFollowUps(workingAutomation, completedRun, runnerResult, options);
+    }
     return completedRun;
   } finally {
     activeRunLocks.delete(automation.id);
@@ -353,6 +359,42 @@ async function refreshAutomationAfterRun(
     nextRunAt,
     lastError: result.error,
   });
+}
+
+async function runAutomationChainFollowUps(
+  automation: Automation,
+  run: AutomationRun,
+  result: AutomationRunnerResult,
+  options: RunAutomationOptions,
+): Promise<void> {
+  const chain = automation.chain;
+  if (!chain.enabled || chain.onSuccessAutomationIds.length === 0) return;
+
+  const currentDepth = options.chainContext?.depth ?? 0;
+  if (currentDepth >= chain.maxDepth) return;
+
+  const visited = new Set(options.chainContext?.visitedAutomationIds ?? []);
+  visited.add(automation.id);
+
+  for (const nextAutomationId of chain.onSuccessAutomationIds) {
+    if (visited.has(nextAutomationId)) continue;
+    const nextAutomation = await getAutomationById(nextAutomationId);
+    if (!nextAutomation || nextAutomation.status !== 'active') continue;
+
+    await runAutomation({
+      automationId: nextAutomation.id,
+      trigger: 'chain',
+      scheduledFor: null,
+      now: result.completedAt,
+      executor: options.executor,
+      chainContext: {
+        parentAutomationId: automation.id,
+        parentRunId: run.id,
+        depth: currentDepth + 1,
+        visitedAutomationIds: [...visited, nextAutomation.id],
+      },
+    });
+  }
 }
 
 async function refreshAutomationAfterPreflightSkip(

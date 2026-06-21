@@ -432,6 +432,64 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
   });
 
+  it('saves successful follow-up automation chains from the form', async () => {
+    const followUp = createAutomationForPage({
+      id: 'automation-review',
+      name: 'Review queue',
+      prompt: 'Review the result, grade it, iterate once, then stop.',
+    });
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [followUp];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-chain-source',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+    await clickButton('新建');
+    await enterText('任务名称', 'Research queue');
+    await enterText(
+      '输入要定时发送到 DeepSeek 的内容',
+      'Research the source, evaluate evidence, review contradictions, grade confidence, iterate once, then stop.',
+    );
+    await toggleRow('成功后运行后续任务');
+    await clickButton('Review queue');
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: {
+          chain: {
+            enabled: boolean;
+            onSuccessAutomationIds: string[];
+            maxDepth: number;
+          };
+        };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.chain).toEqual({
+      enabled: true,
+      onSuccessAutomationIds: ['automation-review'],
+      maxDepth: 3,
+    });
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie|secret-token/);
+  });
+
   it('auto-applies safe automation readiness fixes on save', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];
@@ -1098,6 +1156,17 @@ async function clickAutomationListFilter(label: string) {
   });
 }
 
+async function toggleRow(label: string) {
+  const labelNode = Array.from(container.querySelectorAll('div'))
+    .find((candidate) => candidate.textContent === label);
+  const row = labelNode?.closest('.flex.justify-between');
+  const button = row?.querySelector<HTMLButtonElement>('button.ds-switch');
+  expect(button).toBeTruthy();
+  await act(async () => {
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 async function toggleVisualMonitor() {
   const button = container.querySelector<HTMLButtonElement>('button.ds-switch');
   expect(button).toBeTruthy();
@@ -1140,6 +1209,7 @@ function createAutomationForPage(overrides: Record<string, unknown> = {}) {
     status: 'active',
     schedule: { kind: 'manual', expression: null, timezone: 'UTC', enabled: false, minimumIntervalMinutes: 15 },
     promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+    chain: { enabled: false, onSuccessAutomationIds: [], maxDepth: 3 },
     deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
     createdAt: 1,
     updatedAt: 1,

@@ -84,6 +84,8 @@ type FormState = {
   thinkingEnabled: boolean;
   refFileIdsText: string;
   visualMonitorEnabled: boolean;
+  chainEnabled: boolean;
+  chainSuccessIdsText: string;
 };
 
 type AutomationImageAttachment = {
@@ -105,6 +107,8 @@ const EMPTY_FORM: FormState = {
   thinkingEnabled: false,
   refFileIdsText: '',
   visualMonitorEnabled: true,
+  chainEnabled: false,
+  chainSuccessIdsText: '',
 };
 
 export default function AutomationPage() {
@@ -455,6 +459,7 @@ export default function AutomationPage() {
           <AutomationForm
             form={form}
             editing={editing}
+            availableAutomations={automations}
             imageAttachments={imageAttachments}
             onChange={setForm}
             onAddImages={addImageFiles}
@@ -650,6 +655,7 @@ function AutomationTemplatePicker({
 function AutomationForm({
   form,
   editing,
+  availableAutomations,
   imageAttachments,
   onChange,
   onAddImages,
@@ -659,6 +665,7 @@ function AutomationForm({
 }: {
   form: FormState;
   editing: Automation | null;
+  availableAutomations: Automation[];
   imageAttachments: AutomationImageAttachment[];
   onChange: (form: FormState) => void;
   onAddImages: (files: FileList | null) => void;
@@ -683,6 +690,8 @@ function AutomationForm({
     onChange({ ...form, [key]: value });
   };
   const isScheduled = form.scheduleKind !== 'manual';
+  const selectedChainIds = useMemo(() => parseAutomationChainIds(form.chainSuccessIdsText), [form.chainSuccessIdsText]);
+  const chainTargets = availableAutomations.filter((automation) => automation.id !== editing?.id);
   const handleFiles = (files: FileList | null) => {
     onAddImages(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -717,6 +726,16 @@ function AutomationForm({
       thinkingEnabled: promptOptions.thinkingEnabled,
       refFileIdsText: promptOptions.refFileIds.join(', '),
       visualMonitorEnabled: promptOptions.visualMonitor?.enabled === true,
+    });
+  };
+  const toggleChainTarget = (automationId: string) => {
+    const next = selectedChainIds.includes(automationId)
+      ? selectedChainIds.filter((id) => id !== automationId)
+      : [...selectedChainIds, automationId];
+    onChange({
+      ...form,
+      chainEnabled: next.length > 0 ? true : form.chainEnabled,
+      chainSuccessIdsText: next.join(', '),
     });
   };
 
@@ -862,6 +881,40 @@ function AutomationForm({
         onToggle={(next) => update('visualMonitorEnabled', next)}
       />
 
+      <ToggleRow
+        title={t('sidepanel.automationPage.form.chain')}
+        description={t('sidepanel.automationPage.form.chainDescription')}
+        enabled={form.chainEnabled}
+        onToggle={(next) => update('chainEnabled', next)}
+      />
+      {form.chainEnabled && (
+        <div className="space-y-2">
+          {chainTargets.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {chainTargets.map((automation) => {
+                const selected = selectedChainIds.includes(automation.id);
+                return (
+                  <button
+                    key={automation.id}
+                    type="button"
+                    onClick={() => toggleChainTarget(automation.id)}
+                    className={`px-2 py-1 text-[11px] rounded-md ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
+                  >
+                    {automation.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <input
+            value={form.chainSuccessIdsText}
+            onChange={(event) => update('chainSuccessIdsText', event.target.value)}
+            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+            placeholder={t('sidepanel.automationPage.form.chainPlaceholder')}
+          />
+        </div>
+      )}
+
       {showReadiness && (
         <AutomationReadinessPanel
           report={readiness}
@@ -948,6 +1001,7 @@ function AutomationCard({
         <MetaChip label={t('sidepanel.automationPage.meta.session')} value={automation.deepseek.chatSessionId ? shortId(automation.deepseek.chatSessionId) : t('sidepanel.automationPage.meta.notCreated')} />
         <MetaChip label={t('sidepanel.automationPage.meta.recent')} value={latestRun ? formatRun(latestRun, t) : t('sidepanel.automationPage.meta.none')} />
         <MetaChip label={t('sidepanel.automationPage.meta.visual')} value={automation.promptOptions.visualMonitor?.enabled ? t('sidepanel.automationPage.meta.monitorOn') : t('sidepanel.automationPage.meta.monitorOff')} />
+        <MetaChip label={t('sidepanel.automationPage.meta.chain')} value={automation.chain.enabled ? t('sidepanel.automationPage.meta.chainOn', { count: automation.chain.onSuccessAutomationIds.length }) : t('sidepanel.automationPage.meta.chainOff')} />
         <MetaChip label={t('sidepanel.automationPage.meta.strategy')} value={formatSessionStrategy(sessionStrategy, t)} />
         <MetaChip label={t('sidepanel.automationPage.readiness.title')} value={`${readiness.grade} · ${t(`sidepanel.automationPage.readiness.status.${readiness.status}` as LocaleMessageKey)}`} />
       </div>
@@ -1266,6 +1320,8 @@ function fromAutomation(automation: Automation): FormState {
     thinkingEnabled: automation.promptOptions.thinkingEnabled,
     refFileIdsText: automation.promptOptions.refFileIds.join(', '),
     visualMonitorEnabled: automation.promptOptions.visualMonitor?.enabled === true,
+    chainEnabled: automation.chain.enabled,
+    chainSuccessIdsText: automation.chain.onSuccessAutomationIds.join(', '),
   };
 }
 
@@ -1281,6 +1337,8 @@ function fromAutomationInput(input: AutomationCreateInput): FormState {
     thinkingEnabled: input.promptOptions.thinkingEnabled,
     refFileIdsText: input.promptOptions.refFileIds.join(', '),
     visualMonitorEnabled: input.promptOptions.visualMonitor?.enabled === true,
+    chainEnabled: input.chain?.enabled === true,
+    chainSuccessIdsText: input.chain?.onSuccessAutomationIds.join(', ') ?? '',
   };
 }
 
@@ -1302,6 +1360,8 @@ function hasAutomationDraftContent(form: FormState, imageAttachmentCount: number
     form.name.trim() ||
     form.prompt.trim() ||
     form.refFileIdsText.trim() ||
+    form.chainSuccessIdsText.trim() ||
+    form.chainEnabled ||
     form.modelType ||
     form.scheduleKind !== 'manual' ||
     imageAttachmentCount > 0,
@@ -1362,6 +1422,11 @@ function toAutomationInput(form: FormState): AutomationCreateInput {
     name: form.name.trim(),
     prompt: form.prompt.trim(),
     schedule,
+    chain: {
+      enabled: form.chainEnabled,
+      onSuccessAutomationIds: parseAutomationChainIds(form.chainSuccessIdsText),
+      maxDepth: 3,
+    },
     promptOptions: {
       ...DEFAULT_PROMPT_OPTIONS,
       modelType: route.modelType,
@@ -1495,4 +1560,13 @@ function normalizeFormModelType(modelType: string | null): string {
 
 function parseVisionRefFileIds(value: string): string[] {
   return normalizeDeepSeekWebVisionRefFileIds(value.split(/[\s,]+/));
+}
+
+function parseAutomationChainIds(value: string): string[] {
+  const ids: string[] = [];
+  for (const item of value.split(/[\s,]+/)) {
+    const normalized = item.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+    if (normalized && !ids.includes(normalized)) ids.push(normalized);
+  }
+  return ids;
 }

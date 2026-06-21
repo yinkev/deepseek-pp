@@ -17,7 +17,7 @@ export type AutomationRunStatus =
   | 'cancelled'
   | 'skipped';
 
-export type AutomationTrigger = 'manual' | 'schedule' | 'retry';
+export type AutomationTrigger = 'manual' | 'schedule' | 'retry' | 'chain';
 
 export type AutomationScheduleKind = 'manual' | 'cron' | 'rrule';
 
@@ -65,6 +65,19 @@ export interface AutomationDeepSeekSession {
   lastHistorySyncedAt: number | null;
 }
 
+export interface AutomationChainPolicy {
+  enabled: boolean;
+  onSuccessAutomationIds: AutomationId[];
+  maxDepth: number;
+}
+
+export interface AutomationRunChainContext {
+  parentAutomationId: AutomationId | null;
+  parentRunId: AutomationRunId | null;
+  depth: number;
+  visitedAutomationIds: AutomationId[];
+}
+
 export interface AutomationErrorState {
   code: string;
   message: string;
@@ -81,6 +94,7 @@ export interface Automation {
   status: AutomationStatus;
   schedule: AutomationSchedule;
   promptOptions: AutomationPromptOptions;
+  chain: AutomationChainPolicy;
   deepseek: AutomationDeepSeekSession;
   createdAt: number;
   updatedAt: number;
@@ -90,10 +104,12 @@ export interface Automation {
   version: number;
 }
 
-export type AutomationCreateInput = Pick<Automation, 'name' | 'prompt' | 'schedule' | 'promptOptions'>;
+export type AutomationCreateInput = Pick<Automation, 'name' | 'prompt' | 'schedule' | 'promptOptions'> & {
+  chain?: AutomationChainPolicy;
+};
 
 export type AutomationUpdateInput = Partial<
-  Pick<Automation, 'name' | 'prompt' | 'status' | 'schedule' | 'promptOptions' | 'nextRunAt'>
+  Pick<Automation, 'name' | 'prompt' | 'status' | 'schedule' | 'promptOptions' | 'chain' | 'nextRunAt'>
 >;
 
 export type AutomationRuntimeUpdate = Partial<
@@ -111,6 +127,7 @@ export interface AutomationRunnerRequest {
   locale?: SupportedLocale;
   promptContext?: AutomationPromptContext;
   preflight?: AutomationRunPreflight;
+  chain?: AutomationRunChainContext;
   requestedAt: number;
 }
 
