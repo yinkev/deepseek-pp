@@ -1004,6 +1004,7 @@ export const zhCN = {
       expressionRequired: '请填写定时表达式',
       runFailed: '运行失败',
       deleteConfirm: '删除自动化「{name}」？',
+      changeSessionStrategy: '切换自动化会话策略',
       templates: {
         title: '工作流启动包',
         description: '用高 ROI 循环作为起点，保存前可以继续编辑。',

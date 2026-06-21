@@ -723,6 +723,46 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('没有匹配的工作流。');
   });
 
+  it('cycles the automation session strategy from the page header', async () => {
+    let config = {
+      enabled: true,
+      autoReadyCheckBeforeRun: true,
+      autoRefreshWebAuth: true,
+      sameSessionStrategy: 'last',
+      visualMonitorDefault: true,
+      reducedConfirmations: true,
+    };
+    const sendMessage = vi.fn(async (message: { type: string; payload?: Partial<typeof config> }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'GET_PERSONAL_CONVENIENCE_CONFIG') return { ok: true, config };
+      if (message.type === 'SAVE_PERSONAL_CONVENIENCE_CONFIG') {
+        config = { ...config, ...message.payload };
+        return { ok: true, config };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+
+    expect(container.textContent).toContain('策略: 上次');
+    await clickButton('策略: 上次');
+    expect(container.textContent).toContain('策略: 当前');
+    await clickButton('策略: 当前');
+    expect(container.textContent).toContain('策略: 新建');
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+      payload: { sameSessionStrategy: 'current' },
+    });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+      payload: { sameSessionStrategy: 'new' },
+    });
+    expect(JSON.stringify(sendMessage.mock.calls)).not.toMatch(/chatSessionId|parentMessageId|session-[a-z0-9_-]+/i);
+  });
+
   it('prepares an existing automation from its card', async () => {
     let automation = createAutomationForPage({
       id: 'automation-needs-prep',

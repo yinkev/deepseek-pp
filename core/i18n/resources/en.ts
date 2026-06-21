@@ -1004,6 +1004,7 @@ export const en = {
       expressionRequired: 'Enter a schedule expression',
       runFailed: 'Run failed',
       deleteConfirm: 'Delete automation "{name}"?',
+      changeSessionStrategy: 'Change automation session strategy',
       templates: {
         title: 'Workflow starter pack',
         description: 'Use a high-ROI loop as a starting point, then edit it before saving.',

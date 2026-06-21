@@ -69,6 +69,7 @@ const TEMPLATE_CATEGORY_FILTERS: Array<'all' | AutomationWorkflowTemplateCategor
   'prompt',
   'memory',
 ];
+const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
 
 type FormState = {
   name: string;
@@ -338,6 +339,22 @@ export default function AutomationPage() {
     await load();
   };
 
+  const cycleSessionStrategy = async () => {
+    const index = SESSION_STRATEGY_SEQUENCE.indexOf(personalConfig.sameSessionStrategy);
+    const sameSessionStrategy = SESSION_STRATEGY_SEQUENCE[(index + 1) % SESSION_STRATEGY_SEQUENCE.length];
+    const optimistic = normalizePersonalConvenienceConfig({ ...personalConfig, sameSessionStrategy });
+    setPersonalConfig(optimistic);
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+        payload: { sameSessionStrategy },
+      });
+      setPersonalConfig(normalizePersonalConvenienceConfig(result?.config ?? optimistic));
+    } catch {
+      setPersonalConfig(personalConfig);
+    }
+  };
+
   const prepareAutomation = async (automation: Automation) => {
     const report = evaluateAutomationReadiness(automation);
     if (report.status === 'blocked') return;
@@ -377,15 +394,26 @@ export default function AutomationPage() {
         description={t('sidepanel.automationPage.description')}
         meta={t('sidepanel.automationPage.summary', { total: automations.length, active: activeCount })}
         actions={(
-        <button
-          onClick={startCreate}
-          className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
-        >
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          {t('sidepanel.automationPage.create')}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void cycleSessionStrategy()}
+            className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
+            title={t('sidepanel.automationPage.changeSessionStrategy')}
+            aria-label={t('sidepanel.automationPage.changeSessionStrategy')}
+          >
+            {t('sidepanel.automationPage.meta.strategy')}: {formatSessionStrategy(personalConfig.sameSessionStrategy, t)}
+          </button>
+          <button
+            onClick={startCreate}
+            className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            {t('sidepanel.automationPage.create')}
+          </button>
+        </div>
         )}
       />
 
