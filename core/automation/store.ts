@@ -2,6 +2,10 @@ import type {
   Automation,
   AutomationCreateInput,
   AutomationErrorState,
+  AutomationFlightEvent,
+  AutomationFlightEventKind,
+  AutomationFlightEventStatus,
+  AutomationFlightRecorder,
   AutomationId,
   AutomationPromptOptions,
   AutomationRun,
@@ -117,6 +121,7 @@ export async function createAutomationRun(input: AutomationRunCreateInput): Prom
     request: normalizeAutomationRunRequest(input.request),
     result: null,
     error: null,
+    flightRecorder: null,
     createdAt: now,
     startedAt: null,
     completedAt: null,
@@ -301,6 +306,7 @@ function normalizeAutomationRun(raw: unknown): AutomationRun | null {
     request: normalizeAutomationRunRequest(run.request),
     result: normalizeRunResult(run.result),
     error: normalizeAutomationError(run.error),
+    flightRecorder: normalizeFlightRecorder(run.flightRecorder),
   };
 }
 
@@ -330,6 +336,7 @@ function sanitizeAutomationRunUpdate(patch: AutomationRunUpdateInput): Automatio
   if ('request' in next) next.request = normalizeAutomationRunRequest(next.request ?? null);
   if ('result' in next) next.result = normalizeRunResult(next.result ?? null);
   if ('error' in next) next.error = normalizeAutomationError(next.error ?? null);
+  if ('flightRecorder' in next) next.flightRecorder = normalizeFlightRecorder(next.flightRecorder ?? null);
   return next;
 }
 
@@ -460,9 +467,148 @@ function normalizeAutomationRunRequest(request: AutomationRunnerRequest | null):
   if (!request) return null;
   return {
     ...request,
+    prompt: redactDurableToolString(request.prompt) ?? '',
     parentMessageId: normalizeStoredMessageId(request.parentMessageId),
     promptOptions: normalizePromptOptions(request.promptOptions),
   };
+}
+
+function normalizeFlightRecorder(recorder: AutomationFlightRecorder | null | undefined): AutomationFlightRecorder | null {
+  if (!recorder || typeof recorder !== 'object') return null;
+  const startedAt = finiteNumber(recorder.startedAt) ?? Date.now();
+  const updatedAt = finiteNumber(recorder.updatedAt) ?? startedAt;
+  const session = recorder.session && typeof recorder.session === 'object' ? recorder.session : null;
+  const auth = recorder.auth && typeof recorder.auth === 'object' ? recorder.auth : null;
+  const visual = recorder.visual && typeof recorder.visual === 'object' ? recorder.visual : null;
+  return {
+    schemaVersion: 1,
+    startedAt,
+    updatedAt,
+    session: {
+      strategy: isFlightSessionStrategy(session?.strategy) ? session.strategy : 'current',
+      source: isFlightSessionSource(session?.source) ? session.source : 'automation',
+      chatSessionIdPresent: session?.chatSessionIdPresent === true,
+      parentMessageIdPresent: session?.parentMessageIdPresent === true,
+    },
+    auth: {
+      source: isFlightAuthSource(auth?.source) ? auth.source : 'not_checked',
+      hasWebAuth: auth?.hasWebAuth === true,
+    },
+    visual: {
+      requested: visual?.requested === true,
+      attachedRefCount: finiteNumber(visual?.attachedRefCount) ?? 0,
+      evidencePackCount: finiteNumber(visual?.evidencePackCount) ?? 0,
+      rawImageStored: false,
+    },
+    failure: normalizeFlightRecorderError(recorder.failure),
+    retryable: typeof recorder.retryable === 'boolean' ? recorder.retryable : null,
+    events: Array.isArray(recorder.events)
+      ? recorder.events.map(normalizeFlightEvent).filter((event): event is AutomationFlightEvent => event !== null)
+      : [],
+  };
+}
+
+function normalizeFlightEvent(event: unknown): AutomationFlightEvent | null {
+  if (!event || typeof event !== 'object') return null;
+  const value = event as Partial<AutomationFlightEvent>;
+  if (!isFlightEventKind(value.kind)) return null;
+  return {
+    id: redactDurableToolString(typeof value.id === 'string' && value.id ? value.id : `event-${Date.now()}`) ?? 'event',
+    at: finiteNumber(value.at) ?? Date.now(),
+    kind: value.kind,
+    status: isFlightEventStatus(value.status) ? value.status : 'info',
+    label: redactDurableToolString(typeof value.label === 'string' ? value.label : value.kind) ?? value.kind,
+    summary: redactDurableToolString(typeof value.summary === 'string' ? value.summary : '') ?? '',
+    details: normalizeFlightRecorderDetails(value.details),
+  };
+}
+
+function isFlightEventKind(value: unknown): value is AutomationFlightEventKind {
+  return value === 'request_prepared' ||
+    value === 'session_resolved' ||
+    value === 'auth_resolved' ||
+    value === 'visual_monitor_attached' ||
+    value === 'runner_started' ||
+    value === 'runner_completed' ||
+    value === 'retry_scheduled';
+}
+
+function isFlightEventStatus(value: unknown): value is AutomationFlightEventStatus {
+  return value === 'info' || value === 'success' || value === 'warning' || value === 'error';
+}
+
+function isFlightSessionStrategy(value: unknown): value is AutomationFlightRecorder['session']['strategy'] {
+  return value === 'current' || value === 'last' || value === 'new';
+}
+
+function isFlightSessionSource(value: unknown): value is AutomationFlightRecorder['session']['source'] {
+  return value === 'automation' ||
+    value === 'sidepanel_session' ||
+    value === 'last_session' ||
+    value === 'new_session';
+}
+
+function isFlightAuthSource(value: unknown): value is AutomationFlightRecorder['auth']['source'] {
+  return value === 'web_headers' || value === 'missing' || value === 'not_checked';
+}
+
+function normalizeFlightRecorderError(error: AutomationErrorState | null | undefined): AutomationErrorState | null {
+  const normalized = normalizeAutomationError(error);
+  if (!normalized) return null;
+  return {
+    ...normalized,
+    details: normalizeFlightRecorderDetails(normalized.details),
+  };
+}
+
+function normalizeFlightRecorderDetails(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const redacted = redactDurableToolValue(value);
+  const stripped = stripForbiddenFlightRecorderKeys(redacted);
+  return stripped && typeof stripped === 'object' && !Array.isArray(stripped)
+    ? stripped as Record<string, unknown>
+    : undefined;
+}
+
+function stripForbiddenFlightRecorderKeys(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.map(stripForbiddenFlightRecorderKeys);
+  }
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (isForbiddenFlightRecorderDetailKey(key)) continue;
+    next[key] = stripForbiddenFlightRecorderKeys(entry);
+  }
+  return next;
+}
+
+function isForbiddenFlightRecorderDetailKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return lower === 'authorization' ||
+    lower === 'cookie' ||
+    lower === 'set-cookie' ||
+    lower === 'x-ds-pow-response' ||
+    lower === 'apikey' ||
+    lower === 'api_key' ||
+    lower === 'token' ||
+    lower === 'secret' ||
+    lower === 'signedpath' ||
+    lower === 'signed_path' ||
+    lower === 'ref_file_id' ||
+    lower === 'ref_file_ids' ||
+    key === 'refFileId' ||
+    key === 'refFileIds' ||
+    key === 'webVisionFiles' ||
+    lower === 'dataurl' ||
+    lower === 'database64' ||
+    lower === 'base64data' ||
+    lower === 'imageurl' ||
+    lower === 'image_url';
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function normalizeAutomationError(error: AutomationErrorState | null | undefined): AutomationErrorState | null {

@@ -179,6 +179,17 @@ import {
   saveSidepanelWebChatSessionState,
 } from '../core/chat/web-session';
 import {
+  clearDeepSeekWebLastSession,
+  getDeepSeekWebSessionPreference,
+  rememberDeepSeekWebSession,
+  type DeepSeekWebSessionStrategy,
+} from '../core/chat/session-preference';
+import {
+  getPersonalConvenienceConfig,
+  savePersonalConvenienceConfig,
+  type PersonalConvenienceConfig,
+} from '../core/personal-convenience/config';
+import {
   markChatLoopFinished,
   markChatLoopStarted,
   reconcileInterruptedChatLoop,
@@ -275,7 +286,7 @@ import {
 import type { WebSearchToolName } from '../core/tool/web-search';
 import type { BackgroundConfig, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, ProjectContextState, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncCounts, SystemPromptPreset, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
 import type { McpServerCreateInput, McpServerUpdateInput } from '../core/mcp/types';
-import type { AutomationCreateInput, AutomationRunnerRequest, AutomationRunnerResult, AutomationStatus, AutomationUpdateInput } from '../core/automation/types';
+import type { AutomationCreateInput, AutomationFlightEvent, AutomationFlightRecorder, AutomationRunnerRequest, AutomationRunnerResult, AutomationStatus, AutomationUpdateInput } from '../core/automation/types';
 import type { ConversationExportProgress, ConversationExportResult } from '../core/export/types';
 
 const DEEPSEEK_HOME_URL = 'https://chat.deepseek.com/';
@@ -1230,6 +1241,26 @@ async function handleMessage(
       }
     }
 
+    case 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE': {
+      try {
+        return { ok: true, ...await captureBrowserControlTargetImage() };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    case 'GET_PERSONAL_CONVENIENCE_CONFIG':
+      return { ok: true, config: await getPersonalConvenienceConfig() };
+
+    case 'SAVE_PERSONAL_CONVENIENCE_CONFIG':
+      return {
+        ok: true,
+        config: await savePersonalConvenienceConfig(message.payload as Partial<PersonalConvenienceConfig>),
+      };
+
+    case 'GET_DEEPSEEK_WEB_SESSION_PREFERENCE':
+      return { ok: true, preference: await getDeepSeekWebSessionPreference() };
+
     case 'CHAT_SUBMIT_PROMPT': {
       const { text, config, images } = message.payload as {
         text: string;
@@ -1268,6 +1299,7 @@ async function handleMessage(
       await Promise.all([
         clearSidepanelChatSession(),
         clearSidepanelWebAuthRejected(),
+        clearDeepSeekWebLastSession(),
       ]);
       officialApiChatMessages = [];
       return { ok: true };
@@ -1606,6 +1638,8 @@ async function getRuntimeDoctorReport(
     browserSettings,
     browserState,
     retryableFailure,
+    personal,
+    sessionPreference,
   ] = await Promise.all([
     getChatEnabled(),
     hasDeepSeekApiKey(),
@@ -1615,6 +1649,8 @@ async function getRuntimeDoctorReport(
     getBrowserControlSettings(),
     getBrowserControlState().catch(() => null),
     findLatestRetryableAutomationFailure(),
+    getPersonalConvenienceConfig(),
+    getDeepSeekWebSessionPreference(),
   ]);
   let headers = await loadClientHeadersFromStorage();
   if (!headers && !webAuthRejected) {
@@ -1664,6 +1700,17 @@ async function getRuntimeDoctorReport(
       active: sessionSource !== 'none',
       source: sessionSource,
       parentMessageId,
+    },
+    personalConvenience: {
+      enabled: personal.enabled,
+      autoReadyCheckBeforeRun: personal.autoReadyCheckBeforeRun,
+      autoRefreshWebAuth: personal.autoRefreshWebAuth,
+      sameSessionStrategy: personal.sameSessionStrategy,
+      visualMonitorDefault: personal.visualMonitorDefault,
+      reducedConfirmations: personal.reducedConfirmations,
+      lastSessionRemembered: !!sessionPreference.lastSession,
+      lastSessionSource: sessionPreference.lastSession?.source ?? null,
+      lastSessionUpdatedAt: sessionPreference.lastSession?.updatedAt ?? null,
     },
     vision: {
       maxImagesPerTurn: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
@@ -1806,6 +1853,22 @@ async function ensurePersonalRuntimeReady(
   preferredTabId: number | undefined,
   source: EnsurePersonalRuntimeReadySource,
 ): Promise<EnsurePersonalRuntimeReadyResult> {
+  if (source === 'startup') {
+    const personal = await getPersonalConvenienceConfig();
+    if (!personal.enabled) {
+      const report = await getRuntimeDoctorReport(preferredTabId);
+      return {
+        ok: true,
+        ready: report.readiness.ready,
+        source,
+        changedSettings: false,
+        refreshedAuth: false,
+        targetStatus: report.readiness.targetStatus,
+        blockers: report.readiness.blockers,
+        report,
+      };
+    }
+  }
   if (personalRuntimeReadyPromise) {
     if (source === 'manual' && personalRuntimeReadySource === 'startup') {
       await personalRuntimeReadyPromise.catch(() => null);
@@ -2106,6 +2169,23 @@ async function captureCurrentTabImage(): Promise<{
   return {
     image: createCapturedTabSerializedImage(dataUrl, `current-tab-${Date.now()}.png`),
     tab: sanitizeCapturedTab(tab),
+  };
+}
+
+async function captureBrowserControlTargetImage(): Promise<{
+  image: DeepSeekWebVisionSerializedImage;
+  tab: { id: number; windowId: number };
+}> {
+  const capture = await browserControlService.captureScreenshotForVision();
+  return {
+    image: createCapturedTabSerializedImage(
+      `data:${capture.mimeType};base64,${capture.dataBase64}`,
+      `browser-control-${capture.tabId}-${capture.capturedAt}.png`,
+    ),
+    tab: {
+      id: capture.tabId,
+      windowId: capture.windowId,
+    },
   };
 }
 
@@ -2744,45 +2824,296 @@ async function executeAutomationWithContext(
   request: AutomationRunnerRequest,
   preferredTabId?: number,
 ): Promise<AutomationRunnerResult> {
-  const clientHeaders = await loadOrRefreshClientHeaders(preferredTabId);
-  const resolvedHeaders = resolveAutomationClientHeaders(
-    clientHeaders,
-    request,
-    backgroundT('background.auth.missingDeepSeek'),
-  );
-  if (resolvedHeaders.kind === 'failure') {
-    return resolvedHeaders.result;
+  const personal = await getPersonalConvenienceConfig();
+  if (personal.enabled && personal.autoReadyCheckBeforeRun) {
+    await ensurePersonalRuntimeReady(preferredTabId, preferredTabId === undefined ? 'startup' : 'manual');
+  }
+  const sessionResolution = await resolveAutomationSessionPreference(request, personal);
+  let workingRequest = sessionResolution.request;
+  let recorder = createAutomationFlightRecorder(workingRequest, personal.sameSessionStrategy, sessionResolution.source);
+  recorder = appendAutomationFlightEvent(recorder, {
+    kind: 'request_prepared',
+    status: 'info',
+    label: 'Request prepared',
+    summary: 'Automation request prepared with sanitized prompt metadata.',
+    details: {
+      trigger: workingRequest.trigger,
+      promptLength: workingRequest.prompt.length,
+      modelType: workingRequest.promptOptions.modelType,
+      searchEnabled: workingRequest.promptOptions.searchEnabled,
+      thinkingEnabled: workingRequest.promptOptions.thinkingEnabled,
+      refFileCount: workingRequest.promptOptions.refFileIds.length,
+      visualMonitorEnabled: workingRequest.promptOptions.visualMonitor?.enabled === true,
+    },
+  });
+  recorder = appendAutomationFlightEvent(recorder, {
+    kind: 'session_resolved',
+    status: workingRequest.chatSessionId ? 'success' : 'info',
+    label: 'Session resolved',
+    summary: workingRequest.chatSessionId ? 'Using an existing DeepSeek Web session pointer.' : 'No reusable session pointer was available; DeepSeek Web will create one.',
+    details: {
+      strategy: personal.sameSessionStrategy,
+      source: sessionResolution.source,
+      hasParentMessageId: workingRequest.parentMessageId !== null,
+    },
+  });
+  await updateAutomationRun(workingRequest.runId, {
+    request: workingRequest,
+    flightRecorder: recorder,
+  });
+
+  try {
+    const clientHeaders = personal.enabled && !personal.autoRefreshWebAuth
+      ? await loadClientHeadersFromStorage()
+      : await loadOrRefreshClientHeaders(preferredTabId);
+    const resolvedHeaders = resolveAutomationClientHeaders(
+      clientHeaders,
+      workingRequest,
+      backgroundT('background.auth.missingDeepSeek'),
+    );
+    recorder = {
+      ...recorder,
+      auth: {
+        source: resolvedHeaders.kind === 'ok' ? 'web_headers' : 'missing',
+        hasWebAuth: resolvedHeaders.kind === 'ok',
+      },
+    };
+    recorder = appendAutomationFlightEvent(recorder, {
+      kind: 'auth_resolved',
+      status: resolvedHeaders.kind === 'ok' ? 'success' : 'error',
+      label: 'Web auth resolved',
+      summary: resolvedHeaders.kind === 'ok'
+        ? 'DeepSeek Web headers are available for this run.'
+        : 'DeepSeek Web headers were not available.',
+    });
+    await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+    if (resolvedHeaders.kind === 'failure') {
+      recorder = finalizeAutomationFlightRecorder(recorder, resolvedHeaders.result);
+      await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+      return resolvedHeaders.result;
+    }
+
+    const beforeRefCount = workingRequest.promptOptions.refFileIds.length;
+    const beforeEvidenceCount = workingRequest.promptOptions.visualEvidencePacks?.length ?? 0;
+    workingRequest = await prepareAutomationRuntimeMonitorRequest(workingRequest, resolvedHeaders.headers);
+    const attachedRefCount = Math.max(0, workingRequest.promptOptions.refFileIds.length - beforeRefCount);
+    const evidencePackCount = Math.max(0, (workingRequest.promptOptions.visualEvidencePacks?.length ?? 0) - beforeEvidenceCount);
+    recorder = {
+      ...recorder,
+      visual: {
+        requested: workingRequest.promptOptions.visualMonitor?.enabled === true,
+        attachedRefCount,
+        evidencePackCount,
+        rawImageStored: false,
+      },
+    };
+    if (workingRequest.promptOptions.visualMonitor?.enabled === true) {
+      recorder = appendAutomationFlightEvent(recorder, {
+        kind: 'visual_monitor_attached',
+        status: attachedRefCount > 0 ? 'success' : 'warning',
+        label: 'Visual monitor attached',
+        summary: attachedRefCount > 0
+          ? 'Browser Control target screenshot was attached through DeepSeek Web Vision metadata.'
+          : 'Visual monitor was enabled, but no new Vision ref was attached.',
+        details: {
+          attachedRefCount,
+          evidencePackCount,
+          rawImageStored: false,
+        },
+      });
+      await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+    }
+
+    const [memories, activePreset, toolDescriptors] = await Promise.all([
+      getAllMemories(),
+      getActivePreset(),
+      getRuntimeToolDescriptors(currentBackgroundLocale),
+    ]);
+    const enabledDescriptors = toolDescriptors.filter((descriptor) =>
+      descriptor.execution.enabled &&
+      descriptor.name !== BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME
+    );
+    const [project, projectPromptContext] = workingRequest.chatSessionId
+      ? await Promise.all([
+        getProjectForConversation(workingRequest.chatSessionId),
+        getProjectPromptContextForConversation(workingRequest.chatSessionId),
+      ])
+      : [null, null];
+
+    recorder = appendAutomationFlightEvent(recorder, {
+      kind: 'runner_started',
+      status: 'info',
+      label: 'Runner started',
+      summary: 'DeepSeek automation runner started.',
+      details: {
+        enabledToolCount: enabledDescriptors.length,
+        memoryCount: filterMemoriesByProjectScope(memories, project?.id ?? null).length,
+      },
+    });
+    await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+
+    const result = await runDeepSeekAutomation({
+      ...workingRequest,
+      locale: currentBackgroundLocale,
+      promptContext: {
+        memories: filterMemoriesByProjectScope(memories, project?.id ?? null),
+        presetContent: activePreset?.content ?? null,
+        projectContext: projectPromptContext ? formatProjectPromptContext(projectPromptContext) : null,
+        toolDescriptors: enabledDescriptors,
+      },
+    }, {
+      clientHeaders: resolvedHeaders.headers,
+      executeToolCall: (call) => executeBackgroundRuntimeToolCall(call, 'automation'),
+    });
+    recorder = finalizeAutomationFlightRecorder(recorder, result);
+    await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+    if (result.ok) {
+      await rememberDeepSeekWebSession({
+        chatSessionId: result.chatSessionId,
+        parentMessageId: result.parentMessageId,
+      }, 'automation');
+    }
+    return result;
+  } catch (error) {
+    recorder = appendAutomationFlightEvent(recorder, {
+      kind: 'runner_completed',
+      status: 'error',
+      label: 'Runner failed',
+      summary: redactDurableToolString(error instanceof Error ? error.message : String(error)) ?? 'Automation runner failed.',
+    });
+    await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+    throw error;
+  }
+}
+
+async function resolveAutomationSessionPreference(
+  request: AutomationRunnerRequest,
+  personal: PersonalConvenienceConfig,
+): Promise<{
+  request: AutomationRunnerRequest;
+  source: AutomationFlightRecorder['session']['source'];
+}> {
+  if (request.chatSessionId) {
+    return { request, source: 'automation' };
+  }
+  if (!personal.enabled || personal.sameSessionStrategy === 'new') {
+    return {
+      request: { ...request, chatSessionId: null, parentMessageId: null },
+      source: 'new_session',
+    };
   }
 
-  const requestWithRuntimeMonitor = await prepareAutomationRuntimeMonitorRequest(request, resolvedHeaders.headers);
-  const [memories, activePreset, toolDescriptors] = await Promise.all([
-    getAllMemories(),
-    getActivePreset(),
-    getRuntimeToolDescriptors(currentBackgroundLocale),
-  ]);
-  const enabledDescriptors = toolDescriptors.filter((descriptor) =>
-    descriptor.execution.enabled &&
-    descriptor.name !== BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME
-  );
-  const [project, projectPromptContext] = request.chatSessionId
-    ? await Promise.all([
-      getProjectForConversation(request.chatSessionId),
-      getProjectPromptContextForConversation(request.chatSessionId),
-    ])
-    : [null, null];
+  if (personal.sameSessionStrategy === 'last') {
+    const preference = await getDeepSeekWebSessionPreference();
+    if (preference.lastSession?.chatSessionId) {
+      return {
+        request: {
+          ...request,
+          chatSessionId: preference.lastSession.chatSessionId,
+          parentMessageId: preference.lastSession.parentMessageId,
+        },
+        source: 'last_session',
+      };
+    }
+  }
 
-  return runDeepSeekAutomation({
-    ...requestWithRuntimeMonitor,
-    locale: currentBackgroundLocale,
-    promptContext: {
-      memories: filterMemoriesByProjectScope(memories, project?.id ?? null),
-      presetContent: activePreset?.content ?? null,
-      projectContext: projectPromptContext ? formatProjectPromptContext(projectPromptContext) : null,
-      toolDescriptors: enabledDescriptors,
+  const current = chatSessionId
+    ? { chatSessionId, parentMessageId: chatParentMessageId }
+    : await loadSidepanelWebChatSessionState();
+  if (current?.chatSessionId) {
+    return {
+      request: {
+        ...request,
+        chatSessionId: current.chatSessionId,
+        parentMessageId: current.parentMessageId,
+      },
+      source: 'sidepanel_session',
+    };
+  }
+
+  return {
+    request: { ...request, chatSessionId: null, parentMessageId: null },
+    source: 'new_session',
+  };
+}
+
+function createAutomationFlightRecorder(
+  request: AutomationRunnerRequest,
+  strategy: DeepSeekWebSessionStrategy,
+  source: AutomationFlightRecorder['session']['source'],
+): AutomationFlightRecorder {
+  const now = Date.now();
+  return {
+    schemaVersion: 1,
+    startedAt: now,
+    updatedAt: now,
+    session: {
+      strategy,
+      source,
+      chatSessionIdPresent: request.chatSessionId !== null,
+      parentMessageIdPresent: request.parentMessageId !== null,
     },
-  }, {
-    clientHeaders: resolvedHeaders.headers,
-    executeToolCall: (call) => executeBackgroundRuntimeToolCall(call, 'automation'),
+    auth: {
+      source: 'not_checked',
+      hasWebAuth: false,
+    },
+    visual: {
+      requested: request.promptOptions.visualMonitor?.enabled === true,
+      attachedRefCount: 0,
+      evidencePackCount: 0,
+      rawImageStored: false,
+    },
+    failure: null,
+    retryable: null,
+    events: [],
+  };
+}
+
+function appendAutomationFlightEvent(
+  recorder: AutomationFlightRecorder,
+  event: Omit<AutomationFlightEvent, 'id' | 'at'>,
+): AutomationFlightRecorder {
+  const now = Date.now();
+  return {
+    ...recorder,
+    updatedAt: now,
+    events: [
+      ...recorder.events,
+      {
+        id: `${event.kind}-${recorder.events.length + 1}`,
+        at: now,
+        ...event,
+      },
+    ],
+  };
+}
+
+function finalizeAutomationFlightRecorder(
+  recorder: AutomationFlightRecorder,
+  result: AutomationRunnerResult,
+): AutomationFlightRecorder {
+  const next: AutomationFlightRecorder = {
+    ...recorder,
+    failure: result.ok ? null : result.error,
+    retryable: result.ok ? null : result.error.retryable,
+  };
+  return appendAutomationFlightEvent(next, {
+    kind: 'runner_completed',
+    status: result.ok ? 'success' : 'error',
+    label: result.ok ? 'Runner completed' : 'Runner failed',
+    summary: result.ok
+      ? 'Automation completed successfully.'
+      : result.error.message,
+    details: result.ok
+      ? {
+        toolExecutionCount: result.toolExecutions?.length ?? 0,
+        historyVerified: result.history !== null,
+      }
+      : {
+        code: result.error.code,
+        phase: result.error.phase,
+        retryable: result.error.retryable,
+      },
   });
 }
 
@@ -3174,9 +3505,13 @@ async function handleWebChatSubmitPrompt(
   }
 
   try {
-    const sessionState = await getOrCreateSidepanelWebChatSession({
+    const preferredSession = await resolveSidepanelChatSessionPreference({
       chatSessionId,
       parentMessageId: chatParentMessageId,
+    });
+    const sessionState = await getOrCreateSidepanelWebChatSession({
+      chatSessionId: preferredSession.chatSessionId,
+      parentMessageId: preferredSession.parentMessageId,
     }, () => createChatSession(headers));
     chatSessionId = sessionState.chatSessionId;
     chatParentMessageId = sessionState.parentMessageId;
@@ -3217,6 +3552,20 @@ async function handleWebChatSubmitPrompt(
       await clearSidepanelWebAuthState(excludeTabId);
     }
   }
+}
+
+async function resolveSidepanelChatSessionPreference(
+  current: { chatSessionId: string | null; parentMessageId: number | null },
+): Promise<{ chatSessionId: string | null; parentMessageId: number | null }> {
+  if (current.chatSessionId) return current;
+  const personal = await getPersonalConvenienceConfig();
+  if (!personal.enabled || personal.sameSessionStrategy !== 'last') return current;
+  const preference = await getDeepSeekWebSessionPreference();
+  if (!preference.lastSession?.chatSessionId) return current;
+  return {
+    chatSessionId: preference.lastSession.chatSessionId,
+    parentMessageId: preference.lastSession.parentMessageId,
+  };
 }
 
 function formatSidepanelChatError(err: unknown, hasImages = false): string {
@@ -3524,10 +3873,14 @@ async function reconcileInterruptedChatLoopOnWake() {
 
 async function persistSidepanelChatSession(): Promise<void> {
   if (!chatSessionId) return;
-  await saveSidepanelWebChatSessionState({
+  const state = {
     chatSessionId,
     parentMessageId: chatParentMessageId,
-  });
+  };
+  await Promise.all([
+    saveSidepanelWebChatSessionState(state),
+    rememberDeepSeekWebSession(state, 'sidepanel'),
+  ]);
 }
 
 async function clearSidepanelChatSession(): Promise<void> {
@@ -3541,6 +3894,7 @@ async function clearSidepanelWebAuthState(preferredTabId?: number): Promise<void
   chatParentMessageId = null;
   await Promise.all([
     clearSidepanelWebChatSessionState(),
+    clearDeepSeekWebLastSession(),
     clearClientHeadersFromStorage(),
     markSidepanelWebAuthRejected(),
     forgetClientHeadersInDeepSeekTabs(preferredTabId),

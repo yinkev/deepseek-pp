@@ -49,6 +49,19 @@ beforeEach(() => {
     }
     if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return undefined;
     if (message.type === 'GET_VOICE_SETTINGS') return undefined;
+    if (message.type === 'GET_PERSONAL_CONVENIENCE_CONFIG') {
+      return {
+        ok: true,
+        config: {
+          enabled: true,
+          autoReadyCheckBeforeRun: true,
+          autoRefreshWebAuth: true,
+          sameSessionStrategy: 'last',
+          visualMonitorDefault: true,
+          reducedConfirmations: true,
+        },
+      };
+    }
     if (message.type === 'CAPTURE_CURRENT_TAB_IMAGE') {
       return {
         ok: true,
@@ -63,6 +76,21 @@ beforeEach(() => {
           windowId: 1,
           title: 'Example',
           url: 'https://example.com/',
+        },
+      };
+    }
+    if (message.type === 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE') {
+      return {
+        ok: true,
+        image: {
+          name: 'browser-control-12.png',
+          mimeType: 'image/png',
+          sizeBytes: 7,
+          dataUrl: `data:image/png;base64,${btoa('browser')}`,
+        },
+        tab: {
+          id: 12,
+          windowId: 1,
         },
       };
     }
@@ -191,6 +219,36 @@ describe('sidepanel chat image attachments', () => {
     );
   });
 
+  it('captures the Browser Control target with a natural handoff prompt', async () => {
+    await renderChatPage();
+
+    await clickButtonByLabel('使用浏览器控制目标视图');
+
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+    expect(textarea.value).toBe('看一下我当前的浏览器画面，帮我判断下一步该怎么做。');
+    expect(container.querySelector('img[alt="browser-control-12.png"]')).toBeTruthy();
+
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    expect(submit.payload.text).toBe('看一下我当前的浏览器画面，帮我判断下一步该怎么做。');
+    expect(submit.payload.images).toHaveLength(1);
+    expect(submit.payload.images?.[0]).toMatchObject({
+      name: 'browser-control-12.png',
+      mimeType: 'image/png',
+      sizeBytes: 7,
+    });
+    expect(sendMessage.mock.calls).not.toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: expect.stringMatching(/^(SAVE|SET|STORE|SYNC)_/i),
+          }),
+        ]),
+      ]),
+    );
+  });
+
   it('shows capture failures without adding an attachment', async () => {
     sendMessage.mockImplementation(async (message: RuntimeMessage) => {
       if (message.type === 'GET_AUTH_STATUS') {
@@ -198,6 +256,7 @@ describe('sidepanel chat image attachments', () => {
       }
       if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return undefined;
       if (message.type === 'GET_VOICE_SETTINGS') return undefined;
+      if (message.type === 'GET_PERSONAL_CONVENIENCE_CONFIG') return undefined;
       if (message.type === 'CAPTURE_CURRENT_TAB_IMAGE') return { ok: false, error: 'capture denied' };
       if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
       return null;

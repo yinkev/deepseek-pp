@@ -14,6 +14,11 @@ import {
   type VoiceSettings,
 } from '../../../core/voice/settings';
 import {
+  DEFAULT_PERSONAL_CONVENIENCE_CONFIG,
+  normalizePersonalConvenienceConfig,
+  type PersonalConvenienceConfig,
+} from '../../../core/personal-convenience/config';
+import {
   DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
   DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
   DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
@@ -46,7 +51,7 @@ interface ChatStreamMessage extends ChatAuthStatus {
   error?: string;
 }
 
-type ChatImageAttachmentSource = 'picker' | 'paste' | 'drop' | 'capture';
+type ChatImageAttachmentSource = 'picker' | 'paste' | 'drop' | 'capture' | 'browser-control';
 
 interface ChatImageAttachment {
   id: string;
@@ -90,9 +95,11 @@ export default function ChatPage() {
   const [chatConfig, setChatConfig] = useState<OfficialApiChatConfig>(DEFAULT_OFFICIAL_API_CHAT_CONFIG);
   const [error, setError] = useState<string | null>(null);
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
+  const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [isDraggingImages, setIsDraggingImages] = useState(false);
   const [isCapturingTab, setIsCapturingTab] = useState(false);
+  const [isCapturingBrowserTarget, setIsCapturingBrowserTarget] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [msgSeq, setMsgSeq] = useState(0);
   const { confirm, node: confirmNode } = useConfirm();
@@ -182,6 +189,10 @@ export default function ChatPage() {
     chrome.runtime.sendMessage({ type: 'GET_VOICE_SETTINGS' })
       .then((result) => setVoiceSettings(normalizeVoiceSettings(result)))
       .catch(() => setVoiceSettings(DEFAULT_VOICE_SETTINGS));
+
+    chrome.runtime.sendMessage({ type: 'GET_PERSONAL_CONVENIENCE_CONFIG' })
+      .then((result) => setPersonalConfig(normalizePersonalConvenienceConfig(result?.config)))
+      .catch(() => setPersonalConfig(DEFAULT_PERSONAL_CONVENIENCE_CONFIG));
   }, []);
 
   useEffect(() => {
@@ -320,7 +331,7 @@ export default function ChatPage() {
 
   const newSession = async () => {
     // Confirm before discarding an in-progress conversation.
-    if (messages.length > 0) {
+    if (messages.length > 0 && !personalConfig.reducedConfirmations) {
       const ok = await confirm({
         title: t('sidepanel.chatPage.newSessionTitle'),
         message: t('sidepanel.chatPage.newSessionConfirm'),
@@ -460,6 +471,34 @@ export default function ChatPage() {
     }
   };
 
+  const captureBrowserControlTarget = async () => {
+    if (isStreaming || isCapturingBrowserTarget) return;
+    if (!imageUploadEnabled) {
+      setError(t('sidepanel.chatPage.imageAuthRequired'));
+      return;
+    }
+
+    setIsCapturingBrowserTarget(true);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE',
+      }) as CaptureCurrentTabImageResponse | undefined;
+      if (!response?.ok || !response.image) {
+        throw new Error(response?.error || t('sidepanel.chatPage.captureBrowserTargetFailed'));
+      }
+      const file = createDeepSeekWebVisionFileFromSerializedImage(response.image);
+      addImageFiles([file], 'browser-control');
+      if (!inputText.trim()) {
+        setInputText(t('sidepanel.chatPage.browserViewPrompt'));
+      }
+      inputRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('sidepanel.chatPage.captureBrowserTargetFailed'));
+    } finally {
+      setIsCapturingBrowserTarget(false);
+    }
+  };
+
   const addImageFiles = (
     files: FileList | File[] | null | undefined,
     source: ChatImageAttachmentSource,
@@ -555,6 +594,11 @@ export default function ChatPage() {
                 {t('sidepanel.chatPage.title')}
               </span>
               <ProviderBadge provider={authStatus?.provider ?? null} />
+              {authStatus?.provider === 'deepseek-web' && (
+                <span className="ds-chat-provider-badge" title={t('sidepanel.chatPage.sessionStrategyLabel')}>
+                  {formatSessionStrategy(personalConfig.sameSessionStrategy, t)}
+                </span>
+              )}
             </div>
             <p className="ds-chat-subtitle">
               {apiControlsEnabled
@@ -747,6 +791,18 @@ export default function ChatPage() {
                 <>
                   <button
                     type="button"
+                    onClick={captureBrowserControlTarget}
+                    className="ds-chat-text-button"
+                    disabled={isStreaming || isCapturingBrowserTarget}
+                    title={t('sidepanel.chatPage.useBrowserView')}
+                    aria-label={t('sidepanel.chatPage.useBrowserView')}
+                  >
+                    {isCapturingBrowserTarget
+                      ? t('sidepanel.chatPage.capturingBrowserView')
+                      : t('sidepanel.chatPage.browserView')}
+                  </button>
+                  <button
+                    type="button"
                     onClick={captureCurrentTab}
                     className="ds-chat-mic-button"
                     disabled={isStreaming || isCapturingTab}
@@ -871,6 +927,15 @@ function ProviderBadge({ provider }: { provider: ChatProvider }) {
     ? t('sidepanel.chatPage.apiProvider')
     : t('sidepanel.chatPage.webProvider');
   return <span className="ds-chat-provider-badge">{label}</span>;
+}
+
+function formatSessionStrategy(
+  strategy: PersonalConvenienceConfig['sameSessionStrategy'],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (strategy === 'last') return t('sidepanel.chatPage.sessionStrategyLast');
+  if (strategy === 'new') return t('sidepanel.chatPage.sessionStrategyNew');
+  return t('sidepanel.chatPage.sessionStrategyCurrent');
 }
 
 function getConfigLabel(

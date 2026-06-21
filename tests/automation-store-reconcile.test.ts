@@ -49,6 +49,7 @@ function makeRun(overrides: Partial<AutomationRun> = {}): AutomationRun {
     request: null,
     result: null,
     error: null,
+    flightRecorder: null,
     createdAt: now,
     startedAt: now,
     completedAt: null,
@@ -183,6 +184,84 @@ describe('reconcileStaleRuns', () => {
     expect(json).toContain('[redacted:vision-ref]');
     expect(json).toContain('[redacted:media]');
     expect(json).toContain('[redacted:secret]');
+  });
+
+  it('sanitizes automation run requests and flight recorder details before durable storage', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+
+    await createAutomationRun({
+      id: 'run-flight',
+      automationId: 'auto-1',
+      trigger: 'manual',
+      scheduledFor: null,
+      request: {
+        runId: 'run-flight',
+        automationId: 'auto-1',
+        prompt: 'Check this Cookie: sid=secret data:image/png;base64,AAAA',
+        trigger: 'manual',
+        chatSessionId: 'session-1',
+        parentMessageId: 7,
+        promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+        requestedAt: 1,
+      },
+    });
+
+    await updateAutomationRun('run-flight', {
+      flightRecorder: {
+        schemaVersion: 1,
+        startedAt: 1,
+        updatedAt: 2,
+        session: {
+          strategy: 'last',
+          source: 'last_session',
+          chatSessionIdPresent: true,
+          parentMessageIdPresent: true,
+        },
+        auth: {
+          source: 'web_headers',
+          hasWebAuth: true,
+        },
+        visual: {
+          requested: true,
+          attachedRefCount: 1,
+          evidencePackCount: 1,
+          rawImageStored: false,
+        },
+        failure: {
+          code: 'automation_executor_failed',
+          message: 'Authorization: Bearer secret-token',
+          phase: 'runner',
+          retryable: true,
+          at: 2,
+          details: {
+            url: 'https://chat.deepseek.com/a/chat/s/session-1?token=secret',
+            dataUrl: 'data:image/png;base64,BBBB',
+            refFileIds: ['file-secretref'],
+          },
+        },
+        retryable: true,
+        events: [{
+          id: 'event-1',
+          at: 2,
+          kind: 'visual_monitor_attached',
+          status: 'success',
+          label: 'Captured Cookie: sid=secret',
+          summary: 'Attached file-secretref data:image/png;base64,CCCC',
+          details: {
+            headers: { Authorization: 'Bearer secret-token' },
+            webVisionFiles: [{ id: 'file-secretref', name: 'screen.png' }],
+          },
+        }],
+      },
+    });
+
+    const json = JSON.stringify(await getAutomationRunById('run-flight'));
+
+    expect(json).not.toMatch(/sid=secret|secret-token|AAAA|BBBB|CCCC|token=secret|file-secretref|data:image/);
+    expect(json).toContain('[redacted:secret]');
+    expect(json).toContain('[redacted:media]');
+    expect(json).toContain('[redacted:vision-ref]');
   });
 
   it('marks a stale running run as failed with an interrupted error', async () => {

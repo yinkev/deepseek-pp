@@ -157,6 +157,15 @@ export default function RuntimeDoctorPage() {
         meta={report ? new Date(report.generatedAt).toLocaleTimeString() : undefined}
       />
 
+      {report && (
+        <ReadyCheckPanel
+          report={report}
+          busy={loading || ensuring || recovering || repairing}
+          ensuring={ensuring}
+          onEnsureReady={ensureReady}
+        />
+      )}
+
       {report && <ReadinessBanner report={report} />}
 
       <div className="flex flex-wrap gap-2">
@@ -167,14 +176,6 @@ export default function RuntimeDoctorPage() {
           className="ds-btn-secondary px-3 py-2 text-[11px] rounded-lg disabled:opacity-50"
         >
           {loading ? t('sidepanel.runtimeDoctorPage.loading') : t('sidepanel.runtimeDoctorPage.refreshReport')}
-        </button>
-        <button
-          type="button"
-          onClick={ensureReady}
-          disabled={loading || ensuring || recovering || repairing}
-          className="ds-btn-primary px-3 py-2 text-[11px] rounded-lg disabled:opacity-50"
-        >
-          {ensuring ? t('sidepanel.runtimeDoctorPage.ensuringReady') : t('sidepanel.runtimeDoctorPage.ensureReady')}
         </button>
         <button
           type="button"
@@ -374,6 +375,99 @@ export default function RuntimeDoctorPage() {
       )}
     </div>
   );
+}
+
+function ReadyCheckPanel({
+  report,
+  busy,
+  ensuring,
+  onEnsureReady,
+}: {
+  report: RuntimeDoctorReport;
+  busy: boolean;
+  ensuring: boolean;
+  onEnsureReady: () => void;
+}) {
+  const { t } = useI18n();
+  const checks = getReadyChecks(report, t);
+  return (
+    <div className="ds-card rounded-xl p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold" style={{ color: 'var(--ds-text)' }}>
+            {t('sidepanel.runtimeDoctorPage.readyCheckTitle')}
+          </div>
+          <div className="text-[11px] mt-1" style={{ color: 'var(--ds-text-secondary)' }}>
+            {t('sidepanel.runtimeDoctorPage.readyCheckDescription')}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onEnsureReady}
+          disabled={busy}
+          className="ds-btn-primary px-3 py-2 text-[11px] rounded-lg disabled:opacity-50 shrink-0"
+        >
+          {ensuring ? t('sidepanel.runtimeDoctorPage.ensuringReady') : t('sidepanel.runtimeDoctorPage.ensureReady')}
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {checks.map((check) => (
+          <div
+            key={check.key}
+            className="flex items-center gap-2 min-w-0 px-2.5 py-2 border"
+            style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)' }}
+          >
+            <span
+              className="h-2 w-2 rounded-full shrink-0"
+              style={{ background: check.ok ? 'var(--ds-success)' : 'var(--ds-warning, var(--ds-text-secondary))' }}
+              aria-hidden="true"
+            />
+            <span className="text-[11px] truncate" style={{ color: check.ok ? 'var(--ds-text)' : 'var(--ds-text-secondary)' }}>
+              {check.label}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function getReadyChecks(
+  report: RuntimeDoctorReport,
+  t: (key: LocaleMessageKey) => string,
+): Array<{ key: string; label: string; ok: boolean }> {
+  return [
+    {
+      key: 'web-auth',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.webAuth'),
+      ok: report.hasWebAuth && !report.webAuthRejected,
+    },
+    {
+      key: 'session',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.session'),
+      ok: report.sidepanelSession.active || report.personalConvenience?.lastSessionRemembered === true,
+    },
+    {
+      key: 'browser',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.browserTarget'),
+      ok: report.browserControl.monitorReady,
+    },
+    {
+      key: 'vision',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.vision'),
+      ok: report.browserControl.visualCaptureAllowed && !report.vision.rawImagesStoredDurably,
+    },
+    {
+      key: 'automation',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.automation'),
+      ok: report.automation.maxAttempts > 0,
+    },
+    {
+      key: 'storage',
+      label: t('sidepanel.runtimeDoctorPage.readyChecks.storage'),
+      ok: report.storage.ok,
+    },
+  ];
 }
 
 function ReadinessBanner({ report }: { report: RuntimeDoctorReport }) {

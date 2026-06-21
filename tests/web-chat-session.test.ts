@@ -12,6 +12,15 @@ import {
   isSidepanelWebAuthRejected,
   markSidepanelWebAuthRejected,
 } from '../core/chat/web-auth-state';
+import {
+  clearDeepSeekWebLastSession,
+  getDeepSeekWebSessionPreference,
+  rememberDeepSeekWebSession,
+} from '../core/chat/session-preference';
+import {
+  getPersonalConvenienceConfig,
+  savePersonalConvenienceConfig,
+} from '../core/personal-convenience/config';
 
 describe('sidepanel DeepSeek Web chat session state', () => {
   afterEach(() => {
@@ -167,6 +176,55 @@ describe('sidepanel DeepSeek Web chat session state', () => {
     })).toEqual({
       chatSessionId: 'session-1',
       parentMessageId: null,
+    });
+  });
+
+  it('remembers only the last safe DeepSeek Web session pointer in local storage', async () => {
+    const { local, session } = stubChromeStorage();
+
+    await rememberDeepSeekWebSession({
+      chatSessionId: ' session-remembered ',
+      parentMessageId: 42,
+    }, 'sidepanel', 1234);
+
+    await expect(getDeepSeekWebSessionPreference()).resolves.toEqual({
+      lastSession: {
+        chatSessionId: 'session-remembered',
+        parentMessageId: 42,
+        source: 'sidepanel',
+        updatedAt: 1234,
+      },
+    });
+    const json = JSON.stringify(local.data.deepseek_pp_deepseek_web_session_preference);
+    expect(json).toContain('session-remembered');
+    expect(json).not.toMatch(/Authorization|Bearer|Cookie|data:image|dataUrl|refFileIds/);
+    expect(session.data.deepseek_pp_deepseek_web_session_preference).toBeUndefined();
+
+    await clearDeepSeekWebLastSession();
+    expect(local.data.deepseek_pp_deepseek_web_session_preference).toBeUndefined();
+  });
+
+  it('stores personal convenience config with default-on personal settings', async () => {
+    const { local } = stubChromeStorage();
+
+    await expect(getPersonalConvenienceConfig()).resolves.toMatchObject({
+      enabled: true,
+      autoReadyCheckBeforeRun: true,
+      autoRefreshWebAuth: true,
+      sameSessionStrategy: 'last',
+      visualMonitorDefault: true,
+      reducedConfirmations: true,
+    });
+
+    await savePersonalConvenienceConfig({
+      autoReadyCheckBeforeRun: false,
+      sameSessionStrategy: 'current',
+    });
+
+    expect(local.data.deepseek_pp_personal_convenience).toMatchObject({
+      enabled: true,
+      autoReadyCheckBeforeRun: false,
+      sameSessionStrategy: 'current',
     });
   });
 });

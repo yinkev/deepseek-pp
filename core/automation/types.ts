@@ -150,6 +150,52 @@ export interface AutomationRunnerFailure {
 
 export type AutomationRunnerResult = AutomationRunnerSuccess | AutomationRunnerFailure;
 
+export type AutomationFlightEventKind =
+  | 'request_prepared'
+  | 'session_resolved'
+  | 'auth_resolved'
+  | 'visual_monitor_attached'
+  | 'runner_started'
+  | 'runner_completed'
+  | 'retry_scheduled';
+
+export type AutomationFlightEventStatus = 'info' | 'success' | 'warning' | 'error';
+
+export interface AutomationFlightEvent {
+  id: string;
+  at: number;
+  kind: AutomationFlightEventKind;
+  status: AutomationFlightEventStatus;
+  label: string;
+  summary: string;
+  details?: Record<string, unknown>;
+}
+
+export interface AutomationFlightRecorder {
+  schemaVersion: 1;
+  startedAt: number;
+  updatedAt: number;
+  session: {
+    strategy: 'current' | 'last' | 'new';
+    source: 'automation' | 'sidepanel_session' | 'last_session' | 'new_session';
+    chatSessionIdPresent: boolean;
+    parentMessageIdPresent: boolean;
+  };
+  auth: {
+    source: 'web_headers' | 'missing' | 'not_checked';
+    hasWebAuth: boolean;
+  };
+  visual: {
+    requested: boolean;
+    attachedRefCount: number;
+    evidencePackCount: number;
+    rawImageStored: false;
+  };
+  failure: AutomationErrorState | null;
+  retryable: boolean | null;
+  events: AutomationFlightEvent[];
+}
+
 export interface AutomationRun {
   id: AutomationRunId;
   automationId: AutomationId;
@@ -160,6 +206,7 @@ export interface AutomationRun {
   request: AutomationRunnerRequest | null;
   result: AutomationRunnerResult | null;
   error: AutomationErrorState | null;
+  flightRecorder: AutomationFlightRecorder | null;
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
@@ -175,7 +222,16 @@ export type AutomationRunCreateInput = Pick<
 export type AutomationRunUpdateInput = Partial<
   Pick<
     AutomationRun,
-    'trigger' | 'status' | 'scheduledFor' | 'attempt' | 'request' | 'result' | 'error' | 'startedAt' | 'completedAt'
+    | 'trigger'
+    | 'status'
+    | 'scheduledFor'
+    | 'attempt'
+    | 'request'
+    | 'result'
+    | 'error'
+    | 'flightRecorder'
+    | 'startedAt'
+    | 'completedAt'
   >
 >;
 

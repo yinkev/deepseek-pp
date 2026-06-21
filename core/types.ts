@@ -35,6 +35,7 @@ import type {
   UsageRangeDays as UsageRangeDaysType,
   UsageTurnInput as UsageTurnInputType,
 } from './usage/types';
+import type { PersonalConvenienceConfig as PersonalConvenienceConfigType } from './personal-convenience/config';
 
 export type {
   McpHeaderValue,
@@ -530,6 +531,10 @@ export type MessageAction =
   | { type: 'GET_TOOL_CALL_HISTORY'; payload?: { limit?: number } }
   | { type: 'CLEAR_TOOL_CALL_HISTORY' }
   | { type: 'CAPTURE_CURRENT_TAB_IMAGE' }
+  | { type: 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE' }
+  | { type: 'GET_PERSONAL_CONVENIENCE_CONFIG' }
+  | { type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG'; payload: Partial<PersonalConvenienceConfigType> }
+  | { type: 'GET_DEEPSEEK_WEB_SESSION_PREFERENCE' }
   | { type: 'GET_PLATFORM_CAPABILITIES' }
   | { type: 'GET_PROJECT_CONTEXT_STATE' }
   | { type: 'CREATE_PROJECT_CONTEXT'; payload: ProjectContextCreateInput }

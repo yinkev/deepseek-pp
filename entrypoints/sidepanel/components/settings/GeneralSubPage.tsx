@@ -73,6 +73,61 @@ export default function GeneralSubPage({ state }: { state: SettingsState }) {
           />
         </div>
       </SettingsSection>
+
+      <SettingsSection
+        title={t('sidepanel.settings.personalConvenience')}
+        description={t('sidepanel.settings.personalConvenienceDescription')}
+      >
+        <ToggleRow
+          title={t('sidepanel.settings.personalConvenienceMode')}
+          description={t('sidepanel.settings.personalConvenienceModeDescription')}
+          enabled={state.personalConfig.enabled}
+          onToggle={(enabled) => state.handlePersonalConveniencePatch({ enabled })}
+        />
+        <div className="pt-3 border-t space-y-3" style={{ borderColor: 'var(--ds-border)' }}>
+          <label className="block space-y-1">
+            <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+              {t('sidepanel.settings.sameSessionStrategy')}
+            </span>
+            <select
+              value={state.personalConfig.sameSessionStrategy}
+              onChange={(event) => state.handlePersonalConveniencePatch({
+                sameSessionStrategy: event.target.value as typeof state.personalConfig.sameSessionStrategy,
+              })}
+              className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+              disabled={!state.personalConfig.enabled}
+            >
+              <option value="last">{t('sidepanel.settings.sameSessionLast')}</option>
+              <option value="current">{t('sidepanel.settings.sameSessionCurrent')}</option>
+              <option value="new">{t('sidepanel.settings.sameSessionNew')}</option>
+            </select>
+          </label>
+          <ToggleRow
+            title={t('sidepanel.settings.autoReadyCheck')}
+            description={t('sidepanel.settings.autoReadyCheckDescription')}
+            enabled={state.personalConfig.autoReadyCheckBeforeRun}
+            onToggle={(autoReadyCheckBeforeRun) => state.handlePersonalConveniencePatch({ autoReadyCheckBeforeRun })}
+          />
+          <ToggleRow
+            title={t('sidepanel.settings.autoRefreshWebAuth')}
+            description={t('sidepanel.settings.autoRefreshWebAuthDescription')}
+            enabled={state.personalConfig.autoRefreshWebAuth}
+            onToggle={(autoRefreshWebAuth) => state.handlePersonalConveniencePatch({ autoRefreshWebAuth })}
+          />
+          <ToggleRow
+            title={t('sidepanel.settings.visualMonitorDefault')}
+            description={t('sidepanel.settings.visualMonitorDefaultDescription')}
+            enabled={state.personalConfig.visualMonitorDefault}
+            onToggle={(visualMonitorDefault) => state.handlePersonalConveniencePatch({ visualMonitorDefault })}
+          />
+          <ToggleRow
+            title={t('sidepanel.settings.reducedConfirmations')}
+            description={t('sidepanel.settings.reducedConfirmationsDescription')}
+            enabled={state.personalConfig.reducedConfirmations}
+            onToggle={(reducedConfirmations) => state.handlePersonalConveniencePatch({ reducedConfirmations })}
+          />
+        </div>
+      </SettingsSection>
     </div>
   );
 }

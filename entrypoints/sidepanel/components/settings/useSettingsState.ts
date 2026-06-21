@@ -11,6 +11,11 @@ import {
   clampPetSize,
   normalizePetConfig,
 } from '../../../../core/pet/config';
+import {
+  DEFAULT_PERSONAL_CONVENIENCE_CONFIG,
+  normalizePersonalConvenienceConfig,
+  type PersonalConvenienceConfig,
+} from '../../../../core/personal-convenience/config';
 import type {
   BackgroundConfig,
   Memory,
@@ -67,6 +72,7 @@ export function useSettingsState() {
   const [expertMode, setExpertMode] = useState(false);
   const [chatEnabled, setChatEnabledState] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
 
   // --- deepseek api key ---
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
@@ -141,7 +147,7 @@ export function useSettingsState() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [chatOn, keyStatus, mmStatus, memories, cfg, syncCfg, modelType, bgCfg, petCfg] = await Promise.all([
+      const [chatOn, keyStatus, mmStatus, memories, cfg, syncCfg, modelType, bgCfg, petCfg, personal] = await Promise.all([
         getChatEnabled().catch((error) => {
           console.error('DeepSeek++ failed to read sidepanel chat setting', error);
           return false;
@@ -154,6 +160,7 @@ export function useSettingsState() {
         chrome.runtime.sendMessage({ type: 'GET_MODEL_TYPE' }).catch(() => null),
         chrome.runtime.sendMessage({ type: 'GET_BACKGROUND' }).catch(() => null),
         chrome.runtime.sendMessage({ type: 'GET_PET' }).catch(() => null),
+        chrome.runtime.sendMessage({ type: 'GET_PERSONAL_CONVENIENCE_CONFIG' }).catch(() => null),
       ]);
       if (cancelled) return;
       setChatEnabledState(chatOn);
@@ -167,6 +174,7 @@ export function useSettingsState() {
       const normalizedBg = normalizeBackgroundConfig(bgCfg as BackgroundConfig | null);
       if (normalizedBg) syncBgState(normalizedBg);
       syncPetState(normalizePetConfig(petCfg as PetConfig | null));
+      setPersonalConfig(normalizePersonalConvenienceConfig((personal as { config?: unknown } | null)?.config));
       setLoading(false);
     })();
 
@@ -196,6 +204,20 @@ export function useSettingsState() {
     setChatEnabledState(next);
     await setChatEnabled(next);
   }, []);
+
+  const handlePersonalConveniencePatch = useCallback(async (patch: Partial<PersonalConvenienceConfig>) => {
+    const optimistic = normalizePersonalConvenienceConfig({ ...personalConfig, ...patch });
+    setPersonalConfig(optimistic);
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
+        payload: patch,
+      });
+      setPersonalConfig(normalizePersonalConvenienceConfig(result?.config ?? optimistic));
+    } catch {
+      setPersonalConfig(personalConfig);
+    }
+  }, [personalConfig]);
 
   // --- deepseek api key ---
   const handleSaveApiKey = useCallback(
@@ -643,8 +665,10 @@ export function useSettingsState() {
     version,
     expertMode,
     chatEnabled,
+    personalConfig,
     handleExpertToggle,
     handleChatToggle,
+    handlePersonalConveniencePatch,
     // deepseek api key
     apiKeyConfigured,
     apiKeyInput,

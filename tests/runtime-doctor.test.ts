@@ -77,6 +77,24 @@ describe('runtime doctor storage scan', () => {
     ]);
   });
 
+  it('allows personal last-session pointer metadata without treating it as live session state', () => {
+    const scan = scanRuntimeDoctorStorage({
+      local: {
+        deepseek_pp_deepseek_web_session_preference: {
+          lastSession: {
+            chatSessionId: 'session-remembered',
+            parentMessageId: 42,
+            source: 'sidepanel',
+            updatedAt: 1234,
+          },
+        },
+      },
+    });
+
+    expect(scan.ok).toBe(true);
+    expect(scan.issues).toEqual([]);
+  });
+
   it('flags vision refs outside allowed automation prompt option storage', () => {
     const scan = scanRuntimeDoctorStorage({
       local: {

@@ -2,11 +2,17 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Automation,
   AutomationCreateInput,
+  AutomationFlightEventStatus,
   AutomationPromptOptions,
   AutomationRun,
   AutomationSchedule,
   AutomationScheduleKind,
 } from '../../../core/automation/types';
+import {
+  DEFAULT_PERSONAL_CONVENIENCE_CONFIG,
+  normalizePersonalConvenienceConfig,
+  type PersonalConvenienceConfig,
+} from '../../../core/personal-convenience/config';
 import { validateAutomationSchedule } from '../../../core/automation/schedule';
 import {
   DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES,
@@ -16,7 +22,7 @@ import {
   normalizeDeepSeekWebVisionRefFileIds,
   serializeDeepSeekWebVisionFile,
 } from '../../../core/deepseek/web-vision';
-import type { SupportedLocale } from '../../../core/i18n';
+import type { LocaleMessageKey, SupportedLocale } from '../../../core/i18n';
 import PageIntro from '../components/PageIntro';
 import { SkeletonList, ToggleRow, useBanner, useConfirm } from '../components/settings/primitives';
 import ToggleSwitch from '../components/ToggleSwitch';
@@ -36,6 +42,8 @@ const DEFAULT_PROMPT_OPTIONS: AutomationPromptOptions = {
     includeEvidencePack: true,
   },
 };
+
+const FLIGHT_RECORDER_VISIBLE_EVENTS = 6;
 
 type FormState = {
   name: string;
@@ -78,6 +86,7 @@ export default function AutomationPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<Automation | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
   const [imageAttachments, setImageAttachments] = useState<AutomationImageAttachment[]>([]);
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -97,7 +106,7 @@ export default function AutomationPage() {
       items.map(async (automation) => {
         const recent: AutomationRun[] = await chrome.runtime.sendMessage({
           type: 'GET_AUTOMATION_RUNS',
-          payload: { automationId: automation.id, limit: 3 },
+          payload: { automationId: automation.id, limit: 5 },
         });
         return [automation.id, recent ?? []] as const;
       }),
@@ -108,6 +117,9 @@ export default function AutomationPage() {
 
   useEffect(() => {
     void load();
+    chrome.runtime.sendMessage({ type: 'GET_PERSONAL_CONVENIENCE_CONFIG' })
+      .then((result) => setPersonalConfig(normalizePersonalConvenienceConfig(result?.config)))
+      .catch(() => setPersonalConfig(DEFAULT_PERSONAL_CONVENIENCE_CONFIG));
 
     const handleUpdate = (msg: { type?: string; automations?: Automation[] }) => {
       if (msg.type === 'AUTOMATIONS_UPDATED' || msg.type === 'AUTOMATION_RUNS_UPDATED') {
@@ -134,7 +146,7 @@ export default function AutomationPage() {
 
   const startCreate = () => {
     setEditing(null);
-    setForm(EMPTY_FORM);
+    setForm(createEmptyForm(personalConfig));
     setImageAttachments([]);
     banner.clear();
     setShowForm((prev) => !prev);
@@ -341,6 +353,7 @@ export default function AutomationPage() {
               automation={automation}
               runs={runs[automation.id] ?? []}
               running={runningIds.has(automation.id)}
+              sessionStrategy={personalConfig.sameSessionStrategy}
               onRun={() => runNow(automation.id)}
               onToggleStatus={() => toggleStatus(automation)}
               onEdit={() => startEdit(automation)}
@@ -535,6 +548,7 @@ function AutomationCard({
   automation,
   runs,
   running,
+  sessionStrategy,
   onRun,
   onToggleStatus,
   onEdit,
@@ -544,6 +558,7 @@ function AutomationCard({
   automation: Automation;
   runs: AutomationRun[];
   running: boolean;
+  sessionStrategy: PersonalConvenienceConfig['sameSessionStrategy'];
   onRun: () => void;
   onToggleStatus: () => void;
   onEdit: () => void;
@@ -583,7 +598,13 @@ function AutomationCard({
         <MetaChip label={t('sidepanel.automationPage.meta.previous')} value={formatTime(automation.lastRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
         <MetaChip label={t('sidepanel.automationPage.meta.session')} value={automation.deepseek.chatSessionId ? shortId(automation.deepseek.chatSessionId) : t('sidepanel.automationPage.meta.notCreated')} />
         <MetaChip label={t('sidepanel.automationPage.meta.recent')} value={latestRun ? formatRun(latestRun, t) : t('sidepanel.automationPage.meta.none')} />
+        <MetaChip label={t('sidepanel.automationPage.meta.visual')} value={automation.promptOptions.visualMonitor?.enabled ? t('sidepanel.automationPage.meta.monitorOn') : t('sidepanel.automationPage.meta.monitorOff')} />
+        <MetaChip label={t('sidepanel.automationPage.meta.strategy')} value={formatSessionStrategy(sessionStrategy, t)} />
       </div>
+
+      {latestRun && (
+        <RunFlightRecorder run={latestRun} />
+      )}
 
       {automation.lastError && (
         <div className="rounded-lg px-2.5 py-2 text-[11px]" style={{ color: 'var(--ds-danger)', background: 'var(--ds-danger-bg)' }}>
@@ -608,6 +629,63 @@ function AutomationCard({
         </button>
       </div>
     </div>
+  );
+}
+
+function RunFlightRecorder({ run }: { run: AutomationRun }) {
+  const { t, locale } = useI18n();
+  const recorder = run.flightRecorder;
+  if (!recorder) {
+    return (
+      <details className="rounded-lg border px-2.5 py-2" style={{ borderColor: 'var(--ds-border)' }}>
+        <summary className="cursor-pointer text-[11px] font-medium" style={{ color: 'var(--ds-text-secondary)' }}>
+          {t('sidepanel.automationPage.flightRecorder.title')}
+        </summary>
+        <div className="mt-2 text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+          {t('sidepanel.automationPage.flightRecorder.noRecorder')}
+        </div>
+      </details>
+    );
+  }
+  const events = recorder.events.slice(-FLIGHT_RECORDER_VISIBLE_EVENTS);
+  return (
+    <details className="rounded-lg border px-2.5 py-2" style={{ borderColor: 'var(--ds-border)' }}>
+      <summary className="cursor-pointer text-[11px] font-medium" style={{ color: 'var(--ds-text-secondary)' }}>
+        {t('sidepanel.automationPage.flightRecorder.title')}
+        {' · '}
+        {formatRecorderSession(recorder.session.source, t)}
+        {' · '}
+        {recorder.visual.attachedRefCount > 0
+          ? t('sidepanel.automationPage.flightRecorder.visualAttached', { count: recorder.visual.attachedRefCount })
+          : t('sidepanel.automationPage.flightRecorder.visualNone')}
+      </summary>
+      <div className="mt-2 grid grid-cols-3 gap-1.5">
+        <MetaChip label={t('sidepanel.automationPage.flightRecorder.auth')} value={recorder.auth.hasWebAuth ? t('common.enabled') : t('common.disabled')} />
+        <MetaChip label={t('sidepanel.automationPage.flightRecorder.evidence')} value={String(recorder.visual.evidencePackCount)} />
+        <MetaChip label={t('sidepanel.automationPage.flightRecorder.updated')} value={formatTime(recorder.updatedAt, locale, t('sidepanel.automationPage.meta.none'))} />
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {events.map((event) => (
+          <div
+            key={event.id}
+            className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 text-[11px]"
+            style={{ color: 'var(--ds-text-secondary)' }}
+          >
+            <span
+              className="mt-1 h-2 w-2 rounded-full"
+              style={{ background: flightStatusColor(event.status) }}
+              aria-hidden="true"
+            />
+            <div className="min-w-0">
+              <div className="font-medium truncate" style={{ color: 'var(--ds-text)' }}>
+                {event.label}
+              </div>
+              <div className="line-clamp-2">{event.summary}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -642,6 +720,13 @@ function MetaChip({ label, value }: { label: string; value: string }) {
       <span className="ds-metric-chip-value truncate">{value}</span>
     </div>
   );
+}
+
+function createEmptyForm(personalConfig: PersonalConvenienceConfig): FormState {
+  return {
+    ...EMPTY_FORM,
+    visualMonitorEnabled: personalConfig.visualMonitorDefault,
+  };
 }
 
 function fromAutomation(automation: Automation): FormState {
@@ -721,6 +806,29 @@ function formatRun(run: AutomationRun, t: ReturnType<typeof useI18n>['t']): stri
     skipped: t('sidepanel.automationPage.status.skipped'),
   };
   return `${label[run.status]}${run.attempt > 1 ? ` · ${t('sidepanel.automationPage.attempt', { count: run.attempt })}` : ''}`;
+}
+
+function formatSessionStrategy(
+  strategy: PersonalConvenienceConfig['sameSessionStrategy'],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (strategy === 'last') return t('sidepanel.automationPage.sessionStrategy.last');
+  if (strategy === 'new') return t('sidepanel.automationPage.sessionStrategy.new');
+  return t('sidepanel.automationPage.sessionStrategy.current');
+}
+
+function formatRecorderSession(
+  source: NonNullable<AutomationRun['flightRecorder']>['session']['source'],
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  return t(`sidepanel.automationPage.flightRecorder.sessionSources.${source}` as LocaleMessageKey);
+}
+
+function flightStatusColor(status: AutomationFlightEventStatus): string {
+  if (status === 'success') return 'var(--ds-success)';
+  if (status === 'error') return 'var(--ds-danger)';
+  if (status === 'warning') return 'var(--ds-warning, var(--ds-text-secondary))';
+  return 'var(--ds-text-tertiary)';
 }
 
 function shortId(id: string): string {

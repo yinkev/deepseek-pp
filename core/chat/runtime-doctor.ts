@@ -32,6 +32,17 @@ export interface RuntimeDoctorReport {
     source: 'memory' | 'session' | 'none';
     parentMessageId: number | null;
   };
+  personalConvenience: {
+    enabled: boolean;
+    autoReadyCheckBeforeRun: boolean;
+    autoRefreshWebAuth: boolean;
+    sameSessionStrategy: 'current' | 'last' | 'new';
+    visualMonitorDefault: boolean;
+    reducedConfirmations: boolean;
+    lastSessionRemembered: boolean;
+    lastSessionSource: 'sidepanel' | 'automation' | null;
+    lastSessionUpdatedAt: number | null;
+  };
   vision: {
     maxImagesPerTurn: number;
     rawImagesStoredDurably: boolean;
