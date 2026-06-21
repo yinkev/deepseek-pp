@@ -285,6 +285,7 @@ function collectAuthHeaderIssues(
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     const nextPath = path ? `${path}.${key}` : key;
     if (!path && key === CLIENT_HEADERS_KEY) continue;
+    if (isAllowedNonSecretScalarPath(nextPath, entry)) continue;
     if (
       typeof entry === 'string' &&
       entry &&
@@ -344,6 +345,11 @@ function isForbiddenDurableSecretKey(key: string): boolean {
     lower.includes('token') ||
     lower.includes('secret') ||
     lower.includes('signed');
+}
+
+function isAllowedNonSecretScalarPath(path: string, value: unknown): boolean {
+  return /^deepseek_pp_usage_turns_v1\[\d+\]\.tokenSource$/.test(path) &&
+    (value === 'server' || value === 'estimated');
 }
 
 function isAllowedLocalImagePath(area: RuntimeDoctorStorageArea, path: string): boolean {

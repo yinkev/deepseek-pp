@@ -117,6 +117,47 @@ describe('runtime doctor storage scan', () => {
     expect(scan.issues).toEqual([]);
   });
 
+  it('allows usage token-source metrics but still flags real token-like secrets', () => {
+    const scan = scanRuntimeDoctorStorage({
+      local: {
+        deepseek_pp_usage_turns_v1: [
+          {
+            id: 'req-1',
+            recordedAt: 1781755200000,
+            day: '2026-06-18',
+            source: 'deepseek-web',
+            totalTokens: 3302,
+            tokenSource: 'server',
+            speedSource: 'server',
+          },
+          {
+            id: 'req-2',
+            recordedAt: 1781755300000,
+            day: '2026-06-18',
+            source: 'deepseek-web',
+            totalTokens: 12,
+            tokenSource: 'estimated',
+            speedSource: 'estimated',
+          },
+          {
+            id: 'req-3',
+            tokenSource: 'Bearer leaked-secret',
+          },
+        ],
+      },
+    });
+
+    expect(scan.ok).toBe(false);
+    expect(scan.issues).toEqual([
+      {
+        area: 'local',
+        path: 'deepseek_pp_usage_turns_v1[2].[redacted]',
+        reason: 'deepseek_web_headers',
+      },
+    ]);
+    expect(JSON.stringify(scan)).not.toMatch(/leaked-secret|Bearer/);
+  });
+
   it('flags vision refs outside allowed automation prompt option storage', () => {
     const scan = scanRuntimeDoctorStorage({
       local: {
