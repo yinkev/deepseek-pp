@@ -50,7 +50,7 @@ const LOOP_TERM_ALIASES: Record<string, readonly string[]> = {
 
 const PLACEHOLDER_PATTERN = /\[(?:replace|\u66ff\u6362|insert|topic|artifact|context|source)[^\]]*\]|<[^>\n]*(?:replace|topic|artifact|context|source)[^>\n]*>/i;
 const SENSITIVE_PROMPT_PATTERN =
-  /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,|data:image|blob:|filesystem:|\bBearer\s+|\bAuthorization\s*[:=]|\bCookie\s*[:=]|\bSet-Cookie\s*[:=]|\b(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath|x-ds-pow-response)\s*[:=]|(?:[?&]|\b)(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token)=|\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bAIza[0-9A-Za-z_-]{20,}/i;
+  /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,|data:image|blob:|filesystem:|\bBearer\s+|\bAuthorization\s*[:=]|\bCookie\s*[:=]|\bSet-Cookie\s*[:=]|\b(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath|x-ds-pow-response)\s*[:=]|(?:[?&]|\b)(?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token)=|\b\d{6,}:[A-Za-z0-9_-]{24,}|\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bAIza[0-9A-Za-z_-]{20,}/i;
 
 export const SAFE_AUTOMATION_READINESS_FIXES = new Set<AutomationReadinessIssueCode>([
   'research_without_search',

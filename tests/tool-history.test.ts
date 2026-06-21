@@ -52,6 +52,7 @@ describe('tool call history', () => {
         details: {
           Cookie: 'session=secret',
           'X-Api-Key': 'api-object-secret',
+          note: 'bot 123456789:AAFakeTelegramBotToken_1234567890abcdef',
           signedPath: 'https://signed.example/file?token=secret',
         },
       },
@@ -81,6 +82,8 @@ describe('tool call history', () => {
     expect(json).not.toContain('pow-secret');
     expect(json).not.toContain('pow-object-secret');
     expect(json).not.toContain('api-object-secret');
+    expect(json).not.toContain('FakeTelegramBotToken');
+    expect(json).not.toContain('123456789:');
     expect(json).not.toContain('session=secret');
     expect(json).not.toContain('raw-video-base64');
     expect(json).not.toContain('raw-image-base64');

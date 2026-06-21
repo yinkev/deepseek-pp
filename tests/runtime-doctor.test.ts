@@ -68,6 +68,20 @@ describe('runtime doctor storage scan', () => {
     expect(JSON.stringify(scan)).not.toMatch(/signed\.example|files\.example|token=abc|nested-secret|pow-secret|api-secret|secret/);
   });
 
+  it('flags Telegram bot token shapes without returning values', () => {
+    const scan = scanRuntimeDoctorStorage({
+      local: {
+        note: 'token 123456789:AAFakeTelegramBotToken_1234567890abcdef',
+      },
+    });
+
+    expect(scan.ok).toBe(false);
+    expect(scan.issues).toEqual([
+      { area: 'local', path: 'note', reason: 'deepseek_web_headers' },
+    ]);
+    expect(JSON.stringify(scan)).not.toMatch(/FakeTelegramBotToken|123456789:/);
+  });
+
   it('flags embedded image data and base64-key markers inside longer strings', () => {
     const scan = scanRuntimeDoctorStorage({
       local: {

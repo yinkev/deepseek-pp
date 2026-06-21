@@ -48,6 +48,7 @@ const BEARER_PATTERN = /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi;
 const AUTH_HEADER_PATTERN = /\bAuthorization["']?\s*[:=]\s*["']?(?:Basic|Bearer|Digest|Token)?\s*[A-Za-z0-9._~+/=-]+/gi;
 const COOKIE_HEADER_PATTERN = /\b(?:Cookie|Set-Cookie)["']?\s*[:=]\s*["']?[^"'{}\n\r]+/gi;
 const API_KEY_HEADER_PATTERN = /\b(?:x-api-key|api-key|api_key|apiKey|x-ds-pow-response)["']?\s*[:=]\s*["']?[^"'\s,;}]+/gi;
+const TELEGRAM_BOT_TOKEN_PATTERN = /\b\d{6,}:[A-Za-z0-9_-]{24,}\b/g;
 const OPENAI_KEY_PATTERN = /\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const VISION_REF_PATTERN = /\bfile-[A-Za-z0-9_-]{6,}\b/g;
@@ -90,6 +91,7 @@ export function redactDurableToolString(value: string | undefined): string | und
     .replace(AUTH_HEADER_PATTERN, REDACTED_SECRET_VALUE)
     .replace(COOKIE_HEADER_PATTERN, REDACTED_SECRET_VALUE)
     .replace(API_KEY_HEADER_PATTERN, REDACTED_SECRET_VALUE)
+    .replace(TELEGRAM_BOT_TOKEN_PATTERN, REDACTED_SECRET_VALUE)
     .replace(OPENAI_KEY_PATTERN, REDACTED_SECRET_VALUE)
     .replace(GOOGLE_API_KEY_PATTERN, REDACTED_SECRET_VALUE)
     .replace(BEARER_PATTERN, REDACTED_SECRET_VALUE)

@@ -393,6 +393,7 @@ function isForbiddenDurableMediaString(value: string): boolean {
 
 function isForbiddenDurableSecretString(value: string): boolean {
   return /^Bearer\s+/i.test(value) ||
+    /\b\d{6,}:[A-Za-z0-9_-]{24,}\b/.test(value) ||
     /https?:\/\/\S*(?:signed|token|secret|authorization|signature|x-amz-signature)\S*/i.test(value);
 }
 

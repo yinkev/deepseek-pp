@@ -43,6 +43,19 @@ describe('automation readiness', () => {
     expect(JSON.stringify(report)).not.toMatch(/X-Amz-Signature|sk-proj|1234567890abcdef/);
   });
 
+  it('blocks Telegram bot token shapes without echoing them', () => {
+    const report = evaluateAutomationReadiness(createInput({
+      prompt: 'Check this bot token 123456789:AAFakeTelegramBotToken_1234567890abcdef and stop.',
+    }));
+
+    expect(report.status).toBe('blocked');
+    expect(report.issues).toContainEqual({
+      code: 'sensitive_prompt_content',
+      severity: 'blocker',
+    });
+    expect(JSON.stringify(report)).not.toMatch(/FakeTelegramBotToken|123456789:/);
+  });
+
   it('catches Vision runs that have no visual input', () => {
     const report = evaluateAutomationReadiness(createInput({
       promptOptions: {
