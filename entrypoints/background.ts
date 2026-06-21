@@ -137,9 +137,11 @@ import { refreshMcpServerDiscovery } from '../core/mcp/discovery';
 import { getMcpOriginPattern, requestMcpServerOriginPermission } from '../core/mcp/transports';
 import { SHELL_MCP_NATIVE_HOST, SHELL_MCP_SERVER_NAME, createShellMcpPresetInput } from '../core/shell';
 import {
+  LEGACY_MULTIMODAL_MCP_SERVER_NAME,
+  MULTIMODAL_MCP_NATIVE_HOST,
+  MULTIMODAL_MCP_SERVER_NAME,
   MULTIMODAL_MCP_REQUEST_TIMEOUT_MS,
   canUseMultimodalMediaInput,
-  createMultimodalMcpPresetInput,
   isMultimodalAnalysisToolAllowed,
   isMultimodalMcpServer,
 } from '../core/multimodal';
@@ -567,9 +569,12 @@ async function ensureBuiltInMcpPresets() {
   if (!shellExists) {
     await createMcpServer(createShellMcpPresetInput({ enabled: false }));
   }
-  const multimodalExists = servers.some(isMultimodalMcpServer);
-  if (!multimodalExists) {
-    await createMcpServer(createMultimodalMcpPresetInput({ enabled: false }));
+  const legacyMultimodal = servers.find((server) =>
+    server.displayName === LEGACY_MULTIMODAL_MCP_SERVER_NAME ||
+    server.transport.nativeHost === MULTIMODAL_MCP_NATIVE_HOST
+  );
+  if (legacyMultimodal && legacyMultimodal.displayName === LEGACY_MULTIMODAL_MCP_SERVER_NAME) {
+    await updateMcpServer(legacyMultimodal.id, { displayName: MULTIMODAL_MCP_SERVER_NAME });
   }
 }
 

@@ -44,6 +44,110 @@ describe('augmentRequestBody', () => {
     expect(body.ref_file_ids).toEqual(['file-1']);
   });
 
+  it('preserves Vision routing through full prompt augmentation', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: '/review describe the screenshot against the project rule',
+      parent_message_id: null,
+      model_type: 'vision',
+      ref_file_ids: ['file-vision'],
+      search_enabled: true,
+      thinking_enabled: true,
+    }), {
+      memories: [
+        memory(21, 'global', undefined, 'Vision preference', 'Use visual evidence from the attached screenshot.'),
+      ],
+      skills: [{
+        name: 'review',
+        instructions: 'Review the user input carefully.',
+        memoryEnabled: true,
+      }],
+      activePreset: { id: 'preset-1', name: 'Review preset', content: 'Be precise.', createdAt: 1, updatedAt: 1 },
+      projectContext: '## Project Context\nProject rule: verify before concluding.',
+      modelType: 'expert',
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+      locale: 'en',
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as {
+      model_type?: string;
+      ref_file_ids?: string[];
+      search_enabled?: boolean;
+      thinking_enabled?: boolean;
+      prompt?: string;
+    };
+
+    expect(body.model_type).toBe('vision');
+    expect(body.ref_file_ids).toEqual(['file-vision']);
+    expect(body.search_enabled).toBe(true);
+    expect(body.thinking_enabled).toBe(true);
+    expect(body.prompt).toContain('Be precise.');
+    expect(body.prompt).toContain('Use visual evidence from the attached screenshot.');
+    expect(body.prompt).toContain('Project rule: verify before concluding.');
+    expect(body.prompt).toContain('Review the user input carefully.');
+    expect(body.prompt).toContain('Available tool tag names:');
+  });
+
+  it('auto-enables native research controls for source-grounded personal workflows', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'Do a deep dive on SCAIL-2 and verify the workflow with sources',
+      parent_message_id: null,
+      search_enabled: false,
+      thinking_enabled: false,
+    }), {
+      memories: [],
+      skills: [],
+      activePreset: null,
+      modelType: null,
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as { search_enabled?: boolean; thinking_enabled?: boolean };
+    expect(body.search_enabled).toBe(true);
+    expect(body.thinking_enabled).toBe(true);
+  });
+
+  it('leaves native controls alone for ordinary quick prompts', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'Quick sanity check: what is 2+2?',
+      parent_message_id: null,
+      search_enabled: false,
+      thinking_enabled: false,
+    }), {
+      memories: [],
+      skills: [],
+      activePreset: null,
+      modelType: null,
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as { search_enabled?: boolean; thinking_enabled?: boolean };
+    expect(body.search_enabled).toBe(false);
+    expect(body.thinking_enabled).toBe(false);
+  });
+
+  it('respects explicit research-control opt outs', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'Research SCAIL-2 without web search or deepthink',
+      parent_message_id: null,
+      search_enabled: false,
+      thinking_enabled: false,
+    }), {
+      memories: [],
+      skills: [],
+      activePreset: null,
+      modelType: null,
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as { search_enabled?: boolean; thinking_enabled?: boolean };
+    expect(body.search_enabled).toBe(false);
+    expect(body.thinking_enabled).toBe(false);
+  });
+
   it('emits English prompt scaffolding while keeping XML tool tags stable', () => {
     const result = buildPromptAugmentation('search latest DeepSeek news', {
       memories: [],
@@ -174,6 +278,50 @@ describe('augmentRequestBody', () => {
     });
     expect(forcedLanguage.augmented).toContain('## 回复语言');
     expect(forcedLanguage.augmented).toContain('请使用英文回复。');
+  });
+
+  it('keeps source-grounded research prompts from injecting unrelated topic memories', () => {
+    const result = buildPromptAugmentation(
+      'Deep-dive "scail-2". Compare primary sources, include links, and verify the current status.',
+      {
+        memories: [
+          {
+            ...memory(11, 'global', undefined, 'CoreAI model optimization', 'The user is working on CoreAI model optimization.'),
+            type: 'topic',
+            pinned: true,
+          },
+          {
+            ...memory(12, 'global', undefined, 'Research style', 'Use natural human research prompts, not marker probes.'),
+            type: 'feedback',
+            pinned: false,
+          },
+          {
+            ...memory(13, 'global', undefined, 'Saved reference', 'A private project reference that should not become research evidence.'),
+            type: 'reference',
+            pinned: true,
+          },
+        ],
+        locale: 'en',
+      },
+    );
+
+    expect(result.usedMemoryIds).toEqual([12]);
+    expect(result.augmented).toContain('Use natural human research prompts');
+    expect(result.augmented).not.toContain('CoreAI model optimization');
+    expect(result.augmented).not.toContain('private project reference');
+    expect(result.augmented).toContain('Memories are private personalization context');
+  });
+
+  it('keeps normal prompts able to inject pinned reference memories', () => {
+    const result = buildPromptAugmentation('what project context should you keep in mind?', {
+      memories: [
+        memory(14, 'global', undefined, 'Pinned reference', 'Keep this normal reference available.'),
+      ],
+      locale: 'en',
+    });
+
+    expect(result.usedMemoryIds).toEqual([14]);
+    expect(result.augmented).toContain('Keep this normal reference available.');
   });
 
   it('localizes skill user-input wrapper without mutating the user input', () => {

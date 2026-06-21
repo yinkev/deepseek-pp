@@ -117,7 +117,7 @@ Adds right-click actions for selected page text so the user can send the selecti
 #### `nativeMessaging`
 
 ```text
-Connects to user-configured local Native Messaging hosts for local MCP tools, including the Shell host and optional Multimodal Native Host. Built-in native presets remain disabled until the user installs the matching host, configures it, and enables it.
+Connects to user-configured local Native Messaging hosts for local MCP tools, including the Shell host and optional Legacy Multimodal Native Host. Built-in native presets remain disabled until the user installs the matching host, configures it, and enables it.
 ```
 
 #### `offscreen`
@@ -193,7 +193,7 @@ Use this reviewer note:
 8. In the side panel, create a saved snippet and insert it into chat, then export saved items as Markdown or JSON.
 9. In Capabilities > Browser, enable Browser Control, choose a normal web tab, and verify the page shows a selected target. Browser Control can be disabled or detached from the same page.
 10. Optional MCP/WebDAV/native messaging features require user-provided endpoints or a user-installed local Shell host and are disabled until configured by the user.
-11. Optional multimodal media analysis requires the user to install the Multimodal Native Host, configure OpenAI/Gemini settings in Settings > Multimodal API, and attach media manually. If it is not configured, the feature remains unavailable and shows setup guidance.
+11. DeepSeek Web Vision image attachments work through the user's logged-in DeepSeek web session. Optional legacy multimodal media analysis requires the user to install the Legacy Multimodal Native Host, configure OpenAI/Gemini settings in Settings > Legacy Multimodal API, and attach media manually. If it is not configured, only the legacy MCP feature remains unavailable and shows setup guidance.
 ```
 
 No test account is included because the extension works with the reviewer's own DeepSeek session.

@@ -344,7 +344,7 @@ export const zhCN = {
       },
       navLabel: '设置子导航',
       generalDescription: '界面语言与网页行为开关。',
-      apiDescription: '侧边栏对话、多模态分析所需的 API Key 与请求地址。',
+      apiDescription: '侧边栏对话、旧版多模态分析所需的 API Key 与请求地址。',
       promptDescription: '控制记忆、系统提示词与预设的注入策略。',
       voiceDescription: '语音输入与回复朗读。',
       appearanceDescription: '背景、悬浮宠物等 DeepSeek 页面外观。',
@@ -403,8 +403,8 @@ export const zhCN = {
       configured: '已配置',
       notConfigured: '未配置',
       apiKeyReplacePlaceholder: '输入新 Key 可替换',
-      multimodalApi: '多模态 API',
-      multimodalApiDescription: '为内置多模态 MCP 配置 OpenAI 图片分析、Gemini 视频分析和自定义请求地址。',
+      multimodalApi: '旧版多模态 API',
+      multimodalApiDescription: '配置可选的旧版 OpenAI/Gemini MCP。DeepSeek Web Vision 图片附件不需要这里。',
       openaiKeyReplacePlaceholder: '输入新 OpenAI Key 可替换',
       geminiKeyReplacePlaceholder: '输入新 Gemini Key 可替换',
       openaiImageModel: 'OpenAI 图片模型',
@@ -412,9 +412,9 @@ export const zhCN = {
       openaiBaseUrl: 'OpenAI 请求地址',
       geminiBaseUrl: 'Gemini 请求地址',
       multimodalBaseUrlInvalid: 'OpenAI / Gemini 请求地址必须是有效的 http(s) URL',
-      multimodalSaved: '多模态 API 配置已保存',
-      multimodalCleared: '多模态 API 配置已清除',
-      clearMultimodalApi: '清除多模态配置',
+      multimodalSaved: '旧版多模态 API 配置已保存',
+      multimodalCleared: '旧版多模态 API 配置已清除',
+      clearMultimodalApi: '清除旧版多模态配置',
       saving: '保存中',
       clearing: '清除中',
       clearApiKey: '清除 API Key',
@@ -736,11 +736,11 @@ export const zhCN = {
       summary: '{servers} 个服务，{enabled} 个启用，{tools} 个自动工具',
       loading: '正在加载 MCP 配置',
       empty: '暂无 MCP 服务',
-      emptyHint: '连接远程 MCP 服务，或一键安装本机 Shell / 多模态预设。',
+      emptyHint: '连接远程 MCP 服务，安装 Shell，或添加可选的旧版媒体 MCP。',
       emptyCreateAction: '新增 MCP 服务',
       emptyInstallShell: '安装 Shell 预设',
       shell: 'Shell',
-      multimodal: '多模态',
+      multimodal: '旧版媒体',
       addServer: '新增',
       enabled: '启用',
       auto: '自动',
@@ -753,9 +753,9 @@ export const zhCN = {
         shellExistsSelected: 'Shell MCP 已存在，已选中现有配置',
         shellCreateFailed: '创建 Shell MCP 预设失败',
         shellCreated: '已创建 Shell MCP 预设。请运行下方安装命令后重启浏览器。',
-        multimodalExistsSelected: '多模态 MCP 已存在，已选中现有配置',
-        multimodalCreateFailed: '创建多模态 MCP 预设失败',
-        multimodalCreated: '已创建多模态 MCP 预设。请运行下方安装命令，并在设置页配置多模态 API。',
+        multimodalExistsSelected: '旧版多模态 MCP 已存在，已选中现有配置',
+        multimodalCreateFailed: '创建旧版多模态 MCP 预设失败',
+        multimodalCreated: '已创建旧版多模态 MCP 预设。请运行下方安装命令，并在设置页配置旧版多模态 API。',
         saveFailed: '保存 MCP 服务失败',
         deleteConfirm: '删除 MCP 服务「{name}」？',
         permissionGranted: '已授权 {origin}',
@@ -882,14 +882,14 @@ export const zhCN = {
         localIntro: '打开终端，在 deepseek-pp 项目根目录执行以下命令：',
         publishedIntro: '打开终端，执行以下命令（只需一次）：',
         fallbackIntro: '如果你使用的是已发布扩展而不是本地源码版，执行：',
-        settingsNote: 'API Key、模型和请求地址请在设置页的「多模态 API」中配置；图片使用 OpenAI，视频使用 Gemini。',
-        enableAndTest: '安装完成后，在设置页配置多模态 API，打开上方开关启用，再点击「测试」验证连接。',
-        forbidden: 'Multimodal Native Host 已安装，但未授权当前扩展 ID。请重新运行下方安装命令后重启浏览器。',
-        notFound: '未找到 Multimodal Native Host — 请先运行下方安装命令，并确保已安装 Node.js/npm。',
-        cannotConnect: '无法连接到 Multimodal Native Host — 请确认已运行安装脚本并重启浏览器。',
-        ready: '已连接，发现 {count} 个多模态工具。',
-        disabled: '服务已创建但尚未启用。请先安装 Native Host、配置多模态 API，再启用并测试。',
-        installFirst: '请先安装 Multimodal Native Host，在设置页配置多模态 API 后点击「测试」验证连接。',
+        settingsNote: '仅用于旧版预分析 MCP：API Key、模型和请求地址请在设置页的「旧版多模态 API」中配置。DeepSeek Web Vision 图片附件会绕过这个 host。',
+        enableAndTest: '安装完成后，在设置页配置旧版多模态 API，打开上方开关启用，再点击「测试」验证连接。',
+        forbidden: 'Legacy Multimodal Native Host 已安装，但未授权当前扩展 ID。请重新运行下方安装命令后重启浏览器。',
+        notFound: '未找到 Legacy Multimodal Native Host。DeepSeek Web Vision 图片附件不需要它；只有旧版媒体 MCP 分析才需要安装。',
+        cannotConnect: '无法连接到 Legacy Multimodal Native Host。DeepSeek Web Vision 图片附件不会使用这个 host。',
+        ready: '已连接，发现 {count} 个旧版媒体工具。',
+        disabled: '服务已创建但尚未启用。请先安装 Legacy Multimodal Native Host、配置旧版多模态 API，再启用并测试。',
+        installFirst: '请先安装 Legacy Multimodal Native Host，在设置页配置旧版多模态 API 后点击「测试」验证连接。',
       },
     },
     chatPage: {
@@ -1181,19 +1181,19 @@ export const zhCN = {
       sourceEstimated: '本地估算',
     },
     multimodalMedia: {
-      buttonTitle: '添加 DeepSeek++ 多模态图片或视频',
+      buttonTitle: '为 DeepSeek Web Vision 附加图片',
       removeTitle: '移除 {name}',
-      pastedFileName: '粘贴的媒体',
-      added: '已添加 {count} 个多模态附件',
-      analyzing: '正在分析 {count} 个多模态附件...',
-      analyzed: '多模态分析完成（{count} 项）',
-      failed: '多模态分析失败：{message}',
-      tooMany: '每轮最多添加 {count} 个多模态附件',
-      unsupported: '{name} 不是支持的图片或视频',
+      pastedFileName: '粘贴的图片',
+      added: '已添加 {count} 个图片附件',
+      analyzing: '正在准备 {count} 张 DeepSeek Web Vision 图片...',
+      analyzed: 'DeepSeek Web Vision 图片已就绪（{count} 项）',
+      failed: 'DeepSeek Web Vision 图片上传失败：{message}',
+      tooMany: '每轮最多添加 {count} 张 DeepSeek Web Vision 图片',
+      unsupported: '{name} 不是支持的 DeepSeek Web Vision 图片',
       imageTooLarge: '{name} 超过图片上限 {limit}',
       videoTooLarge: '{name} 超过内联视频上限 {limit}。请改用公开视频 URL，或等待本地路径选择能力。',
-      invalidRequest: 'DeepSeek 请求体异常，无法附加多模态媒体。',
-      emptyPrompt: '请先输入消息，再发送多模态媒体。',
+      invalidRequest: 'DeepSeek 请求体异常，无法附加 Vision 图片。',
+      emptyPrompt: '请先输入消息，再发送 Vision 图片。',
     },
     extensionReloaded: '扩展已重新加载，请刷新当前 DeepSeek 页面后重试。',
   },
@@ -1445,6 +1445,8 @@ export const zhCN = {
 ## 已有记忆
 {memories}
 
+记忆是私人的个性化上下文，只用于适配风格或遵守长期偏好。除非用户明确询问记忆，否则不要引用、复述或把记忆当作证据。对于研究或需要来源支撑的任务，事实判断必须基于用户当前输入、工具结果和可引用来源。
+
 ## Tools
 
 You have access to a set of tools. To call a tool, output an XML block with the tool name itself as the tag and a JSON object as the body, exactly like this:
@@ -1496,6 +1498,8 @@ You MUST strictly follow the above defined tool name and parameter schemas to in
     systemThinking: `你具有长期记忆能力。已有记忆：
 
 {memories}
+
+记忆是私人的个性化上下文，只用于适配风格或遵守长期偏好。除非用户明确询问记忆，否则不要引用、复述或把记忆当作证据。对于研究或需要来源支撑的任务，事实判断必须基于用户当前输入、工具结果和可引用来源。
 
 ## Tools
 

@@ -664,6 +664,16 @@ async function handleAugmentRequestBody(data: { id?: unknown; body?: unknown }):
   if (!id) return;
 
   try {
+    if (!hasLiveExtensionContext()) {
+      postToMainWorld({
+        type: 'AUGMENT_REQUEST_BODY_RESULT',
+        id,
+        ok: true,
+        result: null,
+      });
+      return;
+    }
+
     if (typeof data.body !== 'string') {
       throw new Error('Request body must be a string.');
     }
@@ -707,6 +717,16 @@ async function handleAugmentRequestBody(data: { id?: unknown; body?: unknown }):
         : null,
     });
   } catch (error) {
+    if (isExtensionInvalidatedError(error)) {
+      postToMainWorld({
+        type: 'AUGMENT_REQUEST_BODY_RESULT',
+        id,
+        ok: true,
+        result: null,
+      });
+      return;
+    }
+
     postToMainWorld({
       type: 'AUGMENT_REQUEST_BODY_RESULT',
       id,
@@ -817,6 +837,7 @@ function installExtensionInvalidationGuards() {
 function isExtensionInvalidatedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('Extension context invalidated') ||
+    message.includes('Extension context is unavailable') ||
     message.includes('context invalidated');
 }
 

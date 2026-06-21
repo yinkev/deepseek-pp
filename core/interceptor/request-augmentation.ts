@@ -1,5 +1,5 @@
 import { DEFAULT_LOCALE, translate, type SupportedLocale } from '../i18n';
-import { buildPromptAugmentation } from '../prompt';
+import { buildPromptAugmentation, shouldAutoEnableResearchControls } from '../prompt';
 import {
   DEFAULT_PROMPT_INJECTION_SETTINGS,
   normalizePromptInjectionSettings,
@@ -49,6 +49,11 @@ export function augmentRequestBody(
   const originalPrompt = (body.prompt as string) || '';
   if (!originalPrompt) return null;
   const locale = state.locale ?? DEFAULT_LOCALE;
+
+  if (shouldAutoEnableResearchControls(originalPrompt) && !hasRefFileIds(body.ref_file_ids)) {
+    body.search_enabled = true;
+    body.thinking_enabled = true;
+  }
 
   const thinkingEnabled = body.thinking_enabled === true;
   const isFirstMessage = body.parent_message_id === null || body.parent_message_id === undefined;

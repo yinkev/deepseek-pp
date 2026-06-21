@@ -1,5 +1,6 @@
 import type { McpServerConfig, McpServerCreateInput, McpToolAllowlist } from '../mcp/types';
 import {
+  LEGACY_MULTIMODAL_MCP_SERVER_NAME,
   MULTIMODAL_MCP_NATIVE_HOST,
   MULTIMODAL_MCP_SERVER_NAME,
   type MultimodalToolName,
@@ -28,6 +29,7 @@ export function isMultimodalMcpServer(
   server: Pick<McpServerConfig, 'displayName' | 'transport'>,
 ): boolean {
   return server.displayName === MULTIMODAL_MCP_SERVER_NAME ||
+    server.displayName === LEGACY_MULTIMODAL_MCP_SERVER_NAME ||
     server.transport.nativeHost === MULTIMODAL_MCP_NATIVE_HOST;
 }
 

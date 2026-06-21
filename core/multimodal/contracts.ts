@@ -1,6 +1,7 @@
 import type { ToolRiskLevel } from '../tool/types';
 
-export const MULTIMODAL_MCP_SERVER_NAME = 'Multimodal Vision';
+export const MULTIMODAL_MCP_SERVER_NAME = 'Legacy Multimodal MCP';
+export const LEGACY_MULTIMODAL_MCP_SERVER_NAME = 'Multimodal Vision';
 export const MULTIMODAL_MCP_NATIVE_HOST = 'com.deepseek_pp.multimodal';
 export const MULTIMODAL_MCP_PACKAGE_NAME = 'deepseek-pp-multimodal-mcp';
 

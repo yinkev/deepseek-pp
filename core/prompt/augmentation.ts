@@ -50,8 +50,14 @@ export function buildPromptAugmentation(
 
   const promptTokens = estimateTokens(originalPrompt);
   const budget = getMemoryBudget(promptTokens);
+  const sourceGroundedPrompt = isSourceGroundedResearchPrompt(originalPrompt);
   const selected = memoryEnabled
-    ? selectMemories(originalPrompt, [...memories], { budget, identityOnly })
+    ? selectMemories(originalPrompt, [...memories], {
+        budget,
+        identityOnly,
+        allowedTypes: sourceGroundedPrompt ? ['user', 'feedback'] : undefined,
+        includePinnedOutsideAllowedTypes: !sourceGroundedPrompt,
+      })
     : [];
   const memBlock = memoryEnabled
     ? formatMemoriesBlock(selected, locale)
@@ -99,6 +105,54 @@ function renderForcedResponseLanguage(
     ? translate(locale, 'prompt.responseLanguageEnglish')
     : translate(locale, 'prompt.responseLanguageChinese');
   return translate(locale, 'prompt.forceResponseLanguage', { language });
+}
+
+export function shouldAutoEnableResearchControls(prompt: string): boolean {
+  if (!isSourceGroundedResearchPrompt(prompt)) return false;
+  return !hasExplicitResearchControlOptOut(prompt);
+}
+
+export function isSourceGroundedResearchPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  if (/\b(use|using|from|with)\s+(my|our)\s+(memory|memories)\b/.test(normalized)) return false;
+  if (/\b(remember|save memory|memory_save|update memory|delete memory)\b/.test(normalized)) return false;
+
+  const sourceCues = [
+    'research',
+    'deep dive',
+    'deep-dive',
+    'source',
+    'sources',
+    'citation',
+    'citations',
+    'cite',
+    'links',
+    'official docs',
+    'official documentation',
+    'repository',
+    'repositories',
+    'paper',
+    'papers',
+    'arxiv',
+    'github',
+    'hugging face',
+    'current status',
+    'verify',
+    'web search',
+    'browser/search',
+  ];
+
+  return sourceCues.some((cue) => normalized.includes(cue));
+}
+
+function hasExplicitResearchControlOptOut(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return [
+    /\b(no|without)\s+(web\s+)?search\b/,
+    /\b(do not|don't|dont)\s+(use\s+)?(web\s+)?search\b/,
+    /\b(no|without)\s+(deepthink|deep\s+think|thinking|reasoning)\b/,
+    /\b(do not|don't|dont)\s+(use\s+)?(deepthink|deep\s+think|thinking|reasoning)\b/,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 export function renderToolSchemas(

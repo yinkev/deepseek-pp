@@ -19,6 +19,7 @@ let textarea: HTMLTextAreaElement | null = null;
 let copy: SkillPopupCopy = DEFAULT_COPY;
 
 let initialized = false;
+let textareaObserver: MutationObserver | null = null;
 
 export function initSkillPopup(initialSkills: SkillPopupItem[], nextCopy: Partial<SkillPopupCopy> = {}) {
   skills = initialSkills;
@@ -34,12 +35,21 @@ export function initSkillPopup(initialSkills: SkillPopupItem[], nextCopy: Partia
 
 function watchTextarea() {
   tryAttach();
-  new MutationObserver(() => {
+  if (textareaObserver) return;
+
+  const root = document.body ?? document.documentElement;
+  if (!root) {
+    document.addEventListener('DOMContentLoaded', watchTextarea, { once: true });
+    return;
+  }
+
+  textareaObserver = new MutationObserver(() => {
     if (!textarea || !document.contains(textarea)) {
       textarea = null;
       tryAttach();
     }
-  }).observe(document.body, { childList: true, subtree: true });
+  });
+  textareaObserver.observe(root, { childList: true, subtree: true });
 }
 
 function tryAttach() {
@@ -198,6 +208,12 @@ function escapeHtml(s: string) {
 
 function injectStyles() {
   if (document.getElementById('dpp-skill-popup-css')) return;
+  const root = document.head ?? document.documentElement;
+  if (!root) {
+    document.addEventListener('DOMContentLoaded', injectStyles, { once: true });
+    return;
+  }
+
   const style = document.createElement('style');
   style.id = 'dpp-skill-popup-css';
   style.textContent = `
@@ -293,5 +309,5 @@ body.dpp-theme-dark {
   margin-top: 4px;
 }
 `;
-  document.head.appendChild(style);
+  root.appendChild(style);
 }

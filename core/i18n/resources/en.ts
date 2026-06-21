@@ -344,7 +344,7 @@ export const en = {
       },
       navLabel: 'Settings sub-navigation',
       generalDescription: 'Interface language and webpage behavior toggles.',
-      apiDescription: 'API keys and request URLs for sidepanel chat and multimodal analysis.',
+      apiDescription: 'API keys and request URLs for sidepanel chat and legacy multimodal analysis.',
       promptDescription: 'Control how memory, system prompt and presets are injected.',
       voiceDescription: 'Voice input and read-aloud for replies.',
       appearanceDescription: 'Background and floating pet on DeepSeek pages.',
@@ -403,8 +403,8 @@ export const en = {
       configured: 'Configured',
       notConfigured: 'Not configured',
       apiKeyReplacePlaceholder: 'Enter a new key to replace it',
-      multimodalApi: 'Multimodal API',
-      multimodalApiDescription: 'Configure OpenAI image analysis, Gemini video analysis, and custom request URLs for the built-in Multimodal MCP.',
+      multimodalApi: 'Legacy Multimodal API',
+      multimodalApiDescription: 'Configure the optional legacy OpenAI/Gemini MCP. DeepSeek Web Vision image attachments do not need this.',
       openaiKeyReplacePlaceholder: 'Enter a new OpenAI key to replace it',
       geminiKeyReplacePlaceholder: 'Enter a new Gemini key to replace it',
       openaiImageModel: 'OpenAI image model',
@@ -412,9 +412,9 @@ export const en = {
       openaiBaseUrl: 'OpenAI request URL',
       geminiBaseUrl: 'Gemini request URL',
       multimodalBaseUrlInvalid: 'OpenAI / Gemini request URLs must be valid http(s) URLs',
-      multimodalSaved: 'Multimodal API settings saved',
-      multimodalCleared: 'Multimodal API settings cleared',
-      clearMultimodalApi: 'Clear multimodal settings',
+      multimodalSaved: 'Legacy Multimodal API settings saved',
+      multimodalCleared: 'Legacy Multimodal API settings cleared',
+      clearMultimodalApi: 'Clear legacy multimodal settings',
       saving: 'Saving',
       clearing: 'Clearing',
       clearApiKey: 'Clear API Key',
@@ -736,11 +736,11 @@ export const en = {
       summary: '{servers} servers, {enabled} enabled, {tools} auto tools',
       loading: 'Loading MCP config',
       empty: 'No MCP servers',
-      emptyHint: 'Connect a remote MCP service, or one-click install the Shell / multimodal native host preset.',
+      emptyHint: 'Connect a remote MCP service, install Shell, or add the optional legacy media MCP.',
       emptyCreateAction: 'Add MCP server',
       emptyInstallShell: 'Install Shell preset',
       shell: 'Shell',
-      multimodal: 'Multimodal',
+      multimodal: 'Legacy media',
       addServer: 'Add',
       enabled: 'Enabled',
       auto: 'Auto',
@@ -753,9 +753,9 @@ export const en = {
         shellExistsSelected: 'Shell MCP already exists. Existing config selected.',
         shellCreateFailed: 'Failed to create Shell MCP preset',
         shellCreated: 'Shell MCP preset created. Run the install command below, then restart the browser.',
-        multimodalExistsSelected: 'Multimodal MCP already exists. Existing config selected.',
-        multimodalCreateFailed: 'Failed to create Multimodal MCP preset',
-        multimodalCreated: 'Multimodal MCP preset created. Run the install command below, then configure Multimodal API on Settings.',
+        multimodalExistsSelected: 'Legacy multimodal MCP already exists. Existing config selected.',
+        multimodalCreateFailed: 'Failed to create legacy multimodal MCP preset',
+        multimodalCreated: 'Legacy multimodal MCP preset created. Run the install command below, then configure Legacy Multimodal API on Settings.',
         saveFailed: 'Failed to save MCP server',
         deleteConfirm: 'Delete MCP server "{name}"?',
         permissionGranted: 'Granted {origin}',
@@ -882,14 +882,14 @@ export const en = {
         localIntro: 'Open a terminal in the deepseek-pp project root and run:',
         publishedIntro: 'Open a terminal and run this command once:',
         fallbackIntro: 'If you are using the published extension instead of a local source build, run:',
-        settingsNote: 'Configure API keys, models, and request URLs under Settings > Multimodal API. Images use OpenAI; videos use Gemini.',
-        enableAndTest: 'After installation, configure Multimodal API on Settings, enable this service with the switch above, then click "Test".',
-        forbidden: 'Multimodal Native Host is installed, but the current extension ID is not authorized. Run the install command again, then restart the browser.',
-        notFound: 'Multimodal Native Host was not found. Run the install command below and make sure Node.js/npm is installed.',
-        cannotConnect: 'Cannot connect to Multimodal Native Host. Confirm that the install script ran and the browser was restarted.',
-        ready: 'Connected, {count} multimodal tools discovered.',
-        disabled: 'The service has been created but is not enabled. Install Native Host, configure Multimodal API, then enable and test it.',
-        installFirst: 'Install Multimodal Native Host first, configure Multimodal API on Settings, then click "Test".',
+        settingsNote: 'Only needed for the legacy preflight MCP: configure API keys, models, and request URLs under Settings > Legacy Multimodal API. DeepSeek Web Vision image attachments bypass this host.',
+        enableAndTest: 'After installation, configure Legacy Multimodal API on Settings, enable this service with the switch above, then click "Test".',
+        forbidden: 'Legacy Multimodal Native Host is installed, but the current extension ID is not authorized. Run the install command again, then restart the browser.',
+        notFound: 'Legacy Multimodal Native Host was not found. DeepSeek Web Vision image attachments do not need it; install it only for legacy media MCP analysis.',
+        cannotConnect: 'Cannot connect to Legacy Multimodal Native Host. DeepSeek Web Vision image attachments do not use this host.',
+        ready: 'Connected, {count} legacy media tools discovered.',
+        disabled: 'The service has been created but is not enabled. Install Legacy Multimodal Native Host, configure Legacy Multimodal API, then enable and test it.',
+        installFirst: 'Install Legacy Multimodal Native Host first, configure Legacy Multimodal API on Settings, then click "Test".',
       },
     },
     chatPage: {
@@ -1181,19 +1181,19 @@ export const en = {
       sourceEstimated: 'local estimate',
     },
     multimodalMedia: {
-      buttonTitle: 'Add DeepSeek++ multimodal images or videos',
+      buttonTitle: 'Attach images for DeepSeek Web Vision',
       removeTitle: 'Remove {name}',
-      pastedFileName: 'Pasted media',
-      added: 'Added {count} multimodal attachment(s)',
-      analyzing: 'Analyzing {count} multimodal attachment(s)...',
-      analyzed: 'Multimodal analysis complete ({count} item(s))',
-      failed: 'Multimodal analysis failed: {message}',
-      tooMany: 'Attach at most {count} multimodal files per turn',
-      unsupported: '{name} is not a supported image or video',
+      pastedFileName: 'Pasted image',
+      added: 'Added {count} image attachment(s)',
+      analyzing: 'Preparing {count} DeepSeek Web Vision image(s)...',
+      analyzed: 'DeepSeek Web Vision image ready ({count} item(s))',
+      failed: 'DeepSeek Web Vision image upload failed: {message}',
+      tooMany: 'Attach at most {count} DeepSeek Web Vision images per turn',
+      unsupported: '{name} is not a supported DeepSeek Web Vision image',
       imageTooLarge: '{name} exceeds the image limit of {limit}',
       videoTooLarge: '{name} exceeds the inline video limit of {limit}. Use a public video URL or wait for local-path picker support.',
-      invalidRequest: 'The DeepSeek request body is invalid, so multimodal media cannot be attached.',
-      emptyPrompt: 'Type a message before sending multimodal media.',
+      invalidRequest: 'The DeepSeek request body is invalid, so Vision images cannot be attached.',
+      emptyPrompt: 'Type a message before sending Vision images.',
     },
     extensionReloaded: 'The extension was reloaded. Refresh the current DeepSeek page and try again.',
   },
@@ -1445,6 +1445,8 @@ You are the user's personal AI assistant with long-term cross-conversation memor
 ## Existing Memories
 {memories}
 
+Memories are private personalization context. Use them only to adapt style or respect durable preferences. Do not cite, quote, or mention memories as evidence unless the user explicitly asks about memory. For research or source-grounded work, base factual claims on the user's prompt, tool results, and cited sources.
+
 ## Tools
 
 You have access to a set of tools. To call a tool, output an XML block with the tool name itself as the tag and a JSON object as the body, exactly like this:
@@ -1496,6 +1498,8 @@ Got it. React + TypeScript is a common modern frontend stack. Ask me anything re
     systemThinking: `You have long-term memory. Existing memories:
 
 {memories}
+
+Memories are private personalization context. Use them only to adapt style or respect durable preferences. Do not cite, quote, or mention memories as evidence unless the user explicitly asks about memory. For research or source-grounded work, base factual claims on the user's prompt, tool results, and cited sources.
 
 ## Tools
 

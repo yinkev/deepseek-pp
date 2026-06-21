@@ -1,4 +1,4 @@
-import type { Memory } from '../types';
+import type { Memory, MemoryType } from '../types';
 import { MEMORY_TOKEN_BUDGET, STOP_WORDS } from '../constants';
 import { DEFAULT_LOCALE, translate, type SupportedLocale } from '../i18n';
 import { estimateTokens } from '../token/estimator';
@@ -71,6 +71,8 @@ function decayScore(memory: Memory): number {
 export interface SelectOptions {
   budget?: number;
   identityOnly?: boolean;
+  allowedTypes?: readonly MemoryType[];
+  includePinnedOutsideAllowedTypes?: boolean;
 }
 
 export function getMemoryBudget(promptTokens: number): number {
@@ -87,11 +89,20 @@ export function selectMemories(
 ): Memory[] {
   if (allMemories.length === 0) return [];
 
-  const { budget = MEMORY_TOKEN_BUDGET, identityOnly = false } = options ?? {};
+  const {
+    budget = MEMORY_TOKEN_BUDGET,
+    identityOnly = false,
+    allowedTypes,
+    includePinnedOutsideAllowedTypes = true,
+  } = options ?? {};
 
-  const candidates = identityOnly
+  const baseCandidates = identityOnly
     ? allMemories.filter((m) => m.type === 'user' || m.type === 'feedback' || m.pinned)
     : allMemories;
+  const allowedTypeSet = allowedTypes?.length ? new Set<MemoryType>(allowedTypes) : null;
+  const candidates = allowedTypeSet
+    ? baseCandidates.filter((m) => allowedTypeSet.has(m.type) || (includePinnedOutsideAllowedTypes && m.pinned))
+    : baseCandidates;
 
   if (candidates.length === 0) return [];
 

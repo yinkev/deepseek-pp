@@ -5,7 +5,7 @@
 <h1 align="center">DeepSeek++</h1>
 
 <p align="center">
-  <strong>DeepSeek++：把 DeepSeek 网页版扩展成支持中英文体验、记忆、项目、Skill、MCP、多模态媒体、浏览器控制、保存项、产物下载、对话导出和自动化的 AI Agent 工作台</strong>
+  <strong>DeepSeek++：把 DeepSeek 网页版扩展成支持中英文体验、记忆、项目、Skill、MCP、DeepSeek Web Vision 图片、浏览器控制、保存项、产物下载、对话导出和自动化的 AI Agent 工作台</strong>
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@
 
 ## 产品定位
 
-DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏览器扩展，支持 Chrome、Edge 和 Firefox。它把 DeepSeek Web 扩展成 AI agent workspace，让用户在同一浏览器工作流里使用中英文界面、MCP 工具、图片/视频多模态分析、长期记忆、Skill、系统提示词预设、联网搜索、网页读取、对话导出和定时自动化。
+DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏览器扩展，支持 Chrome、Edge 和 Firefox。它把 DeepSeek Web 扩展成 AI agent workspace，让用户在同一浏览器工作流里使用中英文界面、MCP 工具、DeepSeek Web Vision 图片、长期记忆、Skill、系统提示词预设、联网搜索、网页读取、对话导出和定时自动化。
 
 如果你在寻找 DeepSeek Chrome extension、DeepSeek MCP tools、DeepSeek memory plugin、DeepSeek conversation export 或 DeepSeek AI agent，DeepSeek++ 对应的是同一个本地优先的 DeepSeek 浏览器增强工作台。
 
@@ -58,7 +58,7 @@ DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏
 | DeepSeek browser extension / DeepSeek Chrome extension | 在 DeepSeek 网页版中加入侧边栏对话、右键发送文本、工具执行结果展示和 Chrome / Edge / Firefox 支持。 |
 | Multilingual DeepSeek extension / 中英文体验 | 可在简体中文和 English 之间切换，界面、内置工具说明和模型续跑行为保持同一语言。 |
 | DeepSeek MCP tools | 在侧边栏管理 MCP 服务、工具权限和执行状态，并把工具结果带回同一会话继续生成。 |
-| DeepSeek multimodal media / 图片视频分析 | 安装多模态 Native Host 后，可在 DeepSeek 输入框附加图片或视频，让 DeepSeek++ 先完成媒体分析再带着结果继续对话。 |
+| DeepSeek Web Vision / 图片理解 | 在 DeepSeek 输入框附加图片，通过登录态上传到 DeepSeek Web Vision，并带着 `vision` 模型和文件引用继续本轮对话。 |
 | DeepSeek browser control / 浏览器控制 | 在侧边栏选择受控标签页，让 DeepSeek++ 按用户开启的边界读取页面结构并执行可见网页操作。 |
 | DeepSeek memory / 长期记忆 | 自动保存、筛选和注入长期记忆，让不同对话可以复用用户偏好、项目背景和常用信息。 |
 | DeepSeek Skills / `/skill` 工作流 | 通过内置、自定义或 GitHub 导入的 Skill 快速切换专家模式和任务模板。 |
@@ -75,7 +75,7 @@ DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏
 - 希望把 DeepSeek 网页版扩展成带工具调用、MCP、记忆和自动化能力的 AI agent 工作台。
 - 希望 DeepSeek++ 的界面、工具提示和模型续跑提示能跟随中文或英文使用环境。
 - 希望在 Chrome、Edge 或 Firefox 中直接使用 DeepSeek 侧边栏对话、网页文本发送和固定场景 prompt。
-- 希望在 DeepSeek 对话中加入图片或视频，让模型基于媒体分析结果继续完成解释、总结、对比或文档任务。
+- 希望在 DeepSeek 对话中加入图片，让模型基于 DeepSeek Web Vision 继续完成解释、总结、对比或文档任务。
 - 希望在 Chrome 或 Edge 中让 AI 操作用户选定的标签页，同时保留明确的启用、切换和断开控制。
 - 希望把项目背景、个人偏好、常用工作流和文档处理能力沉淀为长期记忆与可复用 Skill。
 - 希望把自己的 DeepSeek 对话记录本地备份为可读文件，便于归档、迁移或后续检索。
@@ -198,22 +198,22 @@ DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏
 - **权限管理** — 侧边栏可直接授权、测试连接、刷新工具和查看状态
 - **结果自动回传** — 工具执行完成后，结果自动发回同一会话继续生成，实现多轮工具调用
 - **支持 Agent 式续跑** — MCP 工具结果可以回传到原会话继续生成，支撑长任务里的多步工具执行
-- **内置多模态预设** — 可创建 `多模态` 预设，让 DeepSeek 通过 OpenAI 分析多张图片，通过 Gemini 分析视频
-- **输入框媒体附件** — 安装并启用多模态预设后，可在 DeepSeek 输入框添加图片或视频，分析结果会并入本次消息继续生成
-- **用户可控边界** — OpenAI / Gemini Key、模型和请求地址由用户在设置页配置；媒体文件只在用户主动附加并发送时进入多模态分析流程
+- **DeepSeek Web Vision 图片附件** — 可在 DeepSeek 输入框添加图片，DeepSeek++ 会通过登录态上传到 DeepSeek Web Vision，并用 `vision` 模型继续本次消息
+- **旧版媒体 MCP** — 可选创建旧版媒体预设，用 OpenAI / Gemini 做预分析；它不是 DeepSeek Web Vision 图片附件的依赖
+- **用户可控边界** — 图片只在用户主动附加并发送时进入 DeepSeek Web Vision；旧版 OpenAI / Gemini Key、模型和请求地址只用于可选旧版媒体 MCP
 - **本地安全** — MCP 配置和密钥保存在浏览器本地，WebDAV 同步不会同步敏感信息
 
 <p align="center">
   <img src="assets/screenshot-sidepanel-mcp.png" width="300" alt="MCP 管理侧边栏">
 </p>
 
-安装多模态 Native Host：
+如需旧版 OpenAI/Gemini 媒体 MCP，可安装 Legacy Multimodal Native Host：
 
 ```bash
 npx deepseek-pp-multimodal-mcp install --browser chrome --extension-id <扩展ID>
 ```
 
-侧边栏 `MCP` 页会自动填入当前扩展 ID。安装后在设置页的「多模态 API」配置 OpenAI / Gemini Key、模型和请求地址，然后启用 `多模态` 预设、点击测试和刷新工具。
+侧边栏 `MCP` 页会自动填入当前扩展 ID。安装后在设置页的「旧版多模态 API」配置 OpenAI / Gemini Key、模型和请求地址，然后启用旧版媒体预设、点击测试和刷新工具。DeepSeek Web Vision 图片附件不需要这个 Native Host。
 
 从源码开发时也可以使用：
 
@@ -333,8 +333,8 @@ npm run shell:install -- --browser chrome --extension-id <扩展ID>
 
 | 方向 | 主要变化 |
 |------|----------|
-| 多模态媒体 | 安装多模态 Native Host 后，可在 DeepSeek 输入框添加图片或视频，先通过用户配置的 OpenAI / Gemini 分析媒体，再把分析结果带回当前消息继续生成。 |
-| 多模态配置 | 侧边栏新增多模态 API 设置，可配置 OpenAI / Gemini Key、模型和请求地址，并通过 MCP 页创建、测试和启用 `多模态` 预设。 |
+| 多模态媒体 | 图片附件走 DeepSeek Web Vision；旧版 Native Host 仍可用于可选的 OpenAI / Gemini 媒体预分析。 |
+| 多模态配置 | 侧边栏保留旧版多模态 API 设置，可配置 OpenAI / Gemini Key、模型和请求地址，并通过 MCP 页创建、测试和启用旧版媒体预设。 |
 | 媒体任务稳定性 | 多模态请求会按图片和视频数量扩展等待时间，减少较大媒体或多文件分析在返回前被过早中断的情况。 |
 | Artifact 展示 | 生成的 artifact 结果会显示在折叠工具块外部，正文和可下载产物更容易区分和查看。 |
 | 侧边栏整理 | 设置页拆分为通用、API、外观、数据、提示词、语音和关于等子页，MCP、工具、Skill、自动化等页面补强加载状态和确认反馈。 |

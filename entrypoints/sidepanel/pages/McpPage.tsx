@@ -5,6 +5,7 @@ import {
   createShellMcpPresetInput,
 } from '../../../core/shell';
 import {
+  LEGACY_MULTIMODAL_MCP_SERVER_NAME,
   MULTIMODAL_MCP_NATIVE_HOST,
   MULTIMODAL_MCP_PACKAGE_NAME,
   MULTIMODAL_MCP_SERVER_NAME,
@@ -248,6 +249,7 @@ export default function McpPage() {
     }
     const existing = servers.find((server) =>
       server.displayName === MULTIMODAL_MCP_SERVER_NAME ||
+      server.displayName === LEGACY_MULTIMODAL_MCP_SERVER_NAME ||
       server.transport.nativeHost === MULTIMODAL_MCP_NATIVE_HOST
     );
     if (existing) {
@@ -1508,7 +1510,9 @@ function isShellServer(server: McpServerConfig): boolean {
 }
 
 function isMultimodalServer(server: McpServerConfig): boolean {
-  return server.displayName === MULTIMODAL_MCP_SERVER_NAME || server.transport.nativeHost === MULTIMODAL_MCP_NATIVE_HOST;
+  return server.displayName === MULTIMODAL_MCP_SERVER_NAME ||
+    server.displayName === LEGACY_MULTIMODAL_MCP_SERVER_NAME ||
+    server.transport.nativeHost === MULTIMODAL_MCP_NATIVE_HOST;
 }
 
 function ShellSetupHint({
@@ -1580,7 +1584,7 @@ function MultimodalSetupHint({
   const setup = multimodalInstallCommand();
   return (
     <NativeHostHint
-      title="Multimodal Native Host"
+      title="Legacy Multimodal MCP"
       message={message}
       isError={isError}
       ready={cache?.health.status === 'ready'}

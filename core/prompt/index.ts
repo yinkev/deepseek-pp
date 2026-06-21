@@ -1,6 +1,8 @@
 export {
   buildPromptAugmentation,
+  isSourceGroundedResearchPrompt,
   renderToolSchemas,
+  shouldAutoEnableResearchControls,
 } from './augmentation';
 
 export {
