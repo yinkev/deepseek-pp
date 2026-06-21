@@ -178,6 +178,31 @@ export default function RuntimeDoctorPage() {
     }
   };
 
+  const saveRecoveryMemory = async (
+    suggestion: RuntimeDoctorReport['debugDistiller']['suggestions'][number],
+  ) => {
+    setMessage(null);
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'SAVE_MEMORY',
+        payload: {
+          type: 'feedback',
+          name: suggestion.title,
+          content: suggestion.preview,
+          description: suggestion.reason,
+          tags: ['automation', 'runtime-doctor', 'recovery'],
+          pinned: false,
+        },
+      });
+      setMessage({ tone: 'success', text: t('sidepanel.runtimeDoctorPage.recoveryMemorySaved') });
+    } catch (error) {
+      setMessage({
+        tone: 'error',
+        text: t('sidepanel.runtimeDoctorPage.recoveryMemorySaveFailed', { error: formatError(error) }),
+      });
+    }
+  };
+
   useEffect(() => {
     loadReport();
   }, []);
@@ -477,7 +502,18 @@ export default function RuntimeDoctorPage() {
                     className="px-3 py-2 text-[11px] border"
                     style={{ borderColor: 'var(--ds-border)', borderRadius: 'var(--radius-ctrl)', color: 'var(--ds-text-secondary)' }}
                   >
-                    <div className="font-medium" style={{ color: 'var(--ds-text)' }}>{suggestion.title}</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="font-medium" style={{ color: 'var(--ds-text)' }}>{suggestion.title}</div>
+                      {suggestion.kind === 'memory' && (
+                        <button
+                          type="button"
+                          onClick={() => void saveRecoveryMemory(suggestion)}
+                          className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md shrink-0"
+                        >
+                          {t('sidepanel.runtimeDoctorPage.saveRecoveryMemory')}
+                        </button>
+                      )}
+                    </div>
                     <div>{suggestion.preview}</div>
                   </div>
                 ))}

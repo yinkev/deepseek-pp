@@ -274,6 +274,60 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('已刷新 Web 登录并启动自动化重试。');
   });
 
+  it('saves Runtime Doctor recovery suggestions as sanitized memories', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: Record<string, unknown> }) => {
+      if (message.type === 'GET_RUNTIME_DOCTOR_REPORT') return {
+        ...createRuntimeDoctorReport({
+          provider: 'deepseek-web',
+          retryableFailure: {
+            automationId: 'automation-1',
+            automationName: 'Visual check',
+            runId: 'run-1',
+            code: 'automation_executor_failed',
+            message: 'Authorization Bearer secret data:image/png;base64,AAAA',
+            phase: 'runner',
+            at: 123,
+          },
+        }),
+        debugDistiller: {
+          enabled: true,
+          suggestions: [{
+            id: 'automation-failure-automation-1',
+            kind: 'memory',
+            title: 'Remember automation recovery: Visual check',
+            preview: 'When automation "Visual check" fails in phase "runner" with "automation_executor_failed", refresh DeepSeek Web auth and retry the run before changing the task.',
+            reason: 'Latest retryable automation failure can become a personal recovery memory.',
+          }],
+        },
+      };
+      if (message.type === 'SAVE_MEMORY') return { id: 7 };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(RuntimeDoctorPage));
+    await flushEffects();
+    expect(container.textContent).toContain('Remember automation recovery: Visual check');
+    expect(container.textContent).not.toMatch(/Bearer|secret|data:image|AAAA/);
+
+    await clickButton('保存记忆');
+    await flushEffects();
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SAVE_MEMORY',
+      payload: {
+        type: 'feedback',
+        name: 'Remember automation recovery: Visual check',
+        content: 'When automation "Visual check" fails in phase "runner" with "automation_executor_failed", refresh DeepSeek Web auth and retry the run before changing the task.',
+        description: 'Latest retryable automation failure can become a personal recovery memory.',
+        tags: ['automation', 'runtime-doctor', 'recovery'],
+        pinned: false,
+      },
+    });
+    expect(JSON.stringify(sendMessage.mock.calls)).not.toMatch(/Bearer|secret|data:image|AAAA/);
+    expect(container.textContent).toContain('恢复记忆已保存。');
+  });
+
   it('persists the automation visual monitor option without screenshot bytes', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];
