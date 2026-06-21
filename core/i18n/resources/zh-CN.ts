@@ -1009,6 +1009,15 @@ export const zhCN = {
         description: '用高 ROI 循环作为起点，保存前可以继续编辑。',
         use: '使用',
         all: '全部',
+        searchPlaceholder: '搜索工作流',
+        noResults: '没有匹配的工作流。',
+        chips: {
+          manual: '手动',
+          scheduled: '定时',
+          search: '联网',
+          thinking: '深度思考',
+          visual: '视觉',
+        },
         categories: {
           readiness: '就绪',
           research: '研究',

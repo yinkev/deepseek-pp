@@ -1009,6 +1009,15 @@ export const en = {
         description: 'Use a high-ROI loop as a starting point, then edit it before saving.',
         use: 'Use',
         all: 'All',
+        searchPlaceholder: 'Search workflows',
+        noResults: 'No matching workflows.',
+        chips: {
+          manual: 'Manual',
+          scheduled: 'Scheduled',
+          search: 'Search',
+          thinking: 'DeepThink',
+          visual: 'Visual',
+        },
         categories: {
           readiness: 'Readiness',
           research: 'Research',

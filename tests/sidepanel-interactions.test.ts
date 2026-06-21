@@ -695,6 +695,10 @@ describe('sidepanel interactions', () => {
 
     expect(container.textContent).toContain('实现委员会');
     expect(container.textContent).toContain('来源监控');
+    expect(container.textContent).toContain('手动');
+    expect(container.textContent).toContain('联网');
+    expect(container.textContent).toContain('深度思考');
+    expect(container.textContent).toContain('视觉');
 
     await clickButton('项目');
     expect(container.textContent).toContain('实现委员会');
@@ -709,6 +713,13 @@ describe('sidepanel interactions', () => {
     await clickButton('全部');
     expect(container.textContent).toContain('实现委员会');
     expect(container.textContent).toContain('来源监控');
+
+    await enterText('搜索工作流', '调试');
+    expect(container.textContent).toContain('系统调试循环');
+    expect(container.textContent).not.toContain('来源监控');
+
+    await enterText('搜索工作流', 'zzzz');
+    expect(container.textContent).toContain('没有匹配的工作流。');
   });
 
   it('shows preflight fixed and skipped run explanations without sensitive values', async () => {

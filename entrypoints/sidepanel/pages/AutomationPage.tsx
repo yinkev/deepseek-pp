@@ -425,12 +425,15 @@ function AutomationTemplatePicker({
 }) {
   const { t } = useI18n();
   const [category, setCategory] = useState<'all' | AutomationWorkflowTemplateCategory>('all');
-  const visibleTemplates = useMemo(
-    () => category === 'all'
+  const [query, setQuery] = useState('');
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleTemplates = useMemo(() => {
+    const categorized = category === 'all'
       ? AUTOMATION_WORKFLOW_TEMPLATES
-      : AUTOMATION_WORKFLOW_TEMPLATES.filter((template) => template.category === category),
-    [category],
-  );
+      : AUTOMATION_WORKFLOW_TEMPLATES.filter((template) => template.category === category);
+    if (!normalizedQuery) return categorized;
+    return categorized.filter((template) => workflowTemplateSearchText(template, t).includes(normalizedQuery));
+  }, [category, normalizedQuery, t]);
   return (
     <section className="ds-surface-panel rounded-lg p-3 space-y-2">
       <div className="flex items-start justify-between gap-3">
@@ -443,6 +446,12 @@ function AutomationTemplatePicker({
           </div>
         </div>
       </div>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+        placeholder={t('sidepanel.automationPage.templates.searchPlaceholder')}
+      />
       <div className="flex flex-wrap gap-1.5">
         {TEMPLATE_CATEGORY_FILTERS.map((item) => {
           const selected = item === category;
@@ -461,7 +470,11 @@ function AutomationTemplatePicker({
         })}
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
-        {visibleTemplates.map((template) => (
+        {visibleTemplates.length === 0 ? (
+          <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+            {t('sidepanel.automationPage.templates.noResults')}
+          </div>
+        ) : visibleTemplates.map((template) => (
           <article key={template.id} className="ds-card rounded-lg p-3 space-y-2">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
@@ -479,6 +492,17 @@ function AutomationTemplatePicker({
               >
                 {t('sidepanel.automationPage.templates.use')}
               </button>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {workflowTemplateChips(template, t).map((label) => (
+                <span
+                  key={label}
+                  className="px-1.5 py-0.5 rounded-full text-[10px]"
+                  style={{ color: 'var(--ds-text-tertiary)', background: 'var(--ds-surface)' }}
+                >
+                  {label}
+                </span>
+              ))}
             </div>
             <div className="text-[11px] leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
               {workflowTemplateCopy(template, 'summary', t)}
@@ -1143,6 +1167,32 @@ function workflowTemplateCategory(
   t: (key: LocaleMessageKey) => string,
 ): string {
   return t(`sidepanel.automationPage.templates.categories.${template.category}` as LocaleMessageKey);
+}
+
+function workflowTemplateChips(
+  template: AutomationWorkflowTemplate,
+  t: (key: LocaleMessageKey) => string,
+): string[] {
+  return [
+    template.schedule.enabled
+      ? t('sidepanel.automationPage.templates.chips.scheduled')
+      : t('sidepanel.automationPage.templates.chips.manual'),
+    template.promptOptions.searchEnabled ? t('sidepanel.automationPage.templates.chips.search') : null,
+    template.promptOptions.thinkingEnabled ? t('sidepanel.automationPage.templates.chips.thinking') : null,
+    template.promptOptions.visualMonitorEnabled ? t('sidepanel.automationPage.templates.chips.visual') : null,
+  ].filter((item): item is string => Boolean(item));
+}
+
+function workflowTemplateSearchText(
+  template: AutomationWorkflowTemplate,
+  t: (key: LocaleMessageKey) => string,
+): string {
+  return [
+    workflowTemplateCopy(template, 'title', t),
+    workflowTemplateCopy(template, 'summary', t),
+    workflowTemplateCopy(template, 'cadence', t),
+    workflowTemplateCategory(template, t),
+  ].join(' ').toLowerCase();
 }
 
 function toAutomationInput(form: FormState): AutomationCreateInput {
