@@ -17,12 +17,14 @@ export async function writeAutonomousRunTelemetryPackage(
   target: AutonomousRunTelemetryWriteTarget,
 ): Promise<AutonomousRunTelemetryWriteResult> {
   const files = validateTelemetryPackage(pkg);
+  const runId = pkg.runId;
+  const rootDir = pkg.rootDir;
   for (const file of files) {
     await target.writeTextFile(file.path, file.content);
   }
   return {
-    runId: pkg.runId,
-    rootDir: pkg.rootDir,
+    runId,
+    rootDir,
     fileCount: files.length,
     contentLength: files.reduce((total, file) => total + file.content.length, 0),
     paths: files.map((file) => file.path),

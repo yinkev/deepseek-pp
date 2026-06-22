@@ -67,6 +67,8 @@ describe('autonomous run telemetry writer', () => {
     const result = await writeAutonomousRunTelemetryPackage(pkg, {
       async writeTextFile(path, content) {
         writes.push({ path, content });
+        pkg.runId = 'mutated-run';
+        pkg.rootDir = '/tmp/mutated-root';
         originalSecondFile.path = '/tmp/object-mutated';
         originalSecondFile.content = 'object-mutated';
         pkg.files[1] = { path: '/tmp/evil', content: 'evil' };
@@ -78,7 +80,11 @@ describe('autonomous run telemetry writer', () => {
       { path: '.runs/run-1/manifest.json', content: '{}\n' },
       { path: '.runs/run-1/report.md', content: '# Report\n' },
     ]);
-    expect(result.paths).toEqual(['.runs/run-1/manifest.json', '.runs/run-1/report.md']);
+    expect(result).toMatchObject({
+      runId: 'run-1',
+      rootDir: '.runs/run-1',
+      paths: ['.runs/run-1/manifest.json', '.runs/run-1/report.md'],
+    });
   });
 });
 

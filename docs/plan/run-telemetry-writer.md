@@ -9,7 +9,7 @@ Persist a telemetry package through an injected write target after validating th
 | Writer preserves package file order and returns file count, content length, and paths. | `validates then writes package files in package order` |
 | Writer validates every package path before the first write. | `rejects unsafe paths before writing any file` |
 | Absolute paths, Windows drive paths, backslash paths, dot segments, out-of-root paths, non-`.runs` roots, exact duplicates, and case-insensitive duplicates are rejected. | `rejects unsafe paths before writing any file` |
-| Writer writes a validated file snapshot, not mutable package references. | `writes a validated snapshot even if caller mutates package during write` |
+| Writer writes and reports a validated snapshot, not mutable package references. | `writes a validated snapshot even if caller mutates package during write` |
 
 ## Mechanism
 
@@ -21,7 +21,7 @@ The module does not import filesystem APIs. A later CLI or worker can provide a 
 
 The unsafe-path probe feeds packages with traversal roots, absolute roots, Windows drive roots, backslash roots, non-`.runs` roots, sibling-root files, dot-segment files, exact duplicates, and case-insensitive duplicates. The writer must reject each package before any write callback runs.
 
-The mutable-package probe mutates the original package during the first write callback. The writer must continue writing only the already validated snapshot.
+The mutable-package probe mutates the original package and original file objects during the first write callback. The writer must continue writing and reporting only the already validated snapshot.
 
 ## Self Review
 
