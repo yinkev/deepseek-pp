@@ -2,6 +2,7 @@ import {
   type AutonomousRunOrchestratorTelemetryResult,
   type AutonomousRunCockpitRun,
   type AutonomousRunCockpitSnapshot,
+  type AutonomousRunQualityGateDecision,
   getAutonomousRunCockpitSnapshot,
 } from '../run/orchestrator';
 import { transitionAutonomousRun } from '../run/store';
@@ -101,6 +102,7 @@ export type PetTelemetryExportErrorCode =
   | 'target_unavailable'
   | 'telemetry_write_failed'
   | 'unknown_telemetry_error';
+export type PetQualityGateStatus = 'none' | 'clear' | 'warning' | 'blocked';
 
 export interface PetReviewLaneSummary {
   role: PetReviewLaneRole;
@@ -146,6 +148,20 @@ export interface PetTelemetryExport {
   fileCount: number;
   contentLength: number;
   errorCode: PetTelemetryExportErrorCode | null;
+}
+
+export interface PetQualityGate {
+  status: PetQualityGateStatus;
+  reason: AutonomousRunQualityGateDecision['reason'] | null;
+  latestGateStatus: AutonomousRunQualityGateDecision['latestGateStatus'];
+  seq: number | null;
+  coverageComplete: boolean | null;
+  coveredCount: number | null;
+  gapCount: number | null;
+  conflictCount: number | null;
+  notTestableCount: number | null;
+  selfReviewGrade: AutonomousRunQualityGateDecision['selfReviewGrade'];
+  verificationPassed: boolean | null;
 }
 
 export interface PetControlSnapshot {
@@ -219,6 +235,7 @@ export interface PetControlSnapshot {
   };
   workerCycle: PetWorkerCycle;
   telemetry: PetTelemetryExport;
+  qualityGate: PetQualityGate;
   reviewLanes: {
     total: number;
     activeCount: number;
@@ -422,6 +439,7 @@ export function createPetControlSnapshotFromRunCockpit(
     contentLength: 0,
     errorCode: null,
   };
+  const qualityGate = createDefaultPetQualityGate();
 
   const reviewLanes: PetControlSnapshot['reviewLanes'] = {
     total: 0,
@@ -474,6 +492,7 @@ export function createPetControlSnapshotFromRunCockpit(
       runPhase,
       proofDebtCount: 0,
       issueCount: 0,
+      qualityGateBlocked: false,
     }),
     evidence,
     review,
@@ -482,6 +501,7 @@ export function createPetControlSnapshotFromRunCockpit(
     memoryPressure,
     workerCycle,
     telemetry,
+    qualityGate,
     reviewLanes,
     reviewLaneGate,
   };
@@ -613,6 +633,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
     evidence: snapshot.evidence,
     review: snapshot.review,
     memoryPressure: snapshot.memoryPressure,
+    qualityGate: snapshot.qualityGate,
   };
   return {
     ...next,
@@ -623,6 +644,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
       runPhase: next.run.phase,
       proofDebtCount: next.review.proofDebtCount,
       issueCount: next.review.issueCount,
+      qualityGateBlocked: next.qualityGate.status === 'blocked',
     }),
     reviewHeat: createPetReviewHeat(next.review),
     stopLine: snapshot.stopLine,
@@ -704,6 +726,7 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
       canFinalize,
     },
     memoryPressure: snapshot.memoryPressure,
+    qualityGate: snapshot.qualityGate,
   };
   return {
     ...next,
@@ -714,6 +737,7 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
       runPhase: next.run.phase,
       proofDebtCount: next.review.proofDebtCount,
       issueCount: next.review.issueCount,
+      qualityGateBlocked: next.qualityGate.status === 'blocked',
     }),
     reviewHeat: createPetReviewHeat(next.review),
     stopLine: snapshot.stopLine,
@@ -727,6 +751,7 @@ function createPetBlockerLens(input: {
   runPhase: PetControlSnapshot['run']['phase'];
   proofDebtCount: number;
   issueCount: number;
+  qualityGateBlocked: boolean;
 }): PetBlockerLens {
   const counts = createEmptyBlockerCounts();
   for (const blocker of input.readinessBlockers) {
@@ -737,6 +762,7 @@ function createPetBlockerLens(input: {
   if (input.runPhase === 'blocked' && counts.review === 0 && counts.paused === 0) counts.review = 1;
   if (input.proofDebtCount > 0 && counts.evidence === 0) counts.evidence = input.proofDebtCount;
   if (input.issueCount > 0 && counts.review === 0) counts.review = input.issueCount;
+  if (input.qualityGateBlocked && counts.review === 0) counts.review = 1;
 
   const categories = PET_BLOCKER_CATEGORY_PRIORITY.filter((category) => counts[category] > 0);
   return {
@@ -923,6 +949,17 @@ export interface PetHandoffCapsule {
   telemetryFileCount: number;
   telemetryContentLength: number;
   telemetryErrorCode: PetTelemetryExportErrorCode | null;
+  qualityGateStatus: PetQualityGateStatus;
+  qualityGateReason: AutonomousRunQualityGateDecision['reason'] | null;
+  qualityGateLatestStatus: AutonomousRunQualityGateDecision['latestGateStatus'];
+  qualityGateSeq: number | null;
+  qualityGateCoverageComplete: boolean | null;
+  qualityGateCoveredCount: number | null;
+  qualityGateGapCount: number | null;
+  qualityGateConflictCount: number | null;
+  qualityGateNotTestableCount: number | null;
+  qualityGateSelfReviewGrade: AutonomousRunQualityGateDecision['selfReviewGrade'];
+  qualityGateVerificationPassed: boolean | null;
   reviewLaneCount: number;
   reviewLaneActiveCount: number;
   reviewLanePassedCount: number;
@@ -954,6 +991,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     memoryPressure: mp,
     workerCycle: wc,
     telemetry: tel,
+    qualityGate: qg,
     reviewLanes: rl,
     runQueue: rq,
   } = snapshot;
@@ -995,12 +1033,26 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const runQueueBacklog = rq ? rq.backlog : false;
   const runQueueContention = rq ? rq.contention : false;
   const runQueuePosture = rq ? rq.posture : 'idle';
+  const qualityGate = qg ?? createDefaultPetQualityGate();
+  const qualityGateStatus = qualityGate.status;
+  const qualityGateReason = qualityGate.reason;
+  const qualityGateLatestStatus = qualityGate.latestGateStatus;
+  const qualityGateSeq = qualityGate.seq;
+  const qualityGateCoverageComplete = qualityGate.coverageComplete;
+  const qualityGateCoveredCount = qualityGate.coveredCount;
+  const qualityGateGapCount = qualityGate.gapCount;
+  const qualityGateConflictCount = qualityGate.conflictCount;
+  const qualityGateNotTestableCount = qualityGate.notTestableCount;
+  const qualityGateSelfReviewGrade = qualityGate.selfReviewGrade;
+  const qualityGateVerificationPassed = qualityGate.verificationPassed;
 
   let nextAction: PetHandoffNextAction = 'idle';
   if (safety.leakIssueCount > 0) {
     nextAction = 'open_runtime_doctor';
   } else if (targetState === 'missing' || targetState === 'stale') {
     nextAction = 'open_target';
+  } else if (qualityGateStatus === 'blocked') {
+    nextAction = 'review_blocker';
   } else if (run.phase === 'blocked') {
     nextAction = 'review_blocker';
   } else if (readiness.preparing || readiness.status !== 'ready') {
@@ -1137,6 +1189,17 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     telemetryFileCount,
     telemetryContentLength,
     telemetryErrorCode,
+    qualityGateStatus,
+    qualityGateReason,
+    qualityGateLatestStatus,
+    qualityGateSeq,
+    qualityGateCoverageComplete,
+    qualityGateCoveredCount,
+    qualityGateGapCount,
+    qualityGateConflictCount,
+    qualityGateNotTestableCount,
+    qualityGateSelfReviewGrade,
+    qualityGateVerificationPassed,
     reviewLaneCount,
     reviewLaneActiveCount,
     reviewLanePassedCount,
@@ -1227,8 +1290,77 @@ export function mergeOrchestratorTelemetryResultIntoSnapshot(
   };
 }
 
+export function mergeAutonomousQualityGateDecisionIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  decision: AutonomousRunQualityGateDecision | null | undefined,
+): PetControlSnapshot {
+  if (!decision) {
+    return snapshot;
+  }
+
+  const qualityGate: PetQualityGate = {
+    status: toPetQualityGateStatus(decision),
+    reason: decision.reason,
+    latestGateStatus: decision.latestGateStatus,
+    seq: normalizeQualityGateNumber(decision.seq),
+    coverageComplete: decision.coverageComplete,
+    coveredCount: normalizeQualityGateNumber(decision.coveredCount),
+    gapCount: normalizeQualityGateNumber(decision.gapCount),
+    conflictCount: normalizeQualityGateNumber(decision.conflictCount),
+    notTestableCount: normalizeQualityGateNumber(decision.notTestableCount),
+    selfReviewGrade: decision.selfReviewGrade,
+    verificationPassed: decision.verificationPassed,
+  };
+  const next = {
+    ...snapshot,
+    qualityGate,
+  };
+  return {
+    ...next,
+    blockerLens: createPetBlockerLens({
+      readinessBlockers: next.readiness.blockers,
+      targetStale: next.target.stale,
+      leakIssueCount: next.safety.leakIssueCount,
+      runPhase: next.run.phase,
+      proofDebtCount: next.review.proofDebtCount,
+      issueCount: next.review.issueCount,
+      qualityGateBlocked: next.qualityGate.status === 'blocked',
+    }),
+  };
+}
+
 function normalizePetTelemetryCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function createDefaultPetQualityGate(): PetQualityGate {
+  return {
+    status: 'none',
+    reason: null,
+    latestGateStatus: null,
+    seq: null,
+    coverageComplete: null,
+    coveredCount: null,
+    gapCount: null,
+    conflictCount: null,
+    notTestableCount: null,
+    selfReviewGrade: null,
+    verificationPassed: null,
+  };
+}
+
+function toPetQualityGateStatus(decision: AutonomousRunQualityGateDecision): PetQualityGateStatus {
+  if (decision.blocked) return 'blocked';
+  if (decision.reason === 'gate_warning') return 'warning';
+  if (decision.reason === 'no_quality_gate') return 'none';
+  return 'clear';
+}
+
+function normalizeQualityGateNumber(value: number | null): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  return null;
 }
 
 function normalizePetTelemetryErrorCode(errorCode: string | null): PetTelemetryExportErrorCode | null {

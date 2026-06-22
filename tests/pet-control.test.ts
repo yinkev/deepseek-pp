@@ -12,6 +12,7 @@ import {
   createPetControlSnapshotFromRunCockpit,
   getPetControlSnapshot,
   mergeAutonomousCompletionReviewIntoSnapshot,
+  mergeAutonomousQualityGateDecisionIntoSnapshot,
   mergeRuntimeDoctorReportIntoSnapshot,
   mergePromptMemoryPressureIntoSnapshot,
   createPetHandoffCapsule,
@@ -27,7 +28,10 @@ import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
 import type { RuntimeDoctorReport } from '../core/chat/runtime-doctor';
 import type { AutonomousRunCompletionReview } from '../core/run/review';
 import type { AutonomousRunCycleResult } from '../core/run/worker';
-import type { AutonomousRunOrchestratorTelemetryResult } from '../core/run/orchestrator';
+import type {
+  AutonomousRunOrchestratorTelemetryResult,
+  AutonomousRunQualityGateDecision,
+} from '../core/run/orchestrator';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -74,6 +78,7 @@ describe('pet control snapshot', () => {
     memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
     workerCycle?: Partial<PetControlSnapshot['workerCycle']>;
     telemetry?: Partial<PetControlSnapshot['telemetry']>;
+    qualityGate?: Partial<PetControlSnapshot['qualityGate']>;
     reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
     reviewLaneGate?: Partial<PetControlSnapshot['reviewLaneGate']>;
   } = {}): PetControlSnapshot {
@@ -200,6 +205,20 @@ describe('pet control snapshot', () => {
         contentLength: 0,
         errorCode: null,
         ...overrides.telemetry,
+      },
+      qualityGate: {
+        status: 'none',
+        reason: null,
+        latestGateStatus: null,
+        seq: null,
+        coverageComplete: null,
+        coveredCount: null,
+        gapCount: null,
+        conflictCount: null,
+        notTestableCount: null,
+        selfReviewGrade: null,
+        verificationPassed: null,
+        ...overrides.qualityGate,
       },
       reviewLanes: {
         total: 0,
@@ -1463,6 +1482,17 @@ describe('pet control snapshot', () => {
         telemetryFileCount: 0,
         telemetryContentLength: 0,
         telemetryErrorCode: null,
+        qualityGateStatus: 'none',
+        qualityGateReason: null,
+        qualityGateLatestStatus: null,
+        qualityGateSeq: null,
+        qualityGateCoverageComplete: null,
+        qualityGateCoveredCount: null,
+        qualityGateGapCount: null,
+        qualityGateConflictCount: null,
+        qualityGateNotTestableCount: null,
+        qualityGateSelfReviewGrade: null,
+        qualityGateVerificationPassed: null,
         reviewLaneCount: 0,
         reviewLaneActiveCount: 0,
         reviewLanePassedCount: 0,
@@ -2509,6 +2539,202 @@ describe('pet control snapshot', () => {
       expect(capsule.telemetryErrorCode).toBe('unknown_telemetry_error');
       expect(petJson).not.toMatch(/SECRET_TELEMETRY_RUN_ID|SECRET_TELEMETRY_ROOT|SECRET_TELEMETRY_ERROR|token=secret|private\?/);
       expect(capsuleJson).not.toMatch(/SECRET_TELEMETRY_RUN_ID|SECRET_TELEMETRY_ROOT|SECRET_TELEMETRY_ERROR|token=secret|private\?/);
+    });
+  });
+
+  describe('quality gate handoff consumption', () => {
+    function createQualityGateDecision(
+      overrides: Partial<AutonomousRunQualityGateDecision> = {},
+    ): AutonomousRunQualityGateDecision {
+      return {
+        blocked: false,
+        reason: 'gate_passed',
+        latestGateStatus: 'passed',
+        seq: 1,
+        coverageComplete: true,
+        coveredCount: 5,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+        selfReviewGrade: 'A',
+        verificationPassed: true,
+        ...overrides,
+      };
+    }
+
+    it('createPetControlSnapshotFromRunCockpit and createBase default to no quality gate observed', () => {
+      const pet = createBasePetSnapshot();
+      expect(pet.qualityGate).toEqual({
+        status: 'none',
+        reason: null,
+        latestGateStatus: null,
+        seq: null,
+        coverageComplete: null,
+        coveredCount: null,
+        gapCount: null,
+        conflictCount: null,
+        notTestableCount: null,
+        selfReviewGrade: null,
+        verificationPassed: null,
+      });
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).qualityGate).toEqual(pet.qualityGate);
+    });
+
+    it('mergeAutonomousQualityGateDecisionIntoSnapshot returns original snapshot object unchanged if decision null or undefined', () => {
+      const snap = createBasePetSnapshot();
+      expect(mergeAutonomousQualityGateDecisionIntoSnapshot(snap, null)).toBe(snap);
+      expect(mergeAutonomousQualityGateDecisionIntoSnapshot(snap, undefined)).toBe(snap);
+    });
+
+    it('projects blocked quality gates into safe pet and handoff metadata', () => {
+      const snap = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        target: { locked: true, stale: false },
+      });
+      const decision = createQualityGateDecision({
+        blocked: true,
+        reason: 'state_inconsistent',
+        latestGateStatus: 'failed',
+        seq: 2.7,
+        coverageComplete: false,
+        coveredCount: 4,
+        gapCount: 1,
+        conflictCount: 0,
+        notTestableCount: 1,
+        selfReviewGrade: 'D',
+        verificationPassed: false,
+      });
+
+      const merged = mergeAutonomousQualityGateDecisionIntoSnapshot(snap, decision);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(merged.qualityGate).toEqual({
+        status: 'blocked',
+        reason: 'state_inconsistent',
+        latestGateStatus: 'failed',
+        seq: 2,
+        coverageComplete: false,
+        coveredCount: 4,
+        gapCount: 1,
+        conflictCount: 0,
+        notTestableCount: 1,
+        selfReviewGrade: 'D',
+        verificationPassed: false,
+      });
+      expect(merged.blockerLens).toMatchObject({
+        primary: 'review',
+        categories: ['review'],
+        counts: { review: 1 },
+        total: 1,
+      });
+      expect(capsule).toMatchObject({
+        qualityGateStatus: 'blocked',
+        qualityGateReason: 'state_inconsistent',
+        qualityGateLatestStatus: 'failed',
+        qualityGateSeq: 2,
+        qualityGateCoverageComplete: false,
+        qualityGateCoveredCount: 4,
+        qualityGateGapCount: 1,
+        qualityGateConflictCount: 0,
+        qualityGateNotTestableCount: 1,
+        qualityGateSelfReviewGrade: 'D',
+        qualityGateVerificationPassed: false,
+        nextAction: 'review_blocker',
+      });
+    });
+
+    it('warning and clear quality gates are informational and do not alter nextAction priority', () => {
+      const base = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        target: { locked: true, stale: false },
+      });
+      const baseCapsule = createPetHandoffCapsule(base);
+      const warning = mergeAutonomousQualityGateDecisionIntoSnapshot(base, createQualityGateDecision({
+        blocked: false,
+        reason: 'gate_warning',
+        latestGateStatus: 'warning',
+        verificationPassed: false,
+      }));
+      const clear = mergeAutonomousQualityGateDecisionIntoSnapshot(base, createQualityGateDecision());
+
+      expect(baseCapsule.nextAction).toBe('continue_run');
+      expect(warning.qualityGate.status).toBe('warning');
+      expect(createPetHandoffCapsule(warning).nextAction).toBe('continue_run');
+      expect(clear.qualityGate.status).toBe('clear');
+      expect(createPetHandoffCapsule(clear).nextAction).toBe('continue_run');
+    });
+
+    it('normalizes no-gate decisions and malformed numeric fields to safe metadata', () => {
+      const snap = createBaseForHandoff();
+      const decision = createQualityGateDecision({
+        blocked: false,
+        reason: 'no_quality_gate',
+        latestGateStatus: null,
+        seq: Number.NaN,
+        coverageComplete: null,
+        coveredCount: -10,
+        gapCount: Number.POSITIVE_INFINITY,
+        conflictCount: null,
+        notTestableCount: 2.9,
+        selfReviewGrade: null,
+        verificationPassed: null,
+      });
+
+      const merged = mergeAutonomousQualityGateDecisionIntoSnapshot(snap, decision);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(merged.qualityGate).toMatchObject({
+        status: 'none',
+        reason: 'no_quality_gate',
+        latestGateStatus: null,
+        seq: null,
+        coveredCount: 0,
+        gapCount: null,
+        conflictCount: null,
+        notTestableCount: 2,
+      });
+      expect(capsule.qualityGateStatus).toBe('none');
+      expect(capsule.qualityGateSeq).toBeNull();
+      expect(capsule.qualityGateCoveredCount).toBe(0);
+      expect(capsule.qualityGateGapCount).toBeNull();
+      expect(capsule.qualityGateNotTestableCount).toBe(2);
+    });
+
+    it('privacy false-positive probe: raw gate ids, commands, reviewer prose, urls, and secrets stay out of pet and handoff projection', () => {
+      const snap = createBaseForHandoff();
+      const decisionWithSecrets = {
+        ...createQualityGateDecision({
+          blocked: true,
+          reason: 'review_issues',
+          latestGateStatus: 'blocked',
+          selfReviewGrade: 'F',
+          verificationPassed: false,
+        }),
+        rawGateId: 'SECRET_GATE_ID_123',
+        commandName: 'SECRET_COMMAND',
+        commandSummary: 'SECRET_SUMMARY',
+        reviewerProse: 'reviewer says password=SECRET_PASSWORD',
+        privateUrl: 'https://example.com/private?token=SECRET_TOKEN',
+      } as AutonomousRunQualityGateDecision & Record<string, unknown>;
+      const sourceJson = JSON.stringify(decisionWithSecrets);
+      expect(sourceJson).toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN/);
+
+      const merged = mergeAutonomousQualityGateDecisionIntoSnapshot(snap, decisionWithSecrets);
+      const capsule = createPetHandoffCapsule(merged);
+      const petJson = JSON.stringify(merged);
+      const capsuleJson = JSON.stringify(capsule);
+
+      expect(merged.qualityGate.status).toBe('blocked');
+      expect(capsule.qualityGateSelfReviewGrade).toBe('F');
+      expect(petJson).not.toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|private\\?token/);
+      expect(capsuleJson).not.toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|private\\?token/);
     });
   });
 
