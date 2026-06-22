@@ -28,7 +28,8 @@ A worker (or test harness) calls the cycle for one advance of a run:
   - Executor is never called.
 - Allow: calls executor once.
 - Executor errors: append failed step (no swallow), then apply.
-- After any executor work (or policy block): calls applyAutonomousRunIterationReview.
+- After executor work: calls applyAutonomousRunIterationReview.
+- After policy block transition: calls applyAutonomousRunIterationReview (no-op; applied=false reported honestly).
 - Returns compact result with action, started/advanced/applied, policyDecision, iterationAction, finalStatus, errorCode.
 
 **Policy-block durability guarantee**: When reviewAutonomousRunAction returns non-allow, the final durable status is always 'blocked' with the policy error, even if the run's proofContract has valid non-empty doneCriteria. The iteration gate cannot override this because the status transition happens before the apply.
@@ -60,7 +61,7 @@ Worker chooses the simpler repo-fit: executor performs its work (including appen
 Tests prove:
 - noop for missing/terminal/paused/blocked (no executor).
 - queued transitions to running before work.
-- policy deny/manual (including with non-empty valid proofContract) records review step, transitions to blocked durably, skips executor, calls apply (applied=false), returns action=block + finalStatus=blocked.
+- policy non-allow (deny or manual_review, including with non-empty valid proofContract) records review step, explicitly transitions to blocked durably (before iteration review), skips executor, calls apply (no-op, applied=false), returns action=block + finalStatus=blocked.
 - allow calls executor, applies iteration.
 - executor throw records failed step, applies, surfaces in result.
 - blocked runs (including policy-blocked) are not auto-resumed on subsequent calls.

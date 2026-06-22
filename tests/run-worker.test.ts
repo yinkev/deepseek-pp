@@ -102,7 +102,7 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
-  it('records review step and does not call executor on policy deny/manual (even with valid non-empty proof contract)', async () => {
+  it('records review step and does not call executor on policy manual_review (even with valid non-empty proof contract)', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
     vi.stubGlobal('crypto', { randomUUID: () => 'policy-block' });
@@ -169,6 +169,25 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     const final = await getAutonomousRunById(run.id);
     expect(final?.status).toBe(result.finalStatus);
     expect(final?.error?.code).toBe(result.errorCode);
+
+    // Assert review bookkeeping was appended (would fail if appendAutonomousRunStep skipped for deny)
+    const steps = await getAutonomousRunSteps(run.id);
+    const reviewStep = steps.find((s) => s.phase === 'review');
+    expect(reviewStep).toBeDefined();
+    expect(reviewStep?.status).toBe('failed');
+    expect(reviewStep?.error?.code).toBe(result.errorCode);
+    expect(reviewStep?.observationRefs).toContain('policy:tool_not_allowlisted');
+    expect(reviewStep?.proofDelta).toEqual([]);
+    expect(reviewStep?.evidenceRefs).toEqual([]);
+    expect(reviewStep?.toolCallIds).toEqual([]);
+
+    // Subsequent call after policy-block must noop, not auto-resume, no executor, no extra step
+    const executor2 = vi.fn();
+    const result2 = await executeAutonomousRunCycle(run.id, executor2, { now: 130 });
+    expect(result2).toMatchObject({ action: 'noop', finalStatus: 'blocked' });
+    expect(executor2).not.toHaveBeenCalled();
+    const steps2 = await getAutonomousRunSteps(run.id);
+    expect(steps2.length).toBe(steps.length);
   });
 
   it('calls executor when policy allows, records progress, applies iteration', async () => {
