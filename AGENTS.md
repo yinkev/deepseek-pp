@@ -5,6 +5,20 @@ Edit CLAUDE.md or Claude project memory instead.
 
 # AGENTS.md - deepseek-pp
 
+## Autonomous Worker Rule
+
+This repo should be driven as an autonomous worker system, not a supervised helper loop.
+
+- Default: keep working when work is safe, scoped, and verifiable.
+- Agents should plan, implement, test, evaluate, review, grade, iterate, and continue without waiting for user supervision on minor choices.
+- The user wants autonomous execution. Ask only for unsafe, irreversible, account-affecting, secret-affecting, public-publishing, destructive, or architecture-changing decisions.
+- Oracle is an advisor, not authority. Use advisor output only when coherent and verified against repo/tests.
+- Use subagents as workers/reviewers where useful. Do not use reverse-engineered web APIs unless explicitly requested.
+- Build toward autonomous run kernel, durable ledger/checkpoints, target lease/evidence freshness, policy gates, review gates, and pet cockpit over worker state.
+- The pet is visible cockpit for autonomous worker state. It is not the main product, mascot-first UX, or a second sidepanel.
+
+Full durable rule: `docs/plan/autonomous-worker-instructions.md`.
+
 ## Claude Project Memory
 
 > Auto-synced from `/Users/zcl/.claude/projects/-Users-zcl-code-deepseek-pp/memory`.

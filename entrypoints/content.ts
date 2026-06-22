@@ -297,6 +297,9 @@ let petDragState: PetDragState | null = null;
 let petResizeListenerInstalled = false;
 let petBubbleEl: HTMLElement | null = null;
 let petBubbleTextEl: HTMLElement | null = null;
+let petControlPanelEl: HTMLElement | null = null;
+let petControlStateEl: HTMLElement | null = null;
+let petControlNextEl: HTMLElement | null = null;
 let petBubbleHideTimer: ReturnType<typeof setTimeout> | null = null;
 let petBubbleRepeatTimer: ReturnType<typeof setTimeout> | null = null;
 let petBubbleState: PetState | null = null;
@@ -5990,7 +5993,10 @@ function ensurePet(): HTMLElement {
 
   const host = document.createElement('div');
   host.id = PET_HOST_ID;
-  host.setAttribute('aria-hidden', 'true');
+  host.setAttribute('role', 'button');
+  host.setAttribute('aria-label', contentT('content.petControl.title'));
+  host.setAttribute('aria-expanded', 'false');
+  host.tabIndex = 0;
   host.dataset.state = 'idle';
   host.dataset.motion = 'true';
   host.innerHTML = createPetMarkup();
@@ -5999,10 +6005,15 @@ function ensurePet(): HTMLElement {
   host.addEventListener('pointerup', handlePetPointerUp);
   host.addEventListener('pointercancel', handlePetPointerCancel);
   host.addEventListener('pointerenter', handlePetPointerEnter);
+  host.addEventListener('keydown', handlePetHostKeyDown);
   document.body.appendChild(host);
   petHostEl = host;
   petBubbleEl = host.querySelector<HTMLElement>('.dpp-pet-bubble');
   petBubbleTextEl = host.querySelector<HTMLElement>('.dpp-pet-bubble-text');
+  petControlPanelEl = host.querySelector<HTMLElement>('.dpp-pet-control');
+  petControlStateEl = host.querySelector<HTMLElement>('.dpp-pet-control-state');
+  petControlNextEl = host.querySelector<HTMLElement>('.dpp-pet-control-next');
+  updatePetControlPanel();
   return host;
 }
 
@@ -6017,6 +6028,10 @@ function removePet() {
   petHostEl = null;
   petBubbleEl = null;
   petBubbleTextEl = null;
+  petControlPanelEl = null;
+  petControlStateEl = null;
+  petControlNextEl = null;
+  uninstallPetControlOutsideListeners();
   uninstallPetResizeListener();
 }
 
@@ -6034,6 +6049,7 @@ function applyPetState(state: PetState) {
   if (!petHostEl?.isConnected) return;
   const previous = petHostEl.dataset.state as PetState | undefined;
   petHostEl.dataset.state = state;
+  updatePetControlPanel();
   if (state !== previous) {
     triggerPetBubble(state);
   }
@@ -6081,6 +6097,7 @@ function clearPetSleepTimer() {
 function triggerPetBubble(state: PetState) {
   if (!currentPetConfig?.enabled || !petHostEl?.isConnected) return;
   if (petDragState) return; // Keep quiet while dragging.
+  if (petControlPanelEl?.dataset.visible === 'true') return;
   clearPetBubbleRepeatTimer();
   petBubbleState = state;
   showPetBubble(pickPetLine(state, petRecentLines, currentContentLocale));
@@ -6097,6 +6114,7 @@ function armPetBubbleRepeat() {
     petBubbleRepeatTimer = null;
     const state = petBubbleState;
     if (!state || !petHostEl?.isConnected || petDragState) return;
+    if (petControlPanelEl?.dataset.visible === 'true') return;
     if (petHostEl.dataset.state !== state) return; // State changed; the new state owns the loop.
     showPetBubble(pickPetLine(state, petRecentLines, currentContentLocale));
     armPetBubbleRepeat();
@@ -6123,6 +6141,73 @@ function hidePetBubble() {
     petBubbleHideTimer = null;
   }
   if (petBubbleEl) petBubbleEl.dataset.visible = 'false';
+}
+
+function togglePetControlPanel() {
+  if (!currentPetConfig?.enabled || !petHostEl?.isConnected || !petControlPanelEl) return;
+  setPetControlPanelVisible(petControlPanelEl.dataset.visible !== 'true');
+}
+
+function setPetControlPanelVisible(visible: boolean) {
+  if (!petControlPanelEl) return;
+  updatePetControlPanel();
+  petControlPanelEl.dataset.visible = String(visible);
+  petHostEl?.setAttribute('aria-expanded', String(visible));
+  if (visible) {
+    hidePetBubble();
+    installPetControlOutsideListeners();
+  } else {
+    uninstallPetControlOutsideListeners();
+  }
+}
+
+function updatePetControlPanel() {
+  if (!petHostEl?.isConnected) return;
+  petHostEl.setAttribute('aria-label', contentT('content.petControl.title'));
+  const state = petHostEl.dataset.state as PetState | undefined;
+  if (petControlStateEl) {
+    petControlStateEl.textContent = formatPetStateLabel(state);
+  }
+  if (petControlNextEl) {
+    petControlNextEl.textContent = formatPetNextAction(state);
+  }
+}
+
+function formatPetStateLabel(state: PetState | undefined): string {
+  const key = state ?? 'idle';
+  return contentT(`content.petControl.states.${key}` as LocaleMessageKey);
+}
+
+function formatPetNextAction(state: PetState | undefined): string {
+  const key = state ?? 'idle';
+  return contentT(`content.petControl.next.${key}` as LocaleMessageKey);
+}
+
+function installPetControlOutsideListeners() {
+  document.addEventListener('pointerdown', handlePetControlDocumentPointerDown, true);
+  document.addEventListener('keydown', handlePetControlDocumentKeyDown, true);
+}
+
+function uninstallPetControlOutsideListeners() {
+  document.removeEventListener('pointerdown', handlePetControlDocumentPointerDown, true);
+  document.removeEventListener('keydown', handlePetControlDocumentKeyDown, true);
+}
+
+function handlePetControlDocumentPointerDown(event: PointerEvent) {
+  if (!petControlPanelEl || petControlPanelEl.dataset.visible !== 'true') return;
+  if (petHostEl?.isConnected && petHostEl.contains(event.target as Node | null)) return;
+  setPetControlPanelVisible(false);
+}
+
+function handlePetControlDocumentKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || petControlPanelEl?.dataset.visible !== 'true') return;
+  setPetControlPanelVisible(false);
+}
+
+function handlePetHostKeyDown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  togglePetControlPanel();
 }
 
 function clearPetBubbleRepeatTimer() {
@@ -6270,6 +6355,9 @@ function finishPetDrag(event: PointerEvent) {
     currentPetConfig = config;
     void sendRuntimeMessage({ type: 'SAVE_PET', payload: config });
   }
+  if (!moved) {
+    togglePetControlPanel();
+  }
 
   // After dragging, reschedule the current looping state because hidePetBubble paused it.
   const state = petHostEl.dataset.state as PetState | undefined;
@@ -6333,6 +6421,11 @@ function injectPetStyles() {
       transform-origin: center bottom;
       filter: drop-shadow(0 14px 24px rgba(39, 78, 180, 0.20));
       transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    #${PET_HOST_ID}:focus-visible {
+      outline: 2px solid rgba(64, 110, 240, 0.68);
+      outline-offset: 3px;
     }
 
     #${PET_HOST_ID}[data-dragging='true'] {
@@ -6466,6 +6559,66 @@ function injectPetStyles() {
       max-width: 200px;
     }
 
+    #${PET_HOST_ID} .dpp-pet-control {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      width: min(230px, calc(100vw - 24px));
+      box-sizing: border-box;
+      transform: translateX(-50%) translateY(6px) scale(0.98);
+      pointer-events: none;
+      opacity: 0;
+      z-index: 2;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(64, 110, 240, 0.34);
+      background: rgba(255, 255, 255, 0.96);
+      -webkit-backdrop-filter: blur(10px);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 12px 28px rgba(39, 78, 180, 0.22);
+      color: #1d2433;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      transition: opacity 0.16s ease, transform 0.16s ease;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-control[data-visible='true'] {
+      pointer-events: auto;
+      opacity: 1;
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
+
+    #${PET_HOST_ID} .dpp-pet-control-title {
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 8px;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-control-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: baseline;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-control-row + .dpp-pet-control-row {
+      margin-top: 6px;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-control-label {
+      color: rgba(29, 36, 51, 0.58);
+      font-weight: 600;
+    }
+
+    #${PET_HOST_ID} .dpp-pet-control-value {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      color: #1d2433;
+      font-weight: 600;
+    }
+
     #${PET_HOST_ID} .dpp-pet-bubble-text {
       display: inline-block;
       position: relative;
@@ -6526,6 +6679,21 @@ function injectPetStyles() {
         box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
       }
 
+      #${PET_HOST_ID} .dpp-pet-control {
+        border-color: rgba(120, 156, 255, 0.44);
+        background: rgba(32, 38, 56, 0.94);
+        color: #eef2ff;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
+      }
+
+      #${PET_HOST_ID} .dpp-pet-control-label {
+        color: rgba(238, 242, 255, 0.62);
+      }
+
+      #${PET_HOST_ID} .dpp-pet-control-value {
+        color: #eef2ff;
+      }
+
       #${PET_HOST_ID} .dpp-pet-bubble-text::after {
         border-top-color: rgba(32, 38, 56, 0.92);
         filter: none;
@@ -6553,6 +6721,17 @@ function injectPetStyles() {
 
 function createPetMarkup(): string {
   return `
+    <div class="dpp-pet-control" data-visible="false">
+      <div class="dpp-pet-control-title">${contentT('content.petControl.title')}</div>
+      <div class="dpp-pet-control-row">
+        <span class="dpp-pet-control-label">${contentT('content.petControl.statusLabel')}</span>
+        <span class="dpp-pet-control-value dpp-pet-control-state" aria-live="polite"></span>
+      </div>
+      <div class="dpp-pet-control-row">
+        <span class="dpp-pet-control-label">${contentT('content.petControl.nextLabel')}</span>
+        <span class="dpp-pet-control-value dpp-pet-control-next"></span>
+      </div>
+    </div>
     <div class="dpp-pet-bubble" data-visible="false">
       <span class="dpp-pet-bubble-text"></span>
     </div>

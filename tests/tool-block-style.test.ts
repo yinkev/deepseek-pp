@@ -1,6 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { PetState } from '../core/pet/lines';
+import { en } from '../core/i18n/resources/en';
+import { zhCN } from '../core/i18n/resources/zh-CN';
+
+const PET_STATE_COVERAGE = {
+  idle: true,
+  thinking: true,
+  speaking: true,
+  working: true,
+  confused: true,
+  success: true,
+  error: true,
+  sleepy: true,
+} satisfies Record<PetState, true>;
+
+const PET_STATES = Object.keys(PET_STATE_COVERAGE) as PetState[];
 
 describe('content tool block styles', () => {
   it('keeps restored tool detail content scrollable for long source output', () => {
@@ -129,6 +145,41 @@ describe('content tool block styles', () => {
     expect(rule).toContain('color: var(--dpp-ui-text);');
     expect(source).not.toContain('var(--ds-text');
     expect(source).not.toContain('var(--ds-text-secondary');
+  });
+
+  it('keeps the pet control popover read-only and bounded', () => {
+    const path = join(process.cwd(), 'entrypoints/content.ts');
+    const source = readFileSync(path, 'utf8');
+    const rule = source.match(/\.dpp-pet-control \{([\s\S]*?)\n    \}/)?.[1] ?? '';
+
+    expect(source).toContain('function togglePetControlPanel()');
+    expect(source).toContain("petControlPanelEl.dataset.visible = String(visible);");
+    expect(source).toContain("host.setAttribute('role', 'button');");
+    expect(source).toContain("host.setAttribute('aria-label', contentT('content.petControl.title'));");
+    expect(source).toContain("host.setAttribute('aria-expanded', 'false');");
+    expect(source).toContain("petHostEl?.setAttribute('aria-expanded', String(visible));");
+    expect(source).toContain('hidePetBubble();');
+    expect(source).toContain("petControlPanelEl?.dataset.visible === 'true'");
+    expect(source).toContain('host.tabIndex = 0;');
+    expect(source).toContain('function handlePetHostKeyDown(event: KeyboardEvent)');
+    expect(source).toContain(`#\${PET_HOST_ID}:focus-visible`);
+    expect(source).toContain('aria-live="polite"');
+    expect(source).toContain('if (!moved) {');
+    expect(source).toContain('togglePetControlPanel();');
+    expect(source).toContain('content.petControl.statusLabel');
+    expect(rule).toContain('width: min(230px, calc(100vw - 24px));');
+    expect(rule).toContain('pointer-events: none;');
+    expect(source).not.toContain("sendRuntimeMessage({ type: 'RUN_PERSONAL_AUTOPILOT_REPAIR'");
+    expect(source).not.toContain("sendRuntimeMessage({ type: 'DETACH_BROWSER_CONTROL'");
+  });
+
+  it('keeps pet control labels translated for every pet state', () => {
+    for (const locale of [en, zhCN]) {
+      for (const state of PET_STATES) {
+        expect(locale.content.petControl.states[state]).toEqual(expect.any(String));
+        expect(locale.content.petControl.next[state]).toEqual(expect.any(String));
+      }
+    }
   });
 
   it('keeps grouped Skill source labels on the group header only', () => {
