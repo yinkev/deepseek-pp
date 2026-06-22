@@ -106,15 +106,15 @@ Priority order:
 4. Durable quality-gate persistence.
    - Status: complete for durable store API and normalized quality-gate records.
    - Implemented by storing compact gate results for each run/iteration: contract coverage summary, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
-   - Evidence gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
+   - Gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
 
 5. Orchestrator enforcement.
    - Status: complete for pure core orchestration; Chrome/runtime caller wiring remains frozen.
    - Implemented by making the pure orchestrator consult persisted quality gates before advancing the selected runnable run.
-   - Evidence gate: P1/P2 review state blocks the core cycle; green gate allows continuation; no Chrome/runtime wiring.
+   - Gate: P1/P2 review state blocks the core cycle; green gate allows continuation; no Chrome/runtime wiring.
 
 6. Review-lane worker coordination.
-   - Status: partially complete; scheduler, pet bridge, and bounded Oracle/Grok advisor-role metadata are implemented, while actual worker dispatch remains runtime-frozen.
+   - Status: partially complete; scheduler and pet bridge support bounded Oracle/Grok advisor lanes as metadata, while actual worker dispatch remains runtime-frozen.
    - Implemented so far by formalizing implementer, reviewer, safety, UX, and Oracle/Grok advisor lanes as bounded scheduler/pet metadata.
    - Remaining work: persist and dispatch actual review worker lane outputs once runtime wiring resumes.
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
@@ -125,7 +125,7 @@ Priority order:
    - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state.
 
 8. Pet cockpit projection.
-   - Status: partially complete; the listed cockpit fields below are projected as safe metadata.
+   - Status: partially complete; cockpit projection remains a safe-metadata subset.
    - Implemented so far by projecting run status, run queue, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, stop-line, memory pressure, worker-cycle, telemetry, quality-gate, bounded review lanes, and handoff capsule state into pet snapshot/handoff fields.
    - Gate: pet surfaces expose safe metadata only and never trigger browser/file mutation by themselves.
 

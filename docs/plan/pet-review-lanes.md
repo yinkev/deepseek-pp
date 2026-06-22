@@ -4,7 +4,7 @@
 
 Expose a compact agent-council signal in the pet cockpit without storing or handing off reviewer transcripts.
 
-This slice lets the pet represent reviewer/worker lanes such as implementer, reviewer, safety, UX, and bounded Oracle/Grok advisor roles as safe metadata only. It is telemetry, not execution control. Advisor roles carry verdict metadata only; they do not grant authority, spawn workers, or expose raw transcripts.
+This slice lets the pet represent reviewer/worker lanes such as implementer, reviewer, safety, UX, and Oracle/Grok advisor lanes as safe metadata only. It is telemetry, not execution control. Oracle/Grok advisor lanes carry verdict metadata only; they do not grant authority, spawn workers, or expose raw transcripts.
 
 ## Scope
 
