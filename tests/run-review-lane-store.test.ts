@@ -60,6 +60,7 @@ describe('autonomous review lane store', () => {
       createdAt: NOW + 3,
       role: 'grok',
       status: 'blocked',
+      recommendation: 'block',
       highestPriority: 'P2',
     });
     expect(stored).toEqual([first, second]);
@@ -127,7 +128,7 @@ describe('autonomous review lane store', () => {
       role: 'oracle',
       status: 'passed',
       grade: 'B',
-      recommendation: 'block',
+      recommendation: 'proceed',
       highestPriority: 'P1',
       issueCount: 2.7,
       evidenceRefCount: 1.9,
@@ -184,6 +185,76 @@ describe('autonomous review lane store', () => {
     await transitionAutonomousRun(run.id, 'succeeded', null, NOW + 6);
     await expect(appendAutonomousReviewLaneRecord(run.id, createLaneInput(), NOW + 7)).resolves.toBeNull();
     await expect(getAutonomousRunReviewLanes(run.id)).resolves.toEqual([]);
+  });
+
+  it('returns null instead of a false success when bounded pruning drops the candidate lane', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `cap-${id += 1}` });
+
+    const staleRun = await createAutonomousRun({ id: 'stale-review-lane-run', goal: 'Stale lane run' }, NOW);
+    const freshRun = await createAutonomousRun({ id: 'fresh-review-lane-run', goal: 'Fresh lane run' }, NOW + 1);
+    await transitionAutonomousRun(staleRun.id, 'running', null, NOW + 2);
+    await transitionAutonomousRun(freshRun.id, 'running', null, NOW + 3);
+
+    for (let index = 0; index < 500; index += 1) {
+      const lane = await appendAutonomousReviewLaneRecord(freshRun.id, createLaneInput(), NOW + 1_000 + index);
+      expect(lane).not.toBeNull();
+    }
+
+    const stale = await appendAutonomousReviewLaneRecord(staleRun.id, createLaneInput(), NOW + 4);
+    expect(stale).toBeNull();
+    expect(await getAutonomousRunReviewLanes(staleRun.id)).toEqual([]);
+
+    const recent = await appendAutonomousReviewLaneRecord(staleRun.id, createLaneInput(), NOW + 2_000);
+    expect(recent).not.toBeNull();
+    expect(await getAutonomousRunReviewLanes(staleRun.id)).toEqual([recent]);
+  });
+
+  it('upgrades legacy storage without reviewLanes and keeps append result equal to durable state', async () => {
+    const { chromeStub, storage } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'legacy' });
+
+    storage.set(AUTONOMOUS_RUN_STORAGE_KEY, {
+      version: 1,
+      runs: [{
+        id: 'legacy-review-lane-run',
+        goal: 'Legacy lane run',
+        status: 'running',
+        createdAt: NOW,
+        updatedAt: NOW,
+      }],
+      steps: [],
+      targetLeases: [],
+      evidence: [],
+      qualityGates: [],
+    });
+
+    const lane = await appendAutonomousReviewLaneRecord('legacy-review-lane-run', {
+      role: 'grok',
+      status: 'passed',
+      grade: 'A',
+      recommendation: 'proceed',
+      highestPriority: null,
+      issueCount: 0,
+      evidenceRefCount: 1,
+      summary: 'Legacy state append.',
+    }, NOW + 1);
+    const stored = await getAutonomousRunReviewLanes('legacy-review-lane-run');
+    const durable = storage.get(AUTONOMOUS_RUN_STORAGE_KEY) as { reviewLanes?: unknown };
+
+    expect(lane).toMatchObject({
+      id: 'lane-legacy',
+      runId: 'legacy-review-lane-run',
+      seq: 1,
+      status: 'passed',
+      recommendation: 'proceed',
+    });
+    expect(stored).toEqual([lane]);
+    expect(Array.isArray(durable.reviewLanes)).toBe(true);
+    expect(durable.reviewLanes).toEqual([lane]);
   });
 });
 

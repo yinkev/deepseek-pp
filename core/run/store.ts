@@ -519,11 +519,15 @@ export async function appendAutonomousReviewLaneRecord(
       summary: input.summary,
     });
     if (!record) return { state, result: null, write: false };
+    const reviewLanes = pruneReviewLaneRecords([record, ...state.reviewLanes.filter((stored) => stored.id !== record.id)]);
+    if (!reviewLanes.some((stored) => stored.id === record.id)) {
+      return { state, result: null, write: false };
+    }
     return {
       state: {
         ...state,
         runs: pruneRuns(state.runs.map((item) => item.id === runId ? { ...item, updatedAt: now } : item)),
-        reviewLanes: pruneReviewLaneRecords([record, ...state.reviewLanes.filter((stored) => stored.id !== record.id)]),
+        reviewLanes,
       },
       result: record,
     };
@@ -918,8 +922,8 @@ function normalizeReviewLaneRecord(raw: unknown): AutonomousReviewLaneRecord | n
   const runId = normalizeId(record.runId);
   const createdAt = normalizeTimestamp(record.createdAt);
   if (!id || !runId || createdAt === null) return null;
-  const recommendation = normalizeReviewLaneRecommendation(record.recommendation);
   const highestPriority = normalizeReviewLanePriority(record.highestPriority);
+  const recommendation = normalizeReviewLaneRecommendation(record.recommendation, highestPriority);
   return {
     id,
     runId,
@@ -1087,7 +1091,11 @@ function normalizeReviewLaneStatus(
   return 'failed';
 }
 
-function normalizeReviewLaneRecommendation(value: unknown): AutonomousReviewLaneRecommendation {
+function normalizeReviewLaneRecommendation(
+  value: unknown,
+  highestPriority: AutonomousReviewLaneRecord['highestPriority'],
+): AutonomousReviewLaneRecommendation {
+  if (highestPriority === 'P1' || highestPriority === 'P2') return 'block';
   return value === 'proceed' || value === 'iterate' || value === 'block' ? value : 'unknown';
 }
 
@@ -1505,7 +1513,7 @@ function pruneQualityGateRecords(records: AutonomousQualityGateRecord[]): Autono
 
 function pruneReviewLaneRecords(records: AutonomousReviewLaneRecord[]): AutonomousReviewLaneRecord[] {
   return [...records]
-    .sort((a, b) => b.createdAt - a.createdAt)
+    .sort((a, b) => (b.createdAt - a.createdAt) || (b.seq - a.seq) || a.id.localeCompare(b.id))
     .slice(0, MAX_REVIEW_LANE_RECORDS);
 }
 

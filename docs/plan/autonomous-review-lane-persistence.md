@@ -27,22 +27,24 @@ The store ignores raw prompts, sessions, transcripts, reviewer prose, URLs, tool
 
 | id | required behavior | assertion / location | status |
 |----|-------------------|----------------------|--------|
-| 1 | Add durable review-lane record and create-input types | `npm run compile` validates `AutonomousReviewLaneRecord` and `AutonomousReviewLaneCreateInput` callers | covered |
+| 1 | Add durable review-lane record and create-input types | `npm run compile` validates `AutonomousReviewLaneRecord` and `AutonomousReviewLaneCreateInput` callers | process check; not unit-testable in this slice |
 | 2 | Persist lane records with generated ids, per-run sequence, and chronological retrieval | `appends compact durable review lane records in sequence and returns stored state exactly` | covered |
 | 3 | Returned append result and durable stored state agree exactly | same sequence test and privacy probe compare append result with `getAutonomousRunReviewLanes(run.id)` | covered |
 | 4 | Store only bounded verdict metadata and no raw advisor payloads | `privacy probe: sanitizes raw advisor fields from returned and durable lane JSON` | covered |
 | 5 | Unknown roles collapse to `other` without leaking raw role text | privacy probe asserts raw `SECRET_ROLE` is absent and role is `other` | covered |
-| 6 | Contradictory passing data with P1/P2 or `block` recommendation fails closed to blocked | `normalizes malformed lane records and fails contradictory passing data closed` | covered |
+| 6 | Contradictory passing data with P1/P2 fails closed to blocked and `block` recommendation | `normalizes malformed lane records and fails contradictory passing data closed`; sequence test covers P2 forcing `block` recommendation | covered |
 | 7 | Malformed statuses, grades, recommendations, priorities, and counts fail closed or normalize to safe defaults | same malformed test | covered |
 | 8 | Missing or terminal runs do not accept new lane records | `returns null for missing or terminal runs and clears lane records when replacing a run id` | covered |
 | 9 | Replacing a run id clears old review-lane rows for that id | same replacement test | covered |
-| 10 | No Chrome/background/runtime/prompt files are touched | staged file list and `git diff --check`; prompt freeze may still show known pre-existing hash drift only | covered |
+| 10 | Bounded pruning cannot return false-positive append success | `returns null instead of a false success when bounded pruning drops the candidate lane` | covered |
+| 11 | Legacy stored state without `reviewLanes` upgrades on append | `upgrades legacy storage without reviewLanes and keeps append result equal to durable state` | covered |
+| 12 | No Chrome/background/runtime/prompt files are touched | staged file list and `git diff --check`; prompt freeze may still show known pre-existing hash drift only | process check; not unit-testable in this slice |
 
 ## Adversarial Probe
 
 The privacy probe passes a record with a secret-looking role, raw prompt/session/transcript/reviewer prose fields, private URLs, bearer tokens, durable ids, and raw-output words. The returned record and durable storage JSON must omit those strings while retaining safe metadata and redaction markers.
 
-The false-positive success probe compares every appended record to durable retrieval. A returned object that differs from storage does not count as success.
+The false-positive success probe compares appended records to durable retrieval, including an adversarial cap-pressure case where a stale candidate would be pruned. A returned object that differs from storage does not count as success.
 
 ## Scope Caveat
 
