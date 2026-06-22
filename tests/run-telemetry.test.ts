@@ -167,16 +167,18 @@ describe('autonomous run telemetry package', () => {
       observationRef: 'durable-observation-raw-abc123',
       evidenceRef: 'durable-evidence-raw-abc123',
       evidenceSourceRef: 'durable-ref-raw-abc123',
+      automationId: 'durable-automation-raw-abc123',
+      automationRunId: 'durable-automation-run-raw-abc123',
       sourceToolName: 'tool-durable-step-raw-abc123',
       runError: error,
       step2Error: error,
     });
     const pkg = createAutonomousRunTelemetryPackage(state, 'durable-run-raw-abc123', {
       rootDir: '.runs/durable-run-raw-abc123',
-      verification: [{ command: 'check durable-run-raw-abc123 durable-step-raw-abc123', exitCode: 1 }],
+      verification: [{ command: 'check durable-run-raw-abc123 durable-step-raw-abc123 durable-automation-raw-abc123', exitCode: 1 }],
       commits: [{
         sha: 'durable-run-raw-abc123',
-        message: 'commit durable-run-raw-abc123 durable-step-raw-abc123',
+        message: 'commit durable-run-raw-abc123 durable-step-raw-abc123 durable-automation-run-raw-abc123',
         linkedStepId: 'durable-step-raw-abc123',
       }],
     });
@@ -185,13 +187,13 @@ describe('autonomous run telemetry package', () => {
     expect(source).toMatch(/durable-run-raw-abc123|durable-step-raw-abc123|durable-tool-call-raw-abc123/);
 
     const output = JSON.stringify(pkg);
-    expect(output).not.toMatch(/durable-run-raw-abc123|durable-step-raw-abc123|durable-lease-raw-abc123|durable-evidence-raw-abc123|durable-tool-call-raw-abc123|durable-model-turn-raw-abc123|durable-observation-raw-abc123|durable-ref-raw-abc123/);
+    expect(output).not.toMatch(/durable-run-raw-abc123|durable-step-raw-abc123|durable-lease-raw-abc123|durable-evidence-raw-abc123|durable-tool-call-raw-abc123|durable-model-turn-raw-abc123|durable-observation-raw-abc123|durable-ref-raw-abc123|durable-automation-raw-abc123|durable-automation-run-raw-abc123/);
     expect(pkg?.rootDir).toBe('.runs/_redacted_id_/run-1');
     expect(readJson(pkg, 'manifest.json').run.error.code).toContain('_redacted:id_');
     expect(readJson(pkg, 'verification.json').commands[0].command).toContain('[redacted:id]');
     expect(readNdjson(pkg, 'commits.ndjson')[0]).toMatchObject({
       sha: '_redacted:id_',
-      message: 'commit [redacted:id] [redacted:id]',
+      message: 'commit [redacted:id] [redacted:id] [redacted:id]',
       linkedStepId: 'step-2',
     });
     expect(readNdjson(pkg, 'evidence.ndjson')[0].source.toolName).toBe('tool-[redacted:id]');
@@ -261,6 +263,8 @@ function createState(overrides: {
   observationRef?: string;
   evidenceRef?: string;
   evidenceSourceRef?: string;
+  automationId?: string;
+  automationRunId?: string;
   sourceToolName?: string;
   secretGoal?: string;
   secretSummary?: string;
@@ -387,8 +391,8 @@ function createState(overrides: {
           tabId: 123,
           windowId: 456,
           toolName: overrides.sourceToolName ?? 'shell_exec',
-          automationId: 'automation-secret',
-          automationRunId: 'automation-run-secret',
+          automationId: overrides.automationId ?? 'automation-secret',
+          automationRunId: overrides.automationRunId ?? 'automation-run-secret',
         },
         metadata: {
           url: 'https://example.com/private?token=secret',

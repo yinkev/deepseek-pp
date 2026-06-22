@@ -81,7 +81,7 @@ Review-driven iteration applied before this follow-up commit:
 - verification `passed` is derived from the normalized exit code, so a caller cannot mark a nonzero exit as passed;
 - sensitive assignment redaction is case-insensitive and covers token variants before verification/commit strings are exported;
 - exported IDs are package-local handles, so secret-bearing durable IDs cannot leak into files, paths, or reports;
-- plain durable IDs are redacted from caller-provided roots and exported free-form strings such as error codes, commands, commit messages, SHAs, and tool names;
+- plain durable IDs, including automation IDs, are redacted from caller-provided roots and exported free-form strings such as error codes, commands, commit messages, SHAs, and tool names;
 - package-level verification summary reconciles command results with durable run/step failure state;
 - omitted `generatedAt` is deterministic and uses `run.updatedAt`.
 

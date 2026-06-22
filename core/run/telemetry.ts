@@ -427,6 +427,8 @@ function collectDurableIds(
   for (const record of evidence) {
     ids.add(record.id);
     if (record.leaseId) ids.add(record.leaseId);
+    if (record.source.automationId) ids.add(record.source.automationId);
+    if (record.source.automationRunId) ids.add(record.source.automationRunId);
     for (const id of record.refs) ids.add(id);
   }
   for (const lease of targetLeases) ids.add(lease.id);
