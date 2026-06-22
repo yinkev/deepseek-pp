@@ -960,6 +960,20 @@ describe('pet control snapshot', () => {
       expect(createPetHandoffCapsule(debtSnap).nextAction).toBe('iterate');
     });
 
+    it('review fail produces reviewState fail while preserving safe issue count', () => {
+      const snap = createBaseForHandoff({
+        readiness: { status: 'ready', preparing: false },
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'reviewing' },
+        review: { grade: 'F', decision: 'fail', proofDebtCount: 0, issueCount: 1, acceptedEvidenceCount: 0, canFinalize: false },
+      });
+      const capsule = createPetHandoffCapsule(snap);
+
+      expect(capsule.reviewState).toBe('fail');
+      expect(capsule.issueCount).toBe(1);
+      expect(capsule.nextAction).toBe('iterate');
+    });
+
     it('blocked run produces nextAction review_blocker when readiness/target/leak do not override', () => {
       const snap = createBaseForHandoff({
         readiness: { status: 'blocked', blockers: ['policy'], preparing: false },

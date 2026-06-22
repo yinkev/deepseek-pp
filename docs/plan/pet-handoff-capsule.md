@@ -12,7 +12,7 @@ Add a pure safe `PetHandoffCapsule` derived from `PetControlSnapshot` via `creat
 | 3 | Add compact exported type PetHandoffCapsule in core/pet/control.ts with safe fields only | core/pet/control.ts: added interface + PetHandoffNextAction | direct import and calls in tests/pet-control.test.ts | covered |
 | 4 | Add pure exported function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule | core/pet/control.ts | All handoff describe tests call it directly | covered |
 | 5 | Function reads only safe fields: generatedAt, readiness.status/preparing/blockers.length, run.active/phase, target.locked/stale/label (only for == 'Target missing'), safety.leakIssueCount, review.grade/decision/counts/canFinalize. No raw strings copied. | Reducer destructures and uses only listed safe; no run.label etc assigned | Privacy probe + all count/enum assertions | covered |
-| 6 | targetState semantics: 'stale' if target.stale; 'locked' if locked && !stale; 'missing' if (status !== 'ready' && !locked) or label==='Target missing'; else 'none' | Exact if/else in createPetHandoffCapsule | 'stale/missing target...' test; locked+active test; idle test | covered |
+| 6 | targetState semantics: 'stale' if target.stale; else 'locked' if target.locked; else 'missing' if readiness.status !== 'ready' or label==='Target missing'; else 'none' | Exact if/else in createPetHandoffCapsule | 'stale/missing target...' test; locked+active test; idle test | covered |
 | 7 | reviewState semantics: 'pass'/'iterate'/'fail' per decision; else 'none' | Exact if chain on review.decision | review pass/iterate tests; idle defaults to 'none' | covered |
 | 8 | nextAction fixed enum using priority: leak>0 -> open_runtime_doctor; else target missing/stale -> open_target; else phase==='blocked' -> review_blocker; else preparing or status!=ready -> make_ready; else canFinalize -> finalize; else decision==='iterate' or proofDebt>0 or issue>0 -> iterate; else active -> continue_run; else 'idle' | Exact priority ladder in reducer | leak priority test; target priority; blocked test; finalize test; iterate/debt test; continue_run in locked test; idle test | covered |
 | 9 | blockerCount = readiness.blockers.length only (not strings) | `const blockerCount = readiness.blockers.length` | blocked test asserts 1; privacy probe asserts 2 | covered |
@@ -25,8 +25,9 @@ Add a pure safe `PetHandoffCapsule` derived from `PetControlSnapshot` via `creat
 | 13d | leak issue priority -> open_runtime_doctor | ... | 'leak issue takes priority...' | covered |
 | 13e | review pass canFinalize -> finalize | ... | 'review pass canFinalize...' | covered |
 | 13f | review iterate/proof debt -> iterate | ... | 'review iterate/proof debt...' | covered |
-| 13g | blocked run -> review_blocker when no higher override | ... | 'blocked run produces...' | covered |
-| 13h | privacy false-positive probe: source has secrets in run.label/readiness.blockers/target.label/other strings; capsule JSON omits while reflecting safe counts/enums | ... | 'privacy false-positive probe...' it + source vs capsule asserts | covered |
+| 13g | review fail -> reviewState fail with safe issue count | ... | 'review fail produces...' | covered |
+| 13h | blocked run -> review_blocker when no higher override | ... | 'blocked run produces...' | covered |
+| 13i | privacy false-positive probe: source has secrets in run.label/readiness.blockers/target.label/other strings; capsule JSON omits while reflecting safe counts/enums | ... | 'privacy false-positive probe...' it + source vs capsule asserts | covered |
 | 14 | Create short doc under docs/plan/ with contract coverage table and verification section | docs/plan/pet-handoff-capsule.md | This file | covered |
 
 ## Adversarial / Privacy
@@ -36,9 +37,9 @@ Add a pure safe `PetHandoffCapsule` derived from `PetControlSnapshot` via `creat
 - False-positive success would fail the `not.toMatch` + `toBe` on counts/decision.
 
 ## Verification Commands
-- `npm test -- tests/pet-control.test.ts` -> passed, 33/33 tests.
-- `npm test -- tests/pet-control.test.ts tests/runtime-doctor.test.ts tests/run-orchestrator.test.ts tests/run-review.test.ts` -> passed, 64/64 tests.
-- `npm test -- tests/run-kernel.test.ts tests/run-store.test.ts tests/run-target.test.ts tests/run-target-store.test.ts tests/run-policy.test.ts tests/run-review.test.ts tests/run-orchestrator.test.ts tests/run-iteration.test.ts tests/run-iteration-store.test.ts tests/pet-control.test.ts tests/runtime-doctor.test.ts` -> passed, 118/118 tests.
+- `npm test -- tests/pet-control.test.ts` -> passed, 34/34 tests.
+- `npm test -- tests/pet-control.test.ts tests/runtime-doctor.test.ts tests/run-orchestrator.test.ts tests/run-review.test.ts` -> passed, 65/65 tests.
+- `npm test -- tests/run-kernel.test.ts tests/run-store.test.ts tests/run-target.test.ts tests/run-target-store.test.ts tests/run-policy.test.ts tests/run-review.test.ts tests/run-orchestrator.test.ts tests/run-iteration.test.ts tests/run-iteration-store.test.ts tests/pet-control.test.ts tests/runtime-doctor.test.ts` -> passed, 119/119 tests.
 - `npm run compile` -> passed, `tsc --noEmit` clean.
 - `git diff --check` -> passed.
 
