@@ -19,11 +19,11 @@ This prevents future callers from manually merging only part of an orchestrator 
 |----|-------------------|----------------------|--------|
 | 1 | Null or undefined orchestrator result is a no-op and preserves snapshot identity | `returns the original snapshot when orchestrator cycle result is unavailable` | covered |
 | 2 | Worker-cycle result, telemetry result, and quality-gate decision are projected from one orchestrator result | `projects worker, telemetry, and quality gate results from one orchestrator cycle` | covered |
-| 3 | Handoff capsule fields agree with the merged pet snapshot | same projection test compares worker, telemetry, and quality-gate capsule fields to snapshot fields | covered |
+| 3 | Handoff capsule fields agree with the merged pet snapshot | same projection test compares worker, telemetry, and quality-gate capsule fields to corresponding fields on the merged post-projection snapshot | covered |
 | 4 | Non-mutating quality-gate holds with `workerResult: null` project the gate without inventing worker progress | `projects non-mutating quality-gate holds without inventing worker progress` | covered |
 | 5 | Blocked quality-gate holds drive `review_blocker` through existing handoff priority | same hold test asserts `nextAction = review_blocker` | covered |
 | 6 | Raw selected run IDs, worker run IDs/errors, telemetry paths/roots, quality-gate raw fields, and arbitrary orchestrator notes do not leak | `keeps raw orchestrator cycle fields out of pet projection` | covered |
-| 7 | Existing review-lane option bridge behavior remains intact | existing `pet to orchestrator review lane bridge` tests remain in the same suite | covered |
+| 7 | Existing review-lane option bridge behavior remains intact while the bridge gains cycle-result projection | `maps a default pet snapshot to clear review lane orchestrator options`, `projects sanitized pet review lanes, worker pulse, risk, and oracle request`, `re-derives the gate from sanitized summaries instead of trusting forged snapshot gate fields`, `derives blocking gate from lanes beyond scheduler output cap`, `feeds pet-derived blocking gate into orchestrator and durable worker block`, and `keeps raw pet snapshot fields out of bridged orchestrator options` | covered |
 
 ## Mechanism
 
