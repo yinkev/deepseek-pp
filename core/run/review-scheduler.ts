@@ -1,7 +1,7 @@
 import type { AutonomousRunStatus } from './types';
 import type { AutonomousRunReviewLaneGateInput } from './worker';
 
-export type AutonomousReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle';
+export type AutonomousReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'grok';
 export type AutonomousReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
 export type AutonomousReviewLaneScheduleAction = 'idle' | 'dispatch' | 'hold' | 'halt';
 export type AutonomousReviewLaneBlockingPriority = 'P1' | 'P2';
@@ -37,6 +37,7 @@ export interface AutonomousReviewLaneSchedulerInput {
   workerApplied?: boolean | null;
   risk?: AutonomousReviewLaneRiskFlags | null;
   oracleRequested?: boolean | null;
+  grokRequested?: boolean | null;
 }
 
 export interface AutonomousReviewLanePlan {
@@ -140,6 +141,9 @@ function selectRoles(
   if (input.oracleRequested === true && !hasOccupiedRole(lanes, 'oracle')) {
     candidates.push('oracle');
   }
+  if (input.grokRequested === true && !hasOccupiedRole(lanes, 'grok')) {
+    candidates.push('grok');
+  }
   return candidates.slice(0, Math.max(0, availableSlots));
 }
 
@@ -175,7 +179,8 @@ function normalizeRole(role: unknown): AutonomousReviewLaneRole | null {
     role === 'reviewer' ||
     role === 'safety' ||
     role === 'ux' ||
-    role === 'oracle'
+    role === 'oracle' ||
+    role === 'grok'
   ) {
     return role;
   }

@@ -10,12 +10,13 @@ Expose the pure review-lane scheduler from the non-Chrome orchestrator cycle wit
 | No runnable run returns an idle plan and does not call the executor. | `returns noop when no runnable run exists and does not resume paused or blocked runs` |
 | A blocking review gate returns a halt plan and the worker durably blocks before executor work. | `returns halt review lane plan and durable worker block on blocking gate` |
 | Review-lane capacity hold does not prevent worker progress because it is a review-dispatch plan, not a worker gate. | `returns review lane hold plan without preventing worker progress` |
+| A requested Grok review lane appears only as safe selected-role metadata and does not block worker progress. | `returns grok review lane dispatch when requested and earlier lanes are complete` |
 | Unknown active lane roles count against capacity without leaking raw role text. | `returns review lane hold plan without preventing worker progress`, `keeps orchestrator review lane plan private` |
 | Raw review labels, transcripts, prompts, URLs, commands, and unknown fields stay out of the orchestrator result. | `keeps orchestrator review lane plan private` |
 
 ## Mechanism
 
-`executeAutonomousOrchestratorCycle` now computes `reviewLanePlan` after reconciliation and runnable-run selection. The orchestrator supplies the selected run status and optional review-lane gate to `planAutonomousReviewLanes`, plus optional scheduler metadata from `reviewLaneScheduler`.
+`executeAutonomousOrchestratorCycle` now computes `reviewLanePlan` after reconciliation and runnable-run selection. The orchestrator supplies the selected run status and optional review-lane gate to `planAutonomousReviewLanes`, plus optional scheduler metadata from `reviewLaneScheduler`, including bounded Oracle/Grok advisor request booleans.
 
 The plan is observational metadata for review-lane dispatch. It does not start review workers and it does not stop the selected autonomous worker when `action` is `hold` or `dispatch`. Blocking remains enforced by the existing worker review-lane gate path: a halt plan with a selected run calls the worker with the same gate, and the worker appends the durable review block.
 

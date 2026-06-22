@@ -285,6 +285,49 @@ describe('autonomous review lane scheduler', () => {
     });
   });
 
+  it('dispatches grok only when requested and capacity remains', () => {
+    const completedAdvisorLanes = [
+      { role: 'implementer' as const, status: 'passed' as const },
+      { role: 'reviewer' as const, status: 'passed' as const },
+      { role: 'safety' as const, status: 'passed' as const },
+      { role: 'ux' as const, status: 'passed' as const },
+      { role: 'oracle' as const, status: 'passed' as const },
+    ];
+
+    expect(planAutonomousReviewLanes({
+      runStatus: 'running',
+      lanes: completedAdvisorLanes,
+      grokRequested: false,
+    })).toMatchObject({
+      action: 'idle',
+      selectedRoles: [],
+      canRunWorker: true,
+      reason: 'no_pending_lanes',
+    });
+
+    expect(planAutonomousReviewLanes({
+      runStatus: 'running',
+      lanes: completedAdvisorLanes,
+      grokRequested: true,
+    })).toMatchObject({
+      action: 'dispatch',
+      selectedRoles: ['grok'],
+    });
+
+    expect(planAutonomousReviewLanes({
+      runStatus: 'running',
+      lanes: [
+        ...completedAdvisorLanes,
+        { role: 'grok', status: 'running' },
+      ],
+      grokRequested: true,
+    })).toMatchObject({
+      action: 'idle',
+      selectedRoles: [],
+      reason: 'no_pending_lanes',
+    });
+  });
+
   it('caps role selection by maxParallel', () => {
     expect(planAutonomousReviewLanes({
       runStatus: 'running',
@@ -292,6 +335,7 @@ describe('autonomous review lane scheduler', () => {
       workerAdvanced: true,
       risk: { shell: true, ui: true },
       oracleRequested: true,
+      grokRequested: true,
     })).toMatchObject({
       action: 'dispatch',
       selectedRoles: ['implementer', 'reviewer'],
@@ -305,6 +349,7 @@ describe('autonomous review lane scheduler', () => {
       workerAdvanced: true,
       risk: { shell: true, browser: true, memory: true, ui: true, rawUrl: 'https://secret.invalid/path' },
       oracleRequested: true,
+      grokRequested: true,
       lanes: [
         {
           role: 'implementer',

@@ -2898,6 +2898,48 @@ describe('pet control snapshot', () => {
       });
     });
 
+    it('mergePetReviewLanesIntoSnapshot preserves grok advisor lanes as safe metadata only', () => {
+      const lanesWithSecrets = [
+        {
+          role: 'grok',
+          status: 'passed',
+          grade: 'A',
+          recommendation: 'proceed',
+          highestPriority: null,
+          issueCount: 0,
+          updatedAt: 230,
+          prompt: 'SECRET_GROK_PROMPT',
+          sessionId: 'SECRET_GROK_SESSION',
+          transcript: 'SECRET_GROK_TRANSCRIPT',
+        },
+      ];
+      expect(JSON.stringify(lanesWithSecrets)).toMatch(/SECRET_GROK_PROMPT|SECRET_GROK_SESSION|SECRET_GROK_TRANSCRIPT/);
+
+      const merged = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), lanesWithSecrets);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(merged.reviewLanes).toMatchObject({
+        total: 1,
+        passedCount: 1,
+        proceedCount: 1,
+        lanes: [
+          {
+            role: 'grok',
+            status: 'passed',
+            grade: 'A',
+            recommendation: 'proceed',
+            highestPriority: null,
+            issueCount: 0,
+            updatedAt: 230,
+          },
+        ],
+      });
+      expect(merged.reviewLaneGate).toEqual(defaultReviewLaneGate);
+      expect(capsule.reviewLaneSummaries).toEqual(merged.reviewLanes.lanes);
+      expect(JSON.stringify(merged)).not.toMatch(/SECRET_GROK_PROMPT|SECRET_GROK_SESSION|SECRET_GROK_TRANSCRIPT/);
+      expect(JSON.stringify(capsule)).not.toMatch(/SECRET_GROK_PROMPT|SECRET_GROK_SESSION|SECRET_GROK_TRANSCRIPT/);
+    });
+
     it('mergePetReviewLanesIntoSnapshot keeps all sanitized lanes for gate derivation and clamps invalid values', () => {
       const snap = createBasePetSnapshot();
       const merged = mergePetReviewLanesIntoSnapshot(snap, [

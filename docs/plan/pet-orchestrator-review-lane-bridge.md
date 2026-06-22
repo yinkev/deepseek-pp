@@ -7,8 +7,8 @@ Add a pure bridge from pet review-lane state to orchestrator review-lane options
 | Requirement | Coverage |
 | --- | --- |
 | Default pet snapshots produce clear review-lane gate options and empty scheduler lanes. | `maps a default pet snapshot to clear review lane orchestrator options` |
-| Review lane summaries project only safe role/status fields into the scheduler. | `projects sanitized pet review lanes, worker pulse, risk, and oracle request` |
-| Worker pulse, memory/browser/shell/ui risk, maxParallel, and oracle request map into scheduler metadata. | `projects sanitized pet review lanes, worker pulse, risk, and oracle request` |
+| Review lane summaries project only safe role/status fields into the scheduler. | `projects sanitized pet review lanes, worker pulse, risk, and advisor requests` |
+| Worker pulse, memory/browser/shell/ui risk, maxParallel, and Oracle/Grok advisor requests map into scheduler metadata. | `projects sanitized pet review lanes, worker pulse, risk, and advisor requests` |
 | Gate fields are re-derived from sanitized lane summaries instead of trusting forged snapshot gate fields. | `re-derives the gate from sanitized summaries instead of trusting forged snapshot gate fields` |
 | Blocking gate derivation scans all sanitized lanes, even beyond the capped scheduler lane output. | `derives blocking gate from lanes beyond scheduler output cap` |
 | Pet-derived blocking gates can be passed to the orchestrator and durably block worker execution. | `feeds pet-derived blocking gate into orchestrator and durable worker block` |
@@ -21,7 +21,7 @@ Add a pure bridge from pet review-lane state to orchestrator review-lane options
 - `reviewLaneGate`
 - `reviewLaneScheduler`
 
-The bridge sanitizes all `snapshot.reviewLanes.lanes`, maps unknown roles to `other`, and re-derives the gate with `createPetReviewLaneGate`. It does not trust hand-built `snapshot.reviewLaneGate` fields. Scheduler lane output remains capped to four role/status pairs, but blocking gate derivation scans all sanitized lanes before that output cap is applied.
+The bridge sanitizes all `snapshot.reviewLanes.lanes`, maps unknown roles to `other`, and re-derives the gate with `createPetReviewLaneGate`. It does not trust hand-built `snapshot.reviewLaneGate` fields. Scheduler lane output remains capped to four role/status pairs, but blocking gate derivation scans all sanitized lanes before that output cap is applied. Advisor requests are reduced to booleans (`oracleRequested`, `grokRequested`) and do not carry prompts, transcripts, sessions, URLs, or worker instructions.
 
 This is still a pure non-Chrome seam. It does not schedule timers, call Chrome APIs, execute review workers, mutate storage, or start browser/runtime work.
 

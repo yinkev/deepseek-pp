@@ -18,20 +18,21 @@ Add a pure review-lane dispatch planner for autonomous runs. This slice does not
 | Shell/browser/memory risk dispatches safety. | `dispatches safety for shell, browser, or memory risk` |
 | UI risk dispatches UX. | `dispatches ux for ui risk` |
 | Oracle lane dispatches only when requested and capacity remains. | `dispatches oracle only when requested and capacity remains` |
+| Grok lane dispatches only when requested and capacity remains. | `dispatches grok only when requested and capacity remains` |
 | Selected roles respect `maxParallel`. | `caps role selection by maxParallel` |
 | Planner output contains only safe enums, booleans, and counts. | `keeps raw secret fields out of planner output JSON` |
 | False-positive success probe: halt plans cannot dispatch roles or allow worker execution. | `adversarial probe: halt plans never dispatch roles or allow worker execution` |
 
 ## Mechanism
 
-`planAutonomousReviewLanes(input)` consumes run status, safe lane role/status metadata, risk booleans, oracle request state, capacity, and the same review-lane gate shape accepted by `executeAutonomousRunCycle`.
+`planAutonomousReviewLanes(input)` consumes run status, safe lane role/status metadata, risk booleans, Oracle/Grok request state, capacity, and the same review-lane gate shape accepted by `executeAutonomousRunCycle`.
 
 Decision order:
 
 1. Idle if the run is not `queued` or `running`, ignoring stale gate fields.
 2. Halt on blocking gate signals (`status: blocked`, `canProceed: false`, P1/P2, or block recommendation).
 3. Hold if active lanes already meet `maxParallel`.
-4. Select roles by priority: implementer, reviewer, safety, UX, oracle.
+4. Select roles by priority: implementer, reviewer, safety, UX, oracle, Grok.
 
 The planner is pure. It does not call storage, Chrome, terminal, network, worker execution, or pet reducers.
 

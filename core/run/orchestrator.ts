@@ -92,6 +92,7 @@ export interface AutonomousRunOrchestratorReviewLaneSchedulerInput {
   workerApplied?: boolean | null;
   risk?: AutonomousReviewLaneRiskFlags | null;
   oracleRequested?: boolean | null;
+  grokRequested?: boolean | null;
 }
 
 export interface AutonomousRunOrchestratorCycleResult {
@@ -290,6 +291,7 @@ export async function executeAutonomousOrchestratorCycle(
     workerApplied: options.reviewLaneScheduler?.workerApplied,
     risk: options.reviewLaneScheduler?.risk,
     oracleRequested: options.reviewLaneScheduler?.oracleRequested,
+    grokRequested: options.reviewLaneScheduler?.grokRequested,
   });
 
   // Quality gate check — consulted before executor is called

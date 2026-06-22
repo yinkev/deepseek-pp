@@ -25,6 +25,7 @@ export interface PetOrchestratorReviewLaneBridgeOptions {
   maxParallel?: number | null;
   risk?: AutonomousReviewLaneRiskFlags | null;
   oracleRequested?: boolean | null;
+  grokRequested?: boolean | null;
 }
 
 export function createPetOrchestratorReviewLaneOptions(
@@ -52,6 +53,7 @@ export function createPetOrchestratorReviewLaneOptions(
       workerApplied: snapshot.workerCycle?.applied === true,
       risk: createRiskFlags(snapshot, options.risk),
       oracleRequested: options.oracleRequested === true,
+      grokRequested: options.grokRequested === true,
     },
   };
 }
@@ -136,7 +138,8 @@ function normalizeRole(role: unknown): PetReviewLaneRole {
     role === 'reviewer' ||
     role === 'safety' ||
     role === 'ux' ||
-    role === 'oracle'
+    role === 'oracle' ||
+    role === 'grok'
   ) {
     return role;
   }

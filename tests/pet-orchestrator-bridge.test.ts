@@ -49,11 +49,12 @@ describe('pet to orchestrator review lane bridge', () => {
           ui: false,
         },
         oracleRequested: false,
+        grokRequested: false,
       },
     });
   });
 
-  it('projects sanitized pet review lanes, worker pulse, risk, and oracle request', () => {
+  it('projects sanitized pet review lanes, worker pulse, risk, and advisor requests', () => {
     const snapshot = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot({
       workerCycle: { advanced: true, applied: true },
       memoryPressure: { enabled: true, level: 'high', truncated: true },
@@ -67,6 +68,7 @@ describe('pet to orchestrator review lane bridge', () => {
       maxParallel: 3,
       risk: { shell: true, ui: true },
       oracleRequested: true,
+      grokRequested: true,
     });
 
     expect(options.reviewLaneGate).toEqual({
@@ -91,6 +93,7 @@ describe('pet to orchestrator review lane bridge', () => {
         ui: true,
       },
       oracleRequested: true,
+      grokRequested: true,
     });
   });
 
@@ -143,7 +146,7 @@ describe('pet to orchestrator review lane bridge', () => {
           { role: 'safety', status: 'passed', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
           { role: 'ux', status: 'passed', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
           {
-            role: 'oracle',
+            role: 'grok',
             status: 'blocked',
             recommendation: 'iterate',
             highestPriority: 'P1',

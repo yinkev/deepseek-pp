@@ -597,6 +597,53 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
   });
 
+  it('returns grok review lane dispatch when requested and earlier lanes are complete', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'scheduler-grok' });
+
+    const run = await createAutonomousRun({
+      id: 'scheduler-grok',
+      goal: 'Dispatch Grok lane',
+      proofContract: createProofContract(),
+    }, 100);
+
+    const executor = vi.fn(async ({ runId, now: execNow }) => {
+      await appendAutonomousRunStep(runId, {
+        phase: 'model_turn',
+        progressScore: 0.1,
+      }, execNow);
+    });
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 120,
+      reviewLaneScheduler: {
+        maxParallel: 1,
+        lanes: [
+          { role: 'implementer', status: 'passed' },
+          { role: 'reviewer', status: 'passed' },
+          { role: 'safety', status: 'passed' },
+          { role: 'ux', status: 'passed' },
+          { role: 'oracle', status: 'passed' },
+        ],
+        grokRequested: true,
+      },
+    });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'dispatch',
+      selectedRoles: ['grok'],
+      canRunWorker: true,
+      reason: 'dispatch_lanes',
+      maxParallel: 1,
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result.reviewLanePlan)).not.toMatch(/scheduler-grok|Dispatch Grok lane/);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+    });
+  });
+
   it('keeps orchestrator review lane plan private', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);

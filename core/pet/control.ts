@@ -81,7 +81,7 @@ export interface PetWorkerCycle {
   reviewErrorCode: string | null;
 }
 
-export type PetReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'other';
+export type PetReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'grok' | 'other';
 export type PetReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
 export type PetReviewLaneRecommendation = 'proceed' | 'iterate' | 'block' | 'unknown';
 export type PetReviewLanePriority = 'P1' | 'P2' | 'P3';
@@ -1383,7 +1383,7 @@ function toPetWorkerCycleReviewErrorCode(errorCode: string | null): string | nul
     : 'unknown_worker_cycle_error';
 }
 
-const VALID_ROLES = ['implementer', 'reviewer', 'safety', 'ux', 'oracle', 'other'] as const;
+const VALID_ROLES = ['implementer', 'reviewer', 'safety', 'ux', 'oracle', 'grok', 'other'] as const;
 const VALID_STATUSES = ['idle', 'running', 'passed', 'blocked', 'failed'] as const;
 const VALID_RECS = ['proceed', 'iterate', 'block', 'unknown'] as const;
 const VALID_PRIOS = ['P1', 'P2', 'P3'] as const;
