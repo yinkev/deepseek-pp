@@ -116,16 +116,16 @@ describe('autonomous quality gate store', () => {
       verification: {
         commands: [
           {
-            name: 'curl https://private.example.com?token=secret-token',
+            name: 'curl https://private.example.com?token=secret-token run-durable12345 evidence-proof98765 ghp_abcdefghijklmnopqrstuvwxyz github_pat_1234567890abcdefghijklmnopqrstuvwxyz',
             result: 'passed',
-            summary: 'Authorization: Bearer sk-live-secret1234567890 transcript TOPSECRET_TRANSCRIPT_TEXT',
+            summary: 'Authorization: Bearer sk-live-secret1234567890 api_key=plain-key-123 token=plain-token-456 Cookie: sid=secret-session transcript TOPSECRET_TRANSCRIPT_TEXT ev-evidence123456',
             rawOutput: 'TOPSECRET_RAW_OUTPUT',
           } as any,
         ],
       },
       commit: {
         hash: 'abcdef1234567890abcdef1234567890abcdef12',
-        message: 'Commit message with https://signed.example/file?token=secret-token and Cookie: sid=secret-session',
+        message: 'Commit message with https://signed.example/file?token=secret-token and Cookie: sid=secret-session for run-durable12345',
       },
       independentReview: {
         status: 'passed',
@@ -140,10 +140,49 @@ describe('autonomous quality gate store', () => {
 
     expect(gate).not.toBeNull();
     expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
-    expect(returnedJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT/);
-    expect(durableJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT/);
+    expect(returnedJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT|run-durable12345|evidence-proof98765|ev-evidence123456|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_1234567890abcdefghijklmnopqrstuvwxyz|plain-key-123|plain-token-456/);
+    expect(durableJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT|run-durable12345|evidence-proof98765|ev-evidence123456|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_1234567890abcdefghijklmnopqrstuvwxyz|plain-key-123|plain-token-456/);
     expect(returnedJson).toContain('[redacted:secret]');
     expect(durableJson).toContain('[redacted:secret]');
+    expect(returnedJson).toContain('[redacted:id]');
+    expect(durableJson).toContain('[redacted:id]');
+  });
+
+  it('defaults malformed gate status and verification results to failed', async () => {
+    const { chromeStub, storage } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'malformed' });
+
+    const run = await createAutonomousRun({ id: 'malformed-run', goal: 'Malformed quality gate' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'definitely_not_passed',
+      contractCoverage: { complete: true },
+      resultStateConsistency: { status: 'unknown', ok: true },
+      verification: {
+        commands: [
+          { name: 'unknown result command', result: 'unknown', summary: 'unknown must fail closed' },
+          { name: 'missing result command', summary: 'missing result must fail closed' },
+        ],
+      },
+    } as any, NOW + 2);
+
+    expect(gate).toMatchObject({
+      status: 'failed',
+      resultStateConsistency: {
+        status: 'inconsistent',
+        ok: true,
+      },
+      verification: {
+        commands: [
+          { name: 'unknown result command', result: 'failed' },
+          { name: 'missing result command', result: 'failed' },
+        ],
+      },
+    });
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
+    expect(JSON.stringify(storage.get(AUTONOMOUS_RUN_STORAGE_KEY))).not.toContain('"status":"passed"');
   });
 
   it('returns null and writes no gate for missing or terminal runs', async () => {

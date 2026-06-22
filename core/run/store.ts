@@ -933,17 +933,17 @@ function nextQualityGateSeq(records: readonly AutonomousQualityGateRecord[], run
 
 function normalizeQualityGateStatus(value: unknown): AutonomousQualityGateRecord['status'] {
   if (value === 'failed' || value === 'blocked' || value === 'warning') return value;
-  return 'passed';
+  return value === 'passed' ? 'passed' : 'failed';
 }
 
 function normalizeQualityGateConsistencyStatus(value: unknown): AutonomousQualityGateRecord['resultStateConsistency']['status'] {
-  if (value === 'inconsistent' || value === 'not_applicable') return value;
-  return 'consistent';
+  if (value === 'consistent' || value === 'not_applicable') return value;
+  return 'inconsistent';
 }
 
 function normalizeQualityGateVerificationResult(value: unknown): AutonomousQualityGateVerificationCommandSummary['result'] {
   if (value === 'failed' || value === 'known_preexisting_failure') return value;
-  return 'passed';
+  return value === 'passed' ? 'passed' : 'failed';
 }
 
 function normalizeQualityGateIndependentReviewStatus(value: unknown): AutonomousQualityGateIndependentReviewSummary['status'] {
@@ -958,7 +958,13 @@ function normalizeQualityGateGrade(value: unknown): AutonomousQualityGateGrade |
 function normalizeQualityGateText(value: unknown, maxLength: number): string | null {
   const text = normalizeText(value, maxLength);
   if (!text) return null;
-  return redactQualityGateOpaqueTokens(redactQualityGateLooseSecrets(text))
+  return redactQualityGateDurableIds(
+    redactQualityGateOpaqueTokens(
+      redactQualityGateCommonSecrets(
+        redactQualityGateLooseSecrets(text),
+      ),
+    ),
+  )
     .replace(/\b(?:rawOutput|rawTranscript|transcriptText|reviewProse)\b/gi, '[redacted:raw]');
 }
 
@@ -972,6 +978,26 @@ function redactQualityGateLooseSecrets(value: string): string {
 
 function redactQualityGateOpaqueTokens(value: string): string {
   return value.replace(/\b(?=[A-Za-z0-9_-]{16,}\b)(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/g, '[redacted:secret]');
+}
+
+function redactQualityGateCommonSecrets(value: string): string {
+  return value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted:secret]')
+    .replace(/\b(Authorization|Cookie|Set-Cookie)\s*[:=]\s*[^\n]+/gi, '$1: [redacted:secret]')
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g, 'sk-[redacted:secret]')
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}/g, 'gh[redacted:secret]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, 'github_pat_[redacted:secret]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, 'AIza[redacted:secret]')
+    .replace(/([?&](?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token|token|secret)=)[^&\s]+/gi, '$1[redacted:secret]')
+    .replace(/\b((?:x[-_])?(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)\s*:)\s*[^\s,;]+/gi, '$1 [redacted:secret]')
+    .replace(/\b((?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)=)[^&\s]+/gi, '$1[redacted:secret]');
+}
+
+function redactQualityGateDurableIds(value: string): string {
+  return value.replace(
+    /\b(?:run|step|evidence|target-lease|lease|gate|ev)-(?=[A-Za-z0-9_.:-]{8,}\b)(?=[A-Za-z0-9_.:-]*\d)[A-Za-z0-9_.:-]+\b/g,
+    '[redacted:id]',
+  );
 }
 
 function normalizeBudgets(value: Partial<AutonomousRunBudgets> | undefined): AutonomousRunBudgets {
