@@ -38,6 +38,10 @@ export interface AutonomousRunCockpitRun {
   latestStep: Pick<AutonomousRunStep, 'id' | 'phase' | 'status' | 'progressScore' | 'endedAt'> | null;
   stepCount: number;
   evidenceCount: number;
+  freshEvidenceCount: number;
+  staleEvidenceCount: number;
+  expiredEvidenceCount: number;
+  latestEvidenceAt: number | null;
   targetLeaseCount: number;
   errorCode: string | null;
 }
@@ -116,7 +120,7 @@ export async function getAutonomousRunCockpitSnapshot(
     generatedAt: now,
     status: getCockpitStatus(totals),
     totals,
-    activeRun: activeRun ? toCockpitRun(activeRun, state) : null,
+    activeRun: activeRun ? toCockpitRun(activeRun, state, now) : null,
   };
 }
 
@@ -165,13 +169,20 @@ function selectCockpitRun(runs: readonly AutonomousRun[]): AutonomousRun | null 
     null;
 }
 
-function toCockpitRun(run: AutonomousRun, state: AutonomousRunStorageState): AutonomousRunCockpitRun {
+function toCockpitRun(run: AutonomousRun, state: AutonomousRunStorageState, now: number): AutonomousRunCockpitRun {
   const steps = state.steps
     .filter((step) => step.runId === run.id)
     .sort((a, b) => a.seq - b.seq);
   const evidence = state.evidence.filter((record) => record.runId === run.id);
   const targetLeases = state.targetLeases.filter((lease) => lease.runId === run.id);
   const latestStep = steps[steps.length - 1] ?? null;
+  const freshEvidenceCount = evidence.filter((record) => record.freshness === 'fresh' && record.expiresAt > now).length;
+  const expiredEvidenceCount = evidence.filter((record) => record.freshness === 'expired' || record.expiresAt <= now).length;
+  const staleEvidenceCount = evidence.filter((record) => record.freshness === 'stale' && record.expiresAt > now).length;
+  const latestEvidenceAt = evidence.reduce<number | null>(
+    (latest, record) => latest === null ? record.capturedAt : Math.max(latest, record.capturedAt),
+    null,
+  );
   return {
     id: run.id,
     goal: run.goal,
@@ -192,6 +203,10 @@ function toCockpitRun(run: AutonomousRun, state: AutonomousRunStorageState): Aut
       : null,
     stepCount: steps.length,
     evidenceCount: evidence.length,
+    freshEvidenceCount,
+    staleEvidenceCount,
+    expiredEvidenceCount,
+    latestEvidenceAt,
     targetLeaseCount: targetLeases.length,
     errorCode: run.error?.code ?? null,
   };

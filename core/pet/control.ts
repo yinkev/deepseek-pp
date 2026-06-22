@@ -32,6 +32,15 @@ export interface PetControlSnapshot {
     leakIssueCount: number;
     highRiskArmed: boolean;
   };
+  evidence: {
+    status: 'none' | 'fresh' | 'stale' | 'expired';
+    count: number;
+    freshCount: number;
+    staleCount: number;
+    expiredCount: number;
+    latestCapturedAt: number | null;
+    latestAgeMs: number | null;
+  };
   review: {
     grade: AutonomousRunCompletionGrade | null;
     decision: AutonomousRunCompletionDecision | null;
@@ -41,6 +50,8 @@ export interface PetControlSnapshot {
     canFinalize: boolean;
   };
 }
+
+type PetEvidencePulse = PetControlSnapshot['evidence'];
 
 export function createPetControlSnapshotFromRunCockpit(
   snapshot: AutonomousRunCockpitSnapshot,
@@ -63,6 +74,7 @@ export function createPetControlSnapshotFromRunCockpit(
 
   const leakIssueCount = 0;
   let highRiskArmed = false;
+  const evidence = createPetEvidencePulse(activeRun, snapshot.generatedAt);
 
   if (activeRun) {
     runLabel = activeRun.goal ?? null;
@@ -173,6 +185,7 @@ export function createPetControlSnapshotFromRunCockpit(
       leakIssueCount,
       highRiskArmed,
     },
+    evidence,
     review: {
       grade: null,
       decision: null,
@@ -225,7 +238,40 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
       ),
       highRiskArmed: false,
     },
+    evidence: snapshot.evidence,
     review: snapshot.review,
+  };
+}
+
+function createPetEvidencePulse(
+  activeRun: AutonomousRunCockpitSnapshot['activeRun'],
+  generatedAt: number,
+): PetEvidencePulse {
+  const count = activeRun?.evidenceCount ?? 0;
+  const freshCount = activeRun?.freshEvidenceCount ?? 0;
+  const staleCount = activeRun?.staleEvidenceCount ?? 0;
+  const expiredCount = activeRun?.expiredEvidenceCount ?? 0;
+  const latestCapturedAt = activeRun?.latestEvidenceAt ?? null;
+
+  let status: PetEvidencePulse['status'] = 'none';
+  if (count === 0) {
+    status = 'none';
+  } else if (freshCount > 0) {
+    status = 'fresh';
+  } else if (staleCount > 0) {
+    status = 'stale';
+  } else {
+    status = 'expired';
+  }
+
+  return {
+    status,
+    count,
+    freshCount,
+    staleCount,
+    expiredCount,
+    latestCapturedAt,
+    latestAgeMs: latestCapturedAt === null ? null : Math.max(0, generatedAt - latestCapturedAt),
   };
 }
 
@@ -295,13 +341,16 @@ export interface PetHandoffCapsule {
   proofDebtCount: number;
   issueCount: number;
   acceptedEvidenceCount: number;
+  evidenceStatus: PetControlSnapshot['evidence']['status'];
+  evidenceCount: number;
+  latestEvidenceAgeMs: number | null;
   grade: PetControlSnapshot['review']['grade'];
   canFinalize: boolean;
   nextAction: PetHandoffNextAction;
 }
 
 export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
-  const { readiness, run, target, safety, review, generatedAt } = snapshot;
+  const { readiness, run, target, safety, review, evidence, generatedAt } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
   if (target.stale) {
@@ -325,6 +374,9 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const proofDebtCount = review.proofDebtCount;
   const issueCount = review.issueCount;
   const acceptedEvidenceCount = review.acceptedEvidenceCount;
+  const evidenceStatus = evidence.status;
+  const evidenceCount = evidence.count;
+  const latestEvidenceAgeMs = evidence.latestAgeMs;
   const grade = review.grade;
   const canFinalize = review.canFinalize;
 
@@ -358,6 +410,9 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     proofDebtCount,
     issueCount,
     acceptedEvidenceCount,
+    evidenceStatus,
+    evidenceCount,
+    latestEvidenceAgeMs,
     grade,
     canFinalize,
     nextAction,

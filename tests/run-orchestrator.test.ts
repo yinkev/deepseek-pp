@@ -333,21 +333,33 @@ describe('autonomous run orchestrator startup bridge', () => {
       origin: 'https://example.com',
     }, 220);
     await appendAutonomousEvidenceRecord(running.id, {
+      id: 'expired-evidence',
+      leaseId: lease?.id,
+      kind: 'browser_snapshot',
+      capturedAt: 100,
+      ttlMs: 5,
+      refs: ['expired-private-ref'],
+      summary: 'Expired summary with expired-secret-token',
+      metadata: { url: 'https://example.com/expired?token=secret' },
+    }, 180);
+    await appendAutonomousEvidenceRecord(running.id, {
       id: 'evidence-1',
       leaseId: lease?.id,
       kind: 'browser_snapshot',
+      capturedAt: 6_200,
+      ttlMs: 10_000,
       refs: ['snapshot-private-ref'],
       summary: 'Authorization: Bearer secret-token',
       metadata: { url: 'https://example.com/private?token=secret' },
-    }, 230);
+    }, 6_200);
     await appendAutonomousRunStep(running.id, {
       id: 'step-1',
       phase: 'verification',
       progressScore: 1,
       proofDelta: ['Verified'],
-    }, 240);
+    }, 6_240);
 
-    const snapshot = await getAutonomousRunCockpitSnapshot(250);
+    const snapshot = await getAutonomousRunCockpitSnapshot(6_250);
 
     expect(snapshot.status).toBe('running');
     expect(snapshot.totals).toMatchObject({ running: 1, blocked: 1 });
@@ -355,7 +367,11 @@ describe('autonomous run orchestrator startup bridge', () => {
       id: running.id,
       status: 'running',
       stepCount: 1,
-      evidenceCount: 1,
+      evidenceCount: 2,
+      freshEvidenceCount: 1,
+      staleEvidenceCount: 0,
+      expiredEvidenceCount: 1,
+      latestEvidenceAt: 6_200,
       targetLeaseCount: 1,
       latestStep: {
         id: 'step-1',
@@ -363,7 +379,7 @@ describe('autonomous run orchestrator startup bridge', () => {
         status: 'succeeded',
       },
     });
-    expect(JSON.stringify(snapshot)).not.toMatch(/snapshot-private-ref|Bearer|secret-token|private\?token/);
+    expect(JSON.stringify(snapshot)).not.toMatch(/snapshot-private-ref|expired-private-ref|Bearer|secret-token|private\?token|expired\?token/);
   });
 
   it('selects the newest terminal run when no active run exists', async () => {

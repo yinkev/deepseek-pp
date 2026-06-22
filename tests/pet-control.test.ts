@@ -55,6 +55,7 @@ describe('pet control snapshot', () => {
     run?: Partial<PetControlSnapshot['run']>;
     target?: Partial<PetControlSnapshot['target']>;
     safety?: Partial<PetControlSnapshot['safety']>;
+    evidence?: Partial<PetControlSnapshot['evidence']>;
     review?: Partial<PetControlSnapshot['review']>;
   } = {}): PetControlSnapshot {
     return {
@@ -83,6 +84,16 @@ describe('pet control snapshot', () => {
         leakIssueCount: 0,
         highRiskArmed: false,
         ...overrides.safety,
+      },
+      evidence: {
+        status: 'none',
+        count: 0,
+        freshCount: 0,
+        staleCount: 0,
+        expiredCount: 0,
+        latestCapturedAt: null,
+        latestAgeMs: null,
+        ...overrides.evidence,
       },
       review: {
         grade: null,
@@ -237,6 +248,15 @@ describe('pet control snapshot', () => {
       run: { active: false, phase: 'idle', nextAction: null },
       target: { locked: false, label: null, stale: false },
       safety: { leakIssueCount: 0, highRiskArmed: false },
+      evidence: {
+        status: 'none',
+        count: 0,
+        freshCount: 0,
+        staleCount: 0,
+        expiredCount: 0,
+        latestCapturedAt: null,
+        latestAgeMs: null,
+      },
       review: {
         grade: null,
         decision: null,
@@ -451,6 +471,118 @@ describe('pet control snapshot', () => {
     expect(json).not.toMatch(/password=/);
     // goal itself is allowed as it is public run label; probe targets the forbidden fields
     expect(json).toContain('Privacy probe run');
+  });
+
+  it('maps active run evidence into a safe pet evidence pulse and handoff capsule fields', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'evidence-pulse' });
+
+    const run = await createAutonomousRun({ goal: 'Evidence pulse run', proofContract: createProofContract() }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousEvidenceRecord(run.id, {
+      id: 'expired-evidence',
+      kind: 'browser_snapshot',
+      capturedAt: 100,
+      ttlMs: 5,
+      summary: 'Expired summary with SECRET_EXPIRED_EVIDENCE',
+      refs: ['expired-ref-SECRET'],
+      metadata: { url: 'https://expired.example.com?token=SECRET' },
+    }, 120);
+    await appendAutonomousEvidenceRecord(run.id, {
+      id: 'fresh-evidence',
+      kind: 'browser_snapshot',
+      capturedAt: 5_900,
+      ttlMs: 10_000,
+      summary: 'Fresh summary with SECRET_FRESH_EVIDENCE',
+      refs: ['fresh-ref-SECRET'],
+      metadata: { url: 'https://fresh.example.com?token=SECRET' },
+    }, 5_900);
+
+    const storedJson = JSON.stringify(await getAutonomousRunLedgerSnapshot());
+    expect(storedJson).toMatch(/SECRET_EXPIRED_EVIDENCE|SECRET_FRESH_EVIDENCE|fresh-ref-SECRET|expired-ref-SECRET/);
+
+    const pet = await getPetControlSnapshot(6_000);
+    expect(pet.evidence).toEqual({
+      status: 'fresh',
+      count: 2,
+      freshCount: 1,
+      staleCount: 0,
+      expiredCount: 1,
+      latestCapturedAt: 5_900,
+      latestAgeMs: 100,
+    });
+
+    const capsule = createPetHandoffCapsule(pet);
+    expect(capsule).toMatchObject({
+      evidenceStatus: 'fresh',
+      evidenceCount: 2,
+      latestEvidenceAgeMs: 100,
+    });
+    expect(JSON.stringify(pet)).not.toMatch(/SECRET_EXPIRED_EVIDENCE|SECRET_FRESH_EVIDENCE|fresh-ref-SECRET|expired-ref-SECRET|expired\.example|fresh\.example/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_EXPIRED_EVIDENCE|SECRET_FRESH_EVIDENCE|fresh-ref-SECRET|expired-ref-SECRET|expired\.example|fresh\.example/);
+  });
+
+  it('maps stale and expired cockpit evidence pulses without raw evidence data', () => {
+    const baseRun = {
+      id: 'synthetic-run',
+      goal: 'Synthetic run',
+      mode: 'unattended',
+      status: 'running',
+      targetLeaseId: null,
+      createdAt: 1,
+      startedAt: 1,
+      updatedAt: 1,
+      latestStep: null,
+      stepCount: 0,
+      targetLeaseCount: 0,
+      errorCode: null,
+    };
+    const stalePet = createPetControlSnapshotFromRunCockpit({
+      schemaVersion: 1,
+      generatedAt: 100,
+      status: 'running',
+      totals: { queued: 0, running: 1, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+      activeRun: {
+        ...baseRun,
+        evidenceCount: 1,
+        freshEvidenceCount: 0,
+        staleEvidenceCount: 1,
+        expiredEvidenceCount: 0,
+        latestEvidenceAt: 120,
+      },
+    } as any);
+    expect(stalePet.evidence).toEqual({
+      status: 'stale',
+      count: 1,
+      freshCount: 0,
+      staleCount: 1,
+      expiredCount: 0,
+      latestCapturedAt: 120,
+      latestAgeMs: 0,
+    });
+
+    const expiredPet = createPetControlSnapshotFromRunCockpit({
+      schemaVersion: 1,
+      generatedAt: 200,
+      status: 'running',
+      totals: { queued: 0, running: 1, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+      activeRun: {
+        ...baseRun,
+        evidenceCount: 1,
+        freshEvidenceCount: 0,
+        staleEvidenceCount: 0,
+        expiredEvidenceCount: 1,
+        latestEvidenceAt: 100,
+      },
+    } as any);
+    expect(expiredPet.evidence).toMatchObject({
+      status: 'expired',
+      count: 1,
+      expiredCount: 1,
+      latestCapturedAt: 100,
+      latestAgeMs: 100,
+    });
   });
 
   it('async convenience uses provided now: generatedAt equals now and reducer agrees with cockpit state', async () => {
@@ -857,6 +989,7 @@ describe('pet control snapshot', () => {
         run: { active: false, label: null, phase: 'idle', nextAction: null },
         target: { locked: false, label: null, stale: false },
         safety: { leakIssueCount: 0, highRiskArmed: false },
+        evidence: { status: 'none', count: 0, freshCount: 0, staleCount: 0, expiredCount: 0, latestCapturedAt: null, latestAgeMs: null },
         review: { grade: null, decision: null, proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 0, canFinalize: false },
         ...overrides,
       });
@@ -877,6 +1010,9 @@ describe('pet control snapshot', () => {
         proofDebtCount: 0,
         issueCount: 0,
         acceptedEvidenceCount: 0,
+        evidenceStatus: 'none',
+        evidenceCount: 0,
+        latestEvidenceAgeMs: null,
         grade: null,
         canFinalize: false,
         nextAction: 'idle',
@@ -1014,6 +1150,15 @@ describe('pet control snapshot', () => {
           acceptedEvidenceCount: 1,
           canFinalize: false,
         },
+        evidence: {
+          status: 'stale',
+          count: 3,
+          freshCount: 0,
+          staleCount: 2,
+          expiredCount: 1,
+          latestCapturedAt: 111,
+          latestAgeMs: 12,
+        },
       });
       const sourceJson = JSON.stringify(snap);
       expect(sourceJson).toMatch(/SECRET_LEAK_TOKEN_777|ultra secret|supersecret|SECRET_999|secret-target-title|ultra-secret/);
@@ -1027,6 +1172,9 @@ describe('pet control snapshot', () => {
       expect(capsule.reviewState).toBe('iterate');
       expect(capsule.blockerCount).toBe(2);
       expect(capsule.proofDebtCount).toBe(2);
+      expect(capsule.evidenceStatus).toBe('stale');
+      expect(capsule.evidenceCount).toBe(3);
+      expect(capsule.latestEvidenceAgeMs).toBe(12);
       expect(capsule.nextAction).toBe('review_blocker');
       // no secrets leaked
       expect(capsuleJson).not.toMatch(/SECRET_LEAK_TOKEN_777|ultra secret|supersecret|SECRET_999|secret-target-title|ultra-secret|password=|https:\/\/leak/);
