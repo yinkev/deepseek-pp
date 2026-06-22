@@ -55,6 +55,7 @@ describe('pet control snapshot', () => {
     run?: Partial<PetControlSnapshot['run']>;
     target?: Partial<PetControlSnapshot['target']>;
     safety?: Partial<PetControlSnapshot['safety']>;
+    blockerLens?: Partial<PetControlSnapshot['blockerLens']>;
     evidence?: Partial<PetControlSnapshot['evidence']>;
     review?: Partial<PetControlSnapshot['review']>;
   } = {}): PetControlSnapshot {
@@ -87,6 +88,25 @@ describe('pet control snapshot', () => {
         leakIssueCount: 0,
         highRiskArmed: false,
         ...overrides.safety,
+      },
+      blockerLens: {
+        primary: null,
+        categories: [],
+        counts: {
+          auth: 0,
+          target: 0,
+          leak: 0,
+          policy: 0,
+          budget: 0,
+          evidence: 0,
+          review: 0,
+          paused: 0,
+          busy: 0,
+          runtime: 0,
+          unknown: 0,
+        },
+        total: 0,
+        ...overrides.blockerLens,
       },
       evidence: {
         status: 'none',
@@ -251,6 +271,24 @@ describe('pet control snapshot', () => {
       run: { active: false, phase: 'idle', nextAction: null },
       target: { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null },
       safety: { leakIssueCount: 0, highRiskArmed: false },
+      blockerLens: {
+        primary: null,
+        categories: [],
+        counts: {
+          auth: 0,
+          target: 0,
+          leak: 0,
+          policy: 0,
+          budget: 0,
+          evidence: 0,
+          review: 0,
+          paused: 0,
+          busy: 0,
+          runtime: 0,
+          unknown: 0,
+        },
+        total: 0,
+      },
       evidence: {
         status: 'none',
         count: 0,
@@ -708,6 +746,10 @@ describe('pet control snapshot', () => {
       leaseExpiresInMs: null,
     });
     expect(pet.safety).toEqual({ leakIssueCount: 4, highRiskArmed: false });
+    expect(pet.blockerLens.primary).toBe('leak');
+    expect(pet.blockerLens.categories).toEqual(['leak']);
+    expect(pet.blockerLens.counts.leak).toBe(4);
+    expect(pet.blockerLens.total).toBe(4);
   });
 
   it('merges blocked Runtime Doctor status and preparing flag into readiness', () => {
@@ -739,19 +781,70 @@ describe('pet control snapshot', () => {
     });
   });
 
+  it('maps raw readiness blockers into a safe blocker lens and handoff categories', () => {
+    const base = createBasePetSnapshot({
+      readiness: {
+        status: 'blocked',
+        blockers: [
+          'web_auth_rejected with PRIVATE_AUTH_TOKEN',
+          'browser_target_not_controllable at https://private-target.example.com',
+          'storage_leak SECRET_STORAGE_VALUE',
+          'policy_deny token=PRIVATE_POLICY',
+        ],
+        preparing: false,
+      },
+      safety: { leakIssueCount: 3 },
+    });
+
+    const sourceJson = JSON.stringify(base);
+    expect(sourceJson).toMatch(/PRIVATE_AUTH_TOKEN|private-target\.example|SECRET_STORAGE_VALUE|PRIVATE_POLICY/);
+
+    const pet = mergeAutonomousCompletionReviewIntoSnapshot(base, {
+      decision: 'pass',
+      grade: 'A',
+      score: 100,
+      issueCodes: [],
+      requiredEvidenceMissing: [],
+      doneCriteriaMissing: [],
+      acceptedEvidenceIds: ['safe-evidence'],
+      error: null,
+    });
+    expect(pet.blockerLens.primary).toBe('leak');
+    expect(pet.blockerLens.categories).toEqual(['leak', 'target', 'auth', 'policy']);
+    expect(pet.blockerLens.counts).toMatchObject({
+      leak: 1,
+      target: 1,
+      auth: 1,
+      policy: 1,
+    });
+    expect(pet.blockerLens.total).toBe(4);
+
+    const capsule = createPetHandoffCapsule(pet);
+    expect(capsule.blockerPrimaryCategory).toBe('leak');
+    expect(capsule.blockerCategories).toEqual(['leak', 'target', 'auth', 'policy']);
+    expect(capsule.blockerCategoryCounts).toMatchObject({
+      leak: 1,
+      target: 1,
+      auth: 1,
+      policy: 1,
+    });
+    expect(JSON.stringify(capsule)).not.toMatch(/PRIVATE_AUTH_TOKEN|private-target\.example|SECRET_STORAGE_VALUE|PRIVATE_POLICY|token=/);
+  });
+
   it('maps Runtime Doctor target status to generic missing/stale labels only', () => {
     const base = createBasePetSnapshot();
     const targetCases: Array<[
       RuntimeDoctorReport['readiness']['targetStatus'],
       PetControlSnapshot['target'],
+      PetControlSnapshot['blockerLens']['categories'],
     ]> = [
-      ['missing', { locked: false, label: 'Target missing', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
-      ['unsupported', { locked: false, label: 'Target stale', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
-      ['not_controllable', { locked: false, label: 'Target stale', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
-      ['selected_active', { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
+      ['missing', { locked: false, label: 'Target missing', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }, ['target']],
+      ['unsupported', { locked: false, label: 'Target stale', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }, ['target']],
+      ['not_controllable', { locked: false, label: 'Target stale', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }, ['target']],
+      ['selected_active', { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }, []],
     ];
 
-    for (const [targetStatus, expected] of targetCases) {
+    for (const [targetStatus, expected, expectedCategories] of targetCases) {
       const report = createRuntimeDoctorReport({
         readiness: { targetStatus },
         targetLock: {
@@ -760,7 +853,11 @@ describe('pet control snapshot', () => {
           origin: 'https://raw-target.example.com',
         },
       });
-      expect(mergeRuntimeDoctorReportIntoSnapshot(base, report).target).toEqual(expected);
+      const pet = mergeRuntimeDoctorReportIntoSnapshot(base, report);
+      expect(pet.target).toEqual(expected);
+      expect(pet.blockerLens.categories).toEqual(expectedCategories);
+      expect(pet.blockerLens.primary).toBe(expectedCategories[0] ?? null);
+      expect(pet.blockerLens.counts.target).toBe(expectedCategories.includes('target') ? 1 : 0);
     }
   });
 
@@ -980,6 +1077,9 @@ describe('pet control snapshot', () => {
     expect(pet.review.issueCount).toBe(2);
     expect(pet.review.acceptedEvidenceCount).toBe(1);
     expect(pet.review.canFinalize).toBe(false);
+    expect(pet.blockerLens.primary).toBe('evidence');
+    expect(pet.blockerLens.categories).toEqual(['evidence', 'review']);
+    expect(pet.blockerLens.counts).toMatchObject({ evidence: 2, review: 2 });
 
     const failReview: AutonomousRunCompletionReview = {
       ...iterateReview,
@@ -1077,6 +1177,21 @@ describe('pet control snapshot', () => {
         targetLeaseExpiresInMs: null,
         reviewState: 'none',
         blockerCount: 0,
+        blockerPrimaryCategory: null,
+        blockerCategories: [],
+        blockerCategoryCounts: {
+          auth: 0,
+          target: 0,
+          leak: 0,
+          policy: 0,
+          budget: 0,
+          evidence: 0,
+          review: 0,
+          paused: 0,
+          busy: 0,
+          runtime: 0,
+          unknown: 0,
+        },
         proofDebtCount: 0,
         issueCount: 0,
         acceptedEvidenceCount: 0,
@@ -1212,6 +1327,24 @@ describe('pet control snapshot', () => {
           stale: false,
         },
         safety: { leakIssueCount: 0, highRiskArmed: false },
+        blockerLens: {
+          primary: 'leak',
+          categories: ['leak', 'target', 'policy'],
+          counts: {
+            auth: 0,
+            target: 1,
+            leak: 1,
+            policy: 1,
+            budget: 0,
+            evidence: 0,
+            review: 0,
+            paused: 0,
+            busy: 0,
+            runtime: 0,
+            unknown: 0,
+          },
+          total: 3,
+        },
         review: {
           grade: 'D',
           decision: 'iterate',
@@ -1241,6 +1374,9 @@ describe('pet control snapshot', () => {
       expect(capsule.targetState).toBe('locked');
       expect(capsule.reviewState).toBe('iterate');
       expect(capsule.blockerCount).toBe(2);
+      expect(capsule.blockerPrimaryCategory).toBe('leak');
+      expect(capsule.blockerCategories).toEqual(['leak', 'target', 'policy']);
+      expect(capsule.blockerCategoryCounts).toMatchObject({ leak: 1, target: 1, policy: 1 });
       expect(capsule.proofDebtCount).toBe(2);
       expect(capsule.evidenceStatus).toBe('stale');
       expect(capsule.evidenceCount).toBe(3);

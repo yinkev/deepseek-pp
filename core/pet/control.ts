@@ -9,6 +9,21 @@ import type {
   AutonomousRunCompletionReview,
 } from '../run/review';
 
+export type PetBlockerCategory =
+  | 'auth'
+  | 'target'
+  | 'leak'
+  | 'policy'
+  | 'budget'
+  | 'evidence'
+  | 'review'
+  | 'paused'
+  | 'busy'
+  | 'runtime'
+  | 'unknown';
+
+export type PetBlockerCategoryCounts = Record<PetBlockerCategory, number>;
+
 export interface PetControlSnapshot {
   schemaVersion: 1;
   generatedAt: number;
@@ -35,6 +50,12 @@ export interface PetControlSnapshot {
     leakIssueCount: number;
     highRiskArmed: boolean;
   };
+  blockerLens: {
+    primary: PetBlockerCategory | null;
+    categories: PetBlockerCategory[];
+    counts: PetBlockerCategoryCounts;
+    total: number;
+  };
   evidence: {
     status: 'none' | 'fresh' | 'stale' | 'expired';
     count: number;
@@ -55,6 +76,21 @@ export interface PetControlSnapshot {
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
+type PetBlockerLens = PetControlSnapshot['blockerLens'];
+
+const PET_BLOCKER_CATEGORY_PRIORITY: PetBlockerCategory[] = [
+  'leak',
+  'target',
+  'auth',
+  'policy',
+  'budget',
+  'evidence',
+  'review',
+  'paused',
+  'busy',
+  'runtime',
+  'unknown',
+];
 
 export function createPetControlSnapshotFromRunCockpit(
   snapshot: AutonomousRunCockpitSnapshot,
@@ -200,6 +236,14 @@ export function createPetControlSnapshotFromRunCockpit(
       leakIssueCount,
       highRiskArmed,
     },
+    blockerLens: createPetBlockerLens({
+      readinessBlockers: blockers,
+      targetStale,
+      leakIssueCount,
+      runPhase,
+      proofDebtCount: 0,
+      issueCount: 0,
+    }),
     evidence,
     review: {
       grade: null,
@@ -233,7 +277,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
     ? isRuntimeDoctorTargetStale(targetStatus)
     : snapshot.target.stale;
 
-  return {
+  const next = {
     ...snapshot,
     readiness: {
       status: report.readiness.status,
@@ -258,6 +302,17 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
     },
     evidence: snapshot.evidence,
     review: snapshot.review,
+  };
+  return {
+    ...next,
+    blockerLens: createPetBlockerLens({
+      readinessBlockers: next.readiness.blockers,
+      targetStale: next.target.stale,
+      leakIssueCount: next.safety.leakIssueCount,
+      runPhase: next.run.phase,
+      proofDebtCount: next.review.proofDebtCount,
+      issueCount: next.review.issueCount,
+    }),
   };
 }
 
@@ -325,7 +380,7 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
   const acceptedEvidenceCount = review.acceptedEvidenceIds.length;
   const canFinalize = review.decision === 'pass';
 
-  return {
+  const next = {
     ...snapshot,
     review: {
       grade: review.grade,
@@ -336,6 +391,75 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
       canFinalize,
     },
   };
+  return {
+    ...next,
+    blockerLens: createPetBlockerLens({
+      readinessBlockers: next.readiness.blockers,
+      targetStale: next.target.stale,
+      leakIssueCount: next.safety.leakIssueCount,
+      runPhase: next.run.phase,
+      proofDebtCount: next.review.proofDebtCount,
+      issueCount: next.review.issueCount,
+    }),
+  };
+}
+
+function createPetBlockerLens(input: {
+  readinessBlockers: readonly string[];
+  targetStale: boolean;
+  leakIssueCount: number;
+  runPhase: PetControlSnapshot['run']['phase'];
+  proofDebtCount: number;
+  issueCount: number;
+}): PetBlockerLens {
+  const counts = createEmptyBlockerCounts();
+  for (const blocker of input.readinessBlockers) {
+    counts[classifyPetBlocker(blocker)] += 1;
+  }
+  if (input.targetStale && counts.target === 0) counts.target = 1;
+  if (input.leakIssueCount > 0 && counts.leak === 0) counts.leak = input.leakIssueCount;
+  if (input.runPhase === 'blocked' && counts.review === 0 && counts.paused === 0) counts.review = 1;
+  if (input.proofDebtCount > 0 && counts.evidence === 0) counts.evidence = input.proofDebtCount;
+  if (input.issueCount > 0 && counts.review === 0) counts.review = input.issueCount;
+
+  const categories = PET_BLOCKER_CATEGORY_PRIORITY.filter((category) => counts[category] > 0);
+  return {
+    primary: categories[0] ?? null,
+    categories,
+    counts,
+    total: categories.reduce((sum, category) => sum + counts[category], 0),
+  };
+}
+
+function createEmptyBlockerCounts(): PetBlockerCategoryCounts {
+  return {
+    auth: 0,
+    target: 0,
+    leak: 0,
+    policy: 0,
+    budget: 0,
+    evidence: 0,
+    review: 0,
+    paused: 0,
+    busy: 0,
+    runtime: 0,
+    unknown: 0,
+  };
+}
+
+function classifyPetBlocker(blocker: string): PetBlockerCategory {
+  const normalized = blocker.toLowerCase();
+  if (/(leak|secret|quarantine|storage_leak)/.test(normalized)) return 'leak';
+  if (/(target|lease|browser_control|browser_target|tab|origin|controllable)/.test(normalized)) return 'target';
+  if (/(auth|login|session|credential|api_key|web_auth|rejected)/.test(normalized)) return 'auth';
+  if (/(policy|approval|manual|deny|denied|permission)/.test(normalized)) return 'policy';
+  if (/(budget|wall|model_turn|tool_call|prompt_bytes|observation_bytes|no_progress|same_error)/.test(normalized)) return 'budget';
+  if (/(evidence|proof|screenshot|freshness|stale_evidence|required_evidence)/.test(normalized)) return 'evidence';
+  if (/(review|grade|completion|iterate|iteration)/.test(normalized)) return 'review';
+  if (/(pause|paused|interrupted|stop|cancel)/.test(normalized)) return 'paused';
+  if (/(busy|preparing|rate|cooldown|retry)/.test(normalized)) return 'busy';
+  if (/(runtime|content_script|storage|doctor|mcp|native|provider)/.test(normalized)) return 'runtime';
+  return 'unknown';
 }
 
 export type PetHandoffNextAction =
@@ -359,6 +483,9 @@ export interface PetHandoffCapsule {
   targetLeaseExpiresInMs: number | null;
   reviewState: 'none' | 'pass' | 'iterate' | 'fail';
   blockerCount: number;
+  blockerPrimaryCategory: PetBlockerCategory | null;
+  blockerCategories: PetBlockerCategory[];
+  blockerCategoryCounts: PetBlockerCategoryCounts;
   proofDebtCount: number;
   issueCount: number;
   acceptedEvidenceCount: number;
@@ -392,6 +519,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   }
 
   const blockerCount = readiness.blockers.length;
+  const blockerLens = snapshot.blockerLens;
   const proofDebtCount = review.proofDebtCount;
   const issueCount = review.issueCount;
   const acceptedEvidenceCount = review.acceptedEvidenceCount;
@@ -431,6 +559,9 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     targetLeaseExpiresInMs: target.leaseExpiresInMs,
     reviewState,
     blockerCount,
+    blockerPrimaryCategory: blockerLens.primary,
+    blockerCategories: blockerLens.categories,
+    blockerCategoryCounts: blockerLens.counts,
     proofDebtCount,
     issueCount,
     acceptedEvidenceCount,
