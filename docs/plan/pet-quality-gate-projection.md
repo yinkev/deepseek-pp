@@ -20,10 +20,10 @@ Expose autonomous quality-gate decisions in the pet snapshot and handoff capsule
 | 3 | Blocked quality gates project safe status, reason, latest status, sequence, coverage counts, grade, and verification result | `projects blocked quality gates into safe pet and handoff metadata` | covered |
 | 4 | Blocked quality gates appear in the blocker lens as review blockers | same blocked projection test asserts `blockerLens.primary = review` | covered |
 | 5 | Handoff capsule fields agree with the merged pet snapshot | same blocked projection test compares every handoff quality-gate field | covered |
-| 6 | Blocked quality gates change handoff `nextAction` to `review_blocker` behind leak/target priority | same blocked projection test, with target locked and no leaks | covered |
+| 6 | Blocked quality gates change handoff `nextAction` to `review_blocker`, but leak and stale/missing target still outrank it, and blocked gates outrank finalization | `blocked quality gates respect higher-priority leak and target actions and override finalize` plus blocked projection test | covered |
 | 7 | Warning and clear gates are informational and do not alter `nextAction` | `warning and clear quality gates are informational and do not alter nextAction priority` | covered |
 | 8 | No-gate decisions and malformed numeric fields normalize to bounded safe metadata | `normalizes no-gate decisions and malformed numeric fields to safe metadata` | covered |
-| 9 | Raw gate ids, commands, reviewer prose, URLs, and secrets never reach pet or handoff JSON | quality-gate privacy false-positive probe | covered |
+| 9 | Raw gate ids, commands, reviewer prose, URLs, and secrets never reach pet or handoff JSON | quality-gate privacy false-positive probe includes secret and non-secret URL shapes plus exact negative assertions | covered |
 
 ## Mechanism
 

@@ -2650,6 +2650,36 @@ describe('pet control snapshot', () => {
       });
     });
 
+    it('blocked quality gates respect higher-priority leak and target actions and override finalize', () => {
+      const blockedDecision = createQualityGateDecision({
+        blocked: true,
+        reason: 'gate_blocked',
+        latestGateStatus: 'blocked',
+      });
+
+      const leak = mergeAutonomousQualityGateDecisionIntoSnapshot(createBaseForHandoff({
+        safety: { leakIssueCount: 1, highRiskArmed: false },
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 3, canFinalize: true },
+      }), blockedDecision);
+      expect(createPetHandoffCapsule(leak).nextAction).toBe('open_runtime_doctor');
+
+      const staleTarget = mergeAutonomousQualityGateDecisionIntoSnapshot(createBaseForHandoff({
+        target: { locked: true, stale: true },
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 3, canFinalize: true },
+      }), blockedDecision);
+      expect(createPetHandoffCapsule(staleTarget).nextAction).toBe('open_target');
+
+      const finalizable = mergeAutonomousQualityGateDecisionIntoSnapshot(createBaseForHandoff({
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'done' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 3, canFinalize: true },
+      }), blockedDecision);
+      expect(createPetHandoffCapsule(finalizable).nextAction).toBe('review_blocker');
+    });
+
     it('warning and clear quality gates are informational and do not alter nextAction priority', () => {
       const base = createBaseForHandoff({
         run: { active: true, phase: 'working' },
@@ -2722,9 +2752,10 @@ describe('pet control snapshot', () => {
         commandSummary: 'SECRET_SUMMARY',
         reviewerProse: 'reviewer says password=SECRET_PASSWORD',
         privateUrl: 'https://example.com/private?token=SECRET_TOKEN',
+        publicUrlWithoutSecret: 'https://example.com/public-gate-report',
       } as AutonomousRunQualityGateDecision & Record<string, unknown>;
       const sourceJson = JSON.stringify(decisionWithSecrets);
-      expect(sourceJson).toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN/);
+      expect(sourceJson).toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|example\.com\/private|example\.com\/public-gate-report/);
 
       const merged = mergeAutonomousQualityGateDecisionIntoSnapshot(snap, decisionWithSecrets);
       const capsule = createPetHandoffCapsule(merged);
@@ -2733,8 +2764,8 @@ describe('pet control snapshot', () => {
 
       expect(merged.qualityGate.status).toBe('blocked');
       expect(capsule.qualityGateSelfReviewGrade).toBe('F');
-      expect(petJson).not.toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|private\\?token/);
-      expect(capsuleJson).not.toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|private\\?token/);
+      expect(petJson).not.toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|example\.com|private\?token|public-gate-report/);
+      expect(capsuleJson).not.toMatch(/SECRET_GATE_ID_123|SECRET_COMMAND|SECRET_SUMMARY|SECRET_PASSWORD|SECRET_TOKEN|example\.com|private\?token|public-gate-report/);
     });
   });
 
