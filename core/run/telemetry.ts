@@ -50,6 +50,7 @@ interface TelemetryHandles {
   stepIds: Map<string, string>;
   evidenceIds: Map<string, string>;
   targetLeaseIds: Map<string, string>;
+  rawIds: string[];
 }
 
 interface SafeVerificationCommand {
@@ -138,24 +139,24 @@ export function createAutonomousRunTelemetryPackage(
   const targetLeases = state.targetLeases
     .filter((lease) => lease.runId === run.id)
     .sort(compareTargetLeases);
-  const handles = createTelemetryHandles(steps, evidence, targetLeases);
-  const rootDir = normalizeRootDir(options.rootDir, handles.runId);
-  const verification = sanitizeVerification(options.verification);
+  const handles = createTelemetryHandles(run, steps, evidence, targetLeases);
+  const verification = sanitizeVerification(options.verification, handles);
   const verificationSummary = createVerificationSummary(run, steps, verification);
   const commits = sanitizeCommits(options.commits, handles);
+  const safeRootDir = normalizeRootDir(options.rootDir, handles.runId, handles);
 
   return {
     runId: handles.runId,
-    rootDir,
+    rootDir: safeRootDir,
     files: [
-      jsonFile(rootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, verification, commits, generatedAt, handles, verificationSummary)),
-      jsonFile(rootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
-      ndjsonFile(rootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
-      ndjsonFile(rootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
-      ndjsonFile(rootDir, 'target-leases.ndjson', targetLeases.map((lease) => toTargetLeaseExport(lease, handles))),
-      jsonFile(rootDir, 'verification.json', { schemaVersion: 1, generatedAt, summary: verificationSummary, commands: verification }),
-      ndjsonFile(rootDir, 'commits.ndjson', commits),
-      markdownFile(rootDir, 'report.md', createReport(run, steps, evidence, targetLeases, commits, generatedAt, handles, verificationSummary)),
+      jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, verification, commits, generatedAt, handles, verificationSummary)),
+      jsonFile(safeRootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
+      ndjsonFile(safeRootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
+      ndjsonFile(safeRootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
+      ndjsonFile(safeRootDir, 'target-leases.ndjson', targetLeases.map((lease) => toTargetLeaseExport(lease, handles))),
+      jsonFile(safeRootDir, 'verification.json', { schemaVersion: 1, generatedAt, summary: verificationSummary, commands: verification }),
+      ndjsonFile(safeRootDir, 'commits.ndjson', commits),
+      markdownFile(safeRootDir, 'report.md', createReport(run, steps, evidence, targetLeases, commits, generatedAt, handles, verificationSummary)),
     ],
   };
 }
@@ -184,7 +185,7 @@ function createManifest(
       startedAt: run.startedAt,
       completedAt: run.completedAt,
       updatedAt: run.updatedAt,
-      error: run.error ? toSafeError(run.error) : null,
+      error: run.error ? toSafeError(run.error, handles) : null,
     },
     counts: {
       steps: steps.length,
@@ -236,7 +237,7 @@ function toStepExport(step: AutonomousRunStep, handles: TelemetryHandles) {
     evidenceRefCount: step.evidenceRefs.length,
     progressScore: step.progressScore,
     proofDeltaCount: step.proofDelta.length,
-    error: step.error ? toSafeError(step.error) : null,
+    error: step.error ? toSafeError(step.error, handles) : null,
     startedAt: step.startedAt,
     endedAt: step.endedAt,
   };
@@ -256,7 +257,7 @@ function toEvidenceExport(record: AutonomousEvidenceRecord, handles: TelemetryHa
     source: {
       hasTab: typeof record.source.tabId === 'number',
       hasWindow: typeof record.source.windowId === 'number',
-      toolName: sanitizeOptionalString(record.source.toolName, 80),
+      toolName: sanitizeOptionalString(record.source.toolName, 80, handles),
       automationIdPresent: typeof record.source.automationId === 'string',
       automationRunIdPresent: typeof record.source.automationRunId === 'string',
     },
@@ -305,21 +306,21 @@ function createReport(
   ].join('\n');
 }
 
-function toSafeError(error: NonNullable<AutonomousRun['error']>): SafeError {
+function toSafeError(error: NonNullable<AutonomousRun['error']>, handles: TelemetryHandles): SafeError {
   return {
-    code: sanitizeToken(error.code, 120),
+    code: sanitizeToken(error.code, 120, handles),
     phase: error.phase,
     retryable: error.retryable,
     at: error.at,
   };
 }
 
-function sanitizeVerification(input: readonly AutonomousRunTelemetryVerification[] | null | undefined): SafeVerificationCommand[] {
+function sanitizeVerification(input: readonly AutonomousRunTelemetryVerification[] | null | undefined, handles: TelemetryHandles): SafeVerificationCommand[] {
   if (!Array.isArray(input)) return [];
   return input.map((item) => {
     const exitCode = normalizeInteger(item.exitCode) ?? 1;
     return {
-      command: sanitizeOptionalString(item.command, 200) ?? '',
+      command: sanitizeOptionalString(item.command, 200, handles) ?? '',
       exitCode,
       durationMs: normalizeNonNegativeInteger(item.durationMs),
       passed: item.passed === false ? false : exitCode === 0,
@@ -363,8 +364,8 @@ function createVerificationSummary(
 function sanitizeCommits(input: readonly AutonomousRunTelemetryCommit[] | null | undefined, handles: TelemetryHandles) {
   if (!Array.isArray(input)) return [];
   return input.map((item) => ({
-    sha: sanitizeToken(item.sha, 80),
-    message: sanitizeOptionalString(item.message ?? '', 200) ?? '',
+    sha: sanitizeToken(item.sha, 80, handles),
+    message: sanitizeOptionalString(item.message ?? '', 200, handles) ?? '',
     filesChanged: normalizeNonNegativeInteger(item.filesChanged),
     linkedStepId: typeof item.linkedStepId === 'string' ? handles.stepIds.get(item.linkedStepId) ?? null : null,
   }));
@@ -392,16 +393,44 @@ function markdownFile(rootDir: string, name: string, content: string): Autonomou
 }
 
 function createTelemetryHandles(
+  run: AutonomousRun,
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
 ): TelemetryHandles {
+  const rawIds = collectDurableIds(run, steps, evidence, targetLeases);
   return {
     runId: 'run-1',
     stepIds: createHandleMap(steps.map((step) => step.id), 'step'),
     evidenceIds: createHandleMap(evidence.map((record) => record.id), 'evidence'),
     targetLeaseIds: createHandleMap(targetLeases.map((lease) => lease.id), 'target-lease'),
+    rawIds,
   };
+}
+
+function collectDurableIds(
+  run: AutonomousRun,
+  steps: readonly AutonomousRunStep[],
+  evidence: readonly AutonomousEvidenceRecord[],
+  targetLeases: readonly AutonomousTargetLease[],
+): string[] {
+  const ids = new Set<string>([run.id]);
+  if (run.targetLeaseId) ids.add(run.targetLeaseId);
+  if (run.checkpoint.latestStepId) ids.add(run.checkpoint.latestStepId);
+  for (const step of steps) {
+    ids.add(step.id);
+    for (const id of step.toolCallIds) ids.add(id);
+    for (const id of step.observationRefs) ids.add(id);
+    for (const id of step.evidenceRefs) ids.add(id);
+    if (step.modelTurnId) ids.add(step.modelTurnId);
+  }
+  for (const record of evidence) {
+    ids.add(record.id);
+    if (record.leaseId) ids.add(record.leaseId);
+    for (const id of record.refs) ids.add(id);
+  }
+  for (const lease of targetLeases) ids.add(lease.id);
+  return [...ids].filter((id) => id.length > 0).sort((a, b) => b.length - a.length);
 }
 
 function createHandleMap(ids: readonly string[], prefix: string): Map<string, string> {
@@ -410,8 +439,8 @@ function createHandleMap(ids: readonly string[], prefix: string): Map<string, st
   return output;
 }
 
-function normalizeRootDir(input: string | null | undefined, runHandle: string): string {
-  const safeBase = sanitizeOptionalString(input || '.runs', 240) ?? '.runs';
+function normalizeRootDir(input: string | null | undefined, runHandle: string, handles?: TelemetryHandles): string {
+  const safeBase = sanitizeOptionalString(input || '.runs', 240, handles) ?? '.runs';
   const base = sanitizePathSegment(safeBase);
   return `${base}/${sanitizePathSegment(runHandle)}`;
 }
@@ -427,16 +456,26 @@ function sanitizePathSegment(value: string): string {
   return cleaned || '.runs';
 }
 
-function sanitizeOptionalString(value: string | null | undefined, maxLength: number): string | null {
+function sanitizeOptionalString(value: string | null | undefined, maxLength: number, handles?: TelemetryHandles): string | null {
   if (typeof value !== 'string' || value.length === 0) return null;
   const redacted = (redactDurableToolString(value) ?? '')
     .replace(GENERIC_URL_PATTERN, '[redacted:url]')
     .replace(SENSITIVE_ASSIGNMENT_PATTERN, '[redacted:secret]');
-  return redacted.slice(0, maxLength);
+  const safe = redactDurableIds(redacted, handles);
+  return safe.slice(0, maxLength);
 }
 
-function sanitizeToken(value: string, maxLength: number): string {
-  return (sanitizeOptionalString(value, maxLength) ?? '').replace(/[^A-Za-z0-9._:-]/g, '_');
+function redactDurableIds(value: string, handles?: TelemetryHandles): string {
+  if (!handles) return value;
+  let output = value;
+  for (const id of handles.rawIds) {
+    output = output.split(id).join('[redacted:id]');
+  }
+  return output;
+}
+
+function sanitizeToken(value: string, maxLength: number, handles?: TelemetryHandles): string {
+  return (sanitizeOptionalString(value, maxLength, handles) ?? '').replace(/[^A-Za-z0-9._:-]/g, '_');
 }
 
 function compareSteps(a: AutonomousRunStep, b: AutonomousRunStep): number {

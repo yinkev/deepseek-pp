@@ -154,6 +154,49 @@ describe('autonomous run telemetry package', () => {
     expect(readJson(first, 'manifest.json').generatedAt).toBe(state.runs[0].updatedAt);
   });
 
+  it('redacts plain durable IDs from paths and free-form telemetry strings', () => {
+    const error = createRunError('failed-durable-run-raw-abc123-durable-step-raw-abc123');
+    const state = createState({
+      runId: 'durable-run-raw-abc123',
+      step1Id: 'durable-step-raw-abc123-plan',
+      step2Id: 'durable-step-raw-abc123',
+      leaseId: 'durable-lease-raw-abc123',
+      evidenceId: 'durable-evidence-raw-abc123',
+      modelTurnId: 'durable-model-turn-raw-abc123',
+      toolCallId: 'durable-tool-call-raw-abc123',
+      observationRef: 'durable-observation-raw-abc123',
+      evidenceRef: 'durable-evidence-raw-abc123',
+      evidenceSourceRef: 'durable-ref-raw-abc123',
+      sourceToolName: 'tool-durable-step-raw-abc123',
+      runError: error,
+      step2Error: error,
+    });
+    const pkg = createAutonomousRunTelemetryPackage(state, 'durable-run-raw-abc123', {
+      rootDir: '.runs/durable-run-raw-abc123',
+      verification: [{ command: 'check durable-run-raw-abc123 durable-step-raw-abc123', exitCode: 1 }],
+      commits: [{
+        sha: 'durable-run-raw-abc123',
+        message: 'commit durable-run-raw-abc123 durable-step-raw-abc123',
+        linkedStepId: 'durable-step-raw-abc123',
+      }],
+    });
+
+    const source = JSON.stringify(state);
+    expect(source).toMatch(/durable-run-raw-abc123|durable-step-raw-abc123|durable-tool-call-raw-abc123/);
+
+    const output = JSON.stringify(pkg);
+    expect(output).not.toMatch(/durable-run-raw-abc123|durable-step-raw-abc123|durable-lease-raw-abc123|durable-evidence-raw-abc123|durable-tool-call-raw-abc123|durable-model-turn-raw-abc123|durable-observation-raw-abc123|durable-ref-raw-abc123/);
+    expect(pkg?.rootDir).toBe('.runs/_redacted_id_/run-1');
+    expect(readJson(pkg, 'manifest.json').run.error.code).toContain('_redacted:id_');
+    expect(readJson(pkg, 'verification.json').commands[0].command).toContain('[redacted:id]');
+    expect(readNdjson(pkg, 'commits.ndjson')[0]).toMatchObject({
+      sha: '_redacted:id_',
+      message: 'commit [redacted:id] [redacted:id]',
+      linkedStepId: 'step-2',
+    });
+    expect(readNdjson(pkg, 'evidence.ndjson')[0].source.toolName).toBe('tool-[redacted:id]');
+  });
+
   it('fails verification summary when durable run state failed despite passing commands', () => {
     const error = createRunError('Token=secret failed verification');
     const state = createState({
@@ -213,6 +256,12 @@ function createState(overrides: {
   step2Id?: string;
   leaseId?: string;
   evidenceId?: string;
+  modelTurnId?: string;
+  toolCallId?: string;
+  observationRef?: string;
+  evidenceRef?: string;
+  evidenceSourceRef?: string;
+  sourceToolName?: string;
   secretGoal?: string;
   secretSummary?: string;
   secretEvidenceSummary?: string;
@@ -226,6 +275,7 @@ function createState(overrides: {
   const step2Id = overrides.step2Id ?? 'step-2';
   const leaseId = overrides.leaseId ?? 'lease-1';
   const evidenceId = overrides.evidenceId ?? 'evidence-1';
+  const evidenceRef = overrides.evidenceRef ?? evidenceId;
   return {
     version: 1,
     runs: [
@@ -279,10 +329,10 @@ function createState(overrides: {
         seq: 2,
         phase: 'verification',
         status: overrides.step2Status ?? 'succeeded',
-        modelTurnId: 'model-turn-secret',
-        toolCallIds: ['tool-call-secret'],
-        observationRefs: ['observation-secret'],
-        evidenceRefs: [evidenceId],
+        modelTurnId: overrides.modelTurnId ?? 'model-turn-secret',
+        toolCallIds: [overrides.toolCallId ?? 'tool-call-secret'],
+        observationRefs: [overrides.observationRef ?? 'observation-secret'],
+        evidenceRefs: [evidenceRef],
         progressScore: 1,
         proofDelta: ['tests pass with secret token'],
         error: overrides.step2Error ?? null,
@@ -332,11 +382,11 @@ function createState(overrides: {
         capturedAt: 170,
         expiresAt: 970,
         summary: overrides.secretEvidenceSummary ?? 'shell_output tests pass evidence ok',
-        refs: ['ref-secret-url'],
+        refs: [overrides.evidenceSourceRef ?? 'ref-secret-url'],
         source: {
           tabId: 123,
           windowId: 456,
-          toolName: 'shell_exec',
+          toolName: overrides.sourceToolName ?? 'shell_exec',
           automationId: 'automation-secret',
           automationRunId: 'automation-run-secret',
         },

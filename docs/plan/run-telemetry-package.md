@@ -11,7 +11,7 @@ Create a pure run telemetry exporter that turns the durable autonomous run ledge
 | Omitted `generatedAt` is deterministic. | `uses deterministic generatedAt when omitted` |
 | Manifest exposes safe status, counts, policy modes/counts, budgets, and proof-contract counts. | `creates stable repo-visible telemetry files for one run` |
 | Steps export only IDs, phases, status, timestamps, progress score, counts, and safe error codes. | `creates stable repo-visible telemetry files for one run` |
-| Exported run, step, evidence, and target lease IDs are package-local opaque handles, not raw durable IDs. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
+| Exported run, step, evidence, target lease IDs, paths, and free-form strings use package-local opaque handles, not raw durable IDs. | `redacts plain durable IDs from paths and free-form telemetry strings` |
 | Evidence export omits summaries, refs, metadata, URLs, and raw target content. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
 | Checkpoint export omits provider IDs and resumable summary text while preserving presence/count signals. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
 | Verification and commit metadata are sanitized and bounded. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
@@ -50,7 +50,7 @@ It exports only safe IDs, counts, booleans, timestamps, status enums, and bounde
 
 ## Adversarial Probe
 
-The privacy probe constructs a state containing bearer tokens, cookies, signed URLs, secret-bearing durable IDs, file refs, data URLs, private target metadata, evidence refs, proof text, and checkpoint text. The source JSON must contain those strings; the telemetry package JSON must omit them.
+The privacy probe constructs states containing bearer tokens, cookies, signed URLs, secret-bearing durable IDs, plain durable IDs, file refs, data URLs, private target metadata, evidence refs, proof text, and checkpoint text. The source JSON must contain those strings; the telemetry package JSON must omit them.
 
 The false-positive success probe constructs a failed durable run with a passing command exit. The command row can still record the raw command exit result, but the package-level verification summary must remain `failed`.
 
@@ -81,6 +81,7 @@ Review-driven iteration applied before this follow-up commit:
 - verification `passed` is derived from the normalized exit code, so a caller cannot mark a nonzero exit as passed;
 - sensitive assignment redaction is case-insensitive and covers token variants before verification/commit strings are exported;
 - exported IDs are package-local handles, so secret-bearing durable IDs cannot leak into files, paths, or reports;
+- plain durable IDs are redacted from caller-provided roots and exported free-form strings such as error codes, commands, commit messages, SHAs, and tool names;
 - package-level verification summary reconciles command results with durable run/step failure state;
 - omitted `generatedAt` is deterministic and uses `run.updatedAt`.
 
