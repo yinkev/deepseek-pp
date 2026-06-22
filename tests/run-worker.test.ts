@@ -86,7 +86,7 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(steps.length).toBeGreaterThan(0);
   });
 
-  it('does not auto-resume paused or blocked runs', async () => {
+  it('does not auto-resume paused or blocked runs (including policy-blocked)', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
     vi.stubGlobal('crypto', { randomUUID: () => 'paused' });
@@ -136,6 +136,39 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
 
     const steps = await getAutonomousRunSteps(run.id);
     expect(steps.some(s => s.phase === 'review')).toBe(true);
+  });
+
+  it('records review step and does not call executor on policy deny (tool not allowlisted, non-empty valid proof contract)', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'policy-deny' });
+
+    const run = await createAutonomousRun({
+      goal: 'Tool not allowlisted',
+      policy: { ...DEFAULT_AUTONOMOUS_RUN_POLICY, allowedTools: ['only_safe'] },
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: ['shell_output'],
+        antiProof: [],
+      },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, { now: 120, actionKind: 'tool_call' });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      policyDecision: 'deny',
+      finalStatus: 'blocked',
+      applied: false,
+      errorCode: 'autonomous_gate_tool_not_allowlisted',
+    });
+    expect(executor).not.toHaveBeenCalled();
+
+    const final = await getAutonomousRunById(run.id);
+    expect(final?.status).toBe('blocked');
+    expect(final?.error?.code).toBe('autonomous_gate_tool_not_allowlisted');
   });
 
   it('calls executor when policy allows, records progress, applies iteration', async () => {

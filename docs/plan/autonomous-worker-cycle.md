@@ -21,11 +21,17 @@ A worker (or test harness) calls the cycle for one advance of a run:
 - Queued: transitions to running.
 - Paused/blocked: noop, no auto-resume.
 - Before executor: runs `reviewAutonomousRunAction` (default model_turn; tool_call supported).
-- Non-allow policy: appends review step with error, does not call executor.
+- Non-allow policy (deny or manual_review):
+  - Appends a metadata-only review step with the policy error.
+  - Explicitly transitions the run to `blocked` with the policy error (durable, independent of proofContract.doneCriteria or iteration review path).
+  - Calls `applyAutonomousRunIterationReview` (will noop because status is no longer 'running'; applied=false is reported honestly).
+  - Executor is never called.
 - Allow: calls executor once.
 - Executor errors: append failed step (no swallow), then apply.
 - After any executor work (or policy block): calls applyAutonomousRunIterationReview.
 - Returns compact result with action, started/advanced/applied, policyDecision, iterationAction, finalStatus, errorCode.
+
+**Policy-block durability guarantee**: When reviewAutonomousRunAction returns non-allow, the final durable status is always 'blocked' with the policy error, even if the run's proofContract has valid non-empty doneCriteria. The iteration gate cannot override this because the status transition happens before the apply.
 
 ## Executor Seam
 
@@ -54,9 +60,10 @@ Worker chooses the simpler repo-fit: executor performs its work (including appen
 Tests prove:
 - noop for missing/terminal/paused/blocked (no executor).
 - queued transitions to running before work.
-- policy deny/manual records review step, skips executor, still applies iteration.
+- policy deny/manual (including with non-empty valid proofContract) records review step, transitions to blocked durably, skips executor, calls apply (applied=false), returns action=block + finalStatus=blocked.
 - allow calls executor, applies iteration.
 - executor throw records failed step, applies, surfaces in result.
+- blocked runs (including policy-blocked) are not auto-resumed on subsequent calls.
 - every non-noop cycle ends with review/apply.
 
 No Chrome, no real execution, no unrelated refactors.
