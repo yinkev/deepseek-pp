@@ -78,6 +78,9 @@ describe('pet control snapshot', () => {
         locked: false,
         label: null,
         stale: false,
+        leaseStatus: 'none',
+        leaseAgeMs: null,
+        leaseExpiresInMs: null,
         ...overrides.target,
       },
       safety: {
@@ -246,7 +249,7 @@ describe('pet control snapshot', () => {
       generatedAt: 123,
       readiness: { status: 'ready', blockers: [], preparing: false },
       run: { active: false, phase: 'idle', nextAction: null },
-      target: { locked: false, label: null, stale: false },
+      target: { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null },
       safety: { leakIssueCount: 0, highRiskArmed: false },
       evidence: {
         status: 'none',
@@ -284,7 +287,7 @@ describe('pet control snapshot', () => {
     expect(pet.readiness).toMatchObject({ status: 'ready', preparing: true });
     expect(pet.run).toMatchObject({ active: true, phase: 'thinking', nextAction: 'Start or continue worker cycle' });
     expect(pet.run.label).toBe('Queued goal');
-    expect(pet.target).toMatchObject({ locked: false, stale: false });
+    expect(pet.target).toMatchObject({ locked: false, stale: false, leaseStatus: 'none' });
     expect(pet.safety).toMatchObject({ leakIssueCount: 0, highRiskArmed: false });
   });
 
@@ -425,9 +428,59 @@ describe('pet control snapshot', () => {
 
     const pet = await getPetControlSnapshot(130);
 
-    expect(pet.target).toMatchObject({ locked: true, label: 'Target locked', stale: false });
+    expect(pet.target).toMatchObject({
+      locked: true,
+      label: 'Target locked',
+      stale: false,
+      leaseStatus: 'active',
+      leaseAgeMs: 15,
+      leaseExpiresInMs: 599_985,
+    });
     const json = JSON.stringify(pet);
     expect(json).not.toMatch(/secret-target-title|secret-target-token|ultra-secret|secret-target.example.com/);
+  });
+
+  it('maps expired target lease into stale target metadata without exposing lease origin/title', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'expired-target-pet' });
+
+    const run = await createAutonomousRun({ goal: 'Expired target', proofContract: createProofContract() }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await upsertAutonomousTargetLease({
+      id: 'expired-target-lease',
+      runId: run.id,
+      tabId: 42,
+      windowId: 1,
+      origin: 'https://expired-target.example.com/path?token=TARGET_SECRET',
+      title: 'expired-target-title with password=ultra-secret',
+      acquiredAt: 100,
+      ttlMs: 5,
+    }, 120);
+
+    const storedJson = JSON.stringify(await getAutonomousRunLedgerSnapshot());
+    expect(storedJson).toMatch(/expired-target-title|TARGET_SECRET|ultra-secret/);
+
+    const pet = await getPetControlSnapshot(10_200);
+    expect(pet.target).toMatchObject({
+      locked: false,
+      label: 'Target stale',
+      stale: true,
+      leaseStatus: 'expired',
+      leaseAgeMs: 10_100,
+      leaseExpiresInMs: 0,
+    });
+
+    const capsule = createPetHandoffCapsule(pet);
+    expect(capsule).toMatchObject({
+      targetState: 'stale',
+      targetLeaseStatus: 'expired',
+      targetLeaseAgeMs: 10_100,
+      targetLeaseExpiresInMs: 0,
+      nextAction: 'open_target',
+    });
+    expect(JSON.stringify(pet)).not.toMatch(/expired-target-title|TARGET_SECRET|ultra-secret|expired-target\.example/);
+    expect(JSON.stringify(capsule)).not.toMatch(/expired-target-title|TARGET_SECRET|ultra-secret|expired-target\.example|expired-target-lease/);
   });
 
   it('privacy probe: secrets in evidence refs/summary/metadata and target lease origin/title do not appear in pet snapshot JSON', async () => {
@@ -646,7 +699,14 @@ describe('pet control snapshot', () => {
     expect(pet.generatedAt).toBe(123);
     expect(pet.run).toBe(base.run);
     expect(pet.readiness).toEqual({ status: 'ready', blockers: [], preparing: false });
-    expect(pet.target).toEqual({ locked: true, label: 'Target locked', stale: false });
+    expect(pet.target).toEqual({
+      locked: true,
+      label: 'Target locked',
+      stale: false,
+      leaseStatus: 'none',
+      leaseAgeMs: null,
+      leaseExpiresInMs: null,
+    });
     expect(pet.safety).toEqual({ leakIssueCount: 4, highRiskArmed: false });
   });
 
@@ -669,7 +729,14 @@ describe('pet control snapshot', () => {
       blockers: ['browser_control_disabled', 'browser_target_not_controllable'],
       preparing: true,
     });
-    expect(pet.target).toEqual({ locked: false, label: 'Target stale', stale: true });
+    expect(pet.target).toEqual({
+      locked: false,
+      label: 'Target stale',
+      stale: true,
+      leaseStatus: 'none',
+      leaseAgeMs: null,
+      leaseExpiresInMs: null,
+    });
   });
 
   it('maps Runtime Doctor target status to generic missing/stale labels only', () => {
@@ -678,10 +745,10 @@ describe('pet control snapshot', () => {
       RuntimeDoctorReport['readiness']['targetStatus'],
       PetControlSnapshot['target'],
     ]> = [
-      ['missing', { locked: false, label: 'Target missing', stale: true }],
-      ['unsupported', { locked: false, label: 'Target stale', stale: true }],
-      ['not_controllable', { locked: false, label: 'Target stale', stale: true }],
-      ['selected_active', { locked: false, label: null, stale: false }],
+      ['missing', { locked: false, label: 'Target missing', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
+      ['unsupported', { locked: false, label: 'Target stale', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
+      ['not_controllable', { locked: false, label: 'Target stale', stale: true, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
+      ['selected_active', { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null }],
     ];
 
     for (const [targetStatus, expected] of targetCases) {
@@ -987,7 +1054,7 @@ describe('pet control snapshot', () => {
         generatedAt: 123,
         readiness: { status: 'ready', blockers: [], preparing: false },
         run: { active: false, label: null, phase: 'idle', nextAction: null },
-        target: { locked: false, label: null, stale: false },
+        target: { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null },
         safety: { leakIssueCount: 0, highRiskArmed: false },
         evidence: { status: 'none', count: 0, freshCount: 0, staleCount: 0, expiredCount: 0, latestCapturedAt: null, latestAgeMs: null },
         review: { grade: null, decision: null, proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 0, canFinalize: false },
@@ -1005,6 +1072,9 @@ describe('pet control snapshot', () => {
         readinessStatus: 'ready',
         runPhase: 'idle',
         targetState: 'none',
+        targetLeaseStatus: 'none',
+        targetLeaseAgeMs: null,
+        targetLeaseExpiresInMs: null,
         reviewState: 'none',
         blockerCount: 0,
         proofDebtCount: 0,

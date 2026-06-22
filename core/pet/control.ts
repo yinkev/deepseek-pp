@@ -27,6 +27,9 @@ export interface PetControlSnapshot {
     locked: boolean;
     label: string | null;
     stale: boolean;
+    leaseStatus: 'none' | 'active' | 'stale' | 'expired' | 'released';
+    leaseAgeMs: number | null;
+    leaseExpiresInMs: number | null;
   };
   safety: {
     leakIssueCount: number;
@@ -70,7 +73,10 @@ export function createPetControlSnapshotFromRunCockpit(
 
   let targetLocked = false;
   let targetLabel: string | null = null;
-  const targetStale = false;
+  let targetStale = false;
+  let targetLeaseStatus: PetControlSnapshot['target']['leaseStatus'] = 'none';
+  let targetLeaseAgeMs: number | null = null;
+  let targetLeaseExpiresInMs: number | null = null;
 
   const leakIssueCount = 0;
   let highRiskArmed = false;
@@ -78,8 +84,14 @@ export function createPetControlSnapshotFromRunCockpit(
 
   if (activeRun) {
     runLabel = activeRun.goal ?? null;
-    targetLocked = !!activeRun.targetLeaseId || (activeRun.targetLeaseCount > 0);
-    targetLabel = targetLocked ? 'Target locked' : null;
+    targetLeaseStatus = activeRun.targetLeaseStatus ?? 'none';
+    targetLeaseAgeMs = activeRun.targetLeaseAgeMs ?? null;
+    targetLeaseExpiresInMs = activeRun.targetLeaseExpiresInMs ?? null;
+    targetLocked = targetLeaseStatus === 'active';
+    targetStale = targetLeaseStatus === 'stale' ||
+      targetLeaseStatus === 'expired' ||
+      targetLeaseStatus === 'released';
+    targetLabel = targetLocked ? 'Target locked' : (targetStale ? 'Target stale' : null);
   }
 
   // Safety defaults conservative; no high risk signal exposed in cockpit snapshot
@@ -180,6 +192,9 @@ export function createPetControlSnapshotFromRunCockpit(
       locked: targetLocked,
       label: targetLabel,
       stale: targetStale,
+      leaseStatus: targetLeaseStatus,
+      leaseAgeMs: targetLeaseAgeMs,
+      leaseExpiresInMs: targetLeaseExpiresInMs,
     },
     safety: {
       leakIssueCount,
@@ -229,6 +244,9 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
       locked: targetLocked,
       label: getRuntimeDoctorTargetLabel(targetStatus, targetLocked, targetStale),
       stale: targetStale,
+      leaseStatus: snapshot.target.leaseStatus,
+      leaseAgeMs: snapshot.target.leaseAgeMs,
+      leaseExpiresInMs: snapshot.target.leaseExpiresInMs,
     },
     safety: {
       leakIssueCount: Math.max(
@@ -336,6 +354,9 @@ export interface PetHandoffCapsule {
   readinessStatus: PetControlSnapshot['readiness']['status'];
   runPhase: PetControlSnapshot['run']['phase'];
   targetState: 'locked' | 'missing' | 'stale' | 'none';
+  targetLeaseStatus: PetControlSnapshot['target']['leaseStatus'];
+  targetLeaseAgeMs: number | null;
+  targetLeaseExpiresInMs: number | null;
   reviewState: 'none' | 'pass' | 'iterate' | 'fail';
   blockerCount: number;
   proofDebtCount: number;
@@ -405,6 +426,9 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     readinessStatus: readiness.status,
     runPhase: run.phase,
     targetState,
+    targetLeaseStatus: target.leaseStatus,
+    targetLeaseAgeMs: target.leaseAgeMs,
+    targetLeaseExpiresInMs: target.leaseExpiresInMs,
     reviewState,
     blockerCount,
     proofDebtCount,

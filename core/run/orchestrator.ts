@@ -14,6 +14,7 @@ import type {
   AutonomousRunStatus,
   AutonomousRunStep,
   AutonomousRunStorageState,
+  AutonomousTargetLease,
 } from './types';
 
 export const AUTONOMOUS_RUN_STARTUP_RECONCILE_THRESHOLD_MS = 5 * 60 * 1000;
@@ -32,6 +33,9 @@ export interface AutonomousRunCockpitRun {
   mode: AutonomousRun['mode'];
   status: AutonomousRunStatus;
   targetLeaseId: string | null;
+  targetLeaseStatus: 'none' | AutonomousTargetLease['status'];
+  targetLeaseAgeMs: number | null;
+  targetLeaseExpiresInMs: number | null;
   createdAt: number;
   startedAt: number | null;
   updatedAt: number;
@@ -174,8 +178,16 @@ function toCockpitRun(run: AutonomousRun, state: AutonomousRunStorageState, now:
     .filter((step) => step.runId === run.id)
     .sort((a, b) => a.seq - b.seq);
   const evidence = state.evidence.filter((record) => record.runId === run.id);
-  const targetLeases = state.targetLeases.filter((lease) => lease.runId === run.id);
+  const targetLeases = state.targetLeases
+    .filter((lease) => lease.runId === run.id)
+    .sort((a, b) => b.acquiredAt - a.acquiredAt);
   const latestStep = steps[steps.length - 1] ?? null;
+  const selectedLease = run.targetLeaseId
+    ? targetLeases.find((lease) => lease.id === run.targetLeaseId) ?? null
+    : targetLeases[0] ?? null;
+  const targetLeaseStatus = getCockpitTargetLeaseStatus(selectedLease, now);
+  const targetLeaseAgeMs = selectedLease ? Math.max(0, now - selectedLease.acquiredAt) : null;
+  const targetLeaseExpiresInMs = selectedLease ? Math.max(0, selectedLease.expiresAt - now) : null;
   const freshEvidenceCount = evidence.filter((record) => record.freshness === 'fresh' && record.expiresAt > now).length;
   const expiredEvidenceCount = evidence.filter((record) => record.freshness === 'expired' || record.expiresAt <= now).length;
   const staleEvidenceCount = evidence.filter((record) => record.freshness === 'stale' && record.expiresAt > now).length;
@@ -189,6 +201,9 @@ function toCockpitRun(run: AutonomousRun, state: AutonomousRunStorageState, now:
     mode: run.mode,
     status: run.status,
     targetLeaseId: run.targetLeaseId,
+    targetLeaseStatus,
+    targetLeaseAgeMs,
+    targetLeaseExpiresInMs,
     createdAt: run.createdAt,
     startedAt: run.startedAt,
     updatedAt: run.updatedAt,
@@ -210,4 +225,13 @@ function toCockpitRun(run: AutonomousRun, state: AutonomousRunStorageState, now:
     targetLeaseCount: targetLeases.length,
     errorCode: run.error?.code ?? null,
   };
+}
+
+function getCockpitTargetLeaseStatus(
+  lease: AutonomousTargetLease | null,
+  now: number,
+): AutonomousRunCockpitRun['targetLeaseStatus'] {
+  if (!lease) return 'none';
+  if (lease.status === 'active' && lease.expiresAt <= now) return 'expired';
+  return lease.status;
 }

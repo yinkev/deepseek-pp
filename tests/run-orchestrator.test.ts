@@ -366,6 +366,9 @@ describe('autonomous run orchestrator startup bridge', () => {
     expect(snapshot.activeRun).toMatchObject({
       id: running.id,
       status: 'running',
+      targetLeaseStatus: 'active',
+      targetLeaseAgeMs: 6_030,
+      targetLeaseExpiresInMs: 593_970,
       stepCount: 1,
       evidenceCount: 2,
       freshEvidenceCount: 1,
