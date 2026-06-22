@@ -76,17 +76,22 @@ export async function executeAutonomousRunCycle(
       observationRefs: policyReview.reason ? [`policy:${policyReview.reason}`] : [],
     }, now);
 
+    // Explicitly transition to blocked using the policy error so that
+    // final durable status is 'blocked' even when proofContract has
+    // valid non-empty doneCriteria (independent of iteration review path).
+    await transitionAutonomousRun(runId, 'blocked', policyReview.error, now);
+
     const iter = await applyAutonomousRunIterationReview({ runId }, now);
     const final = await getAutonomousRunById(runId);
     return makeResult(
-      policyReview.decision === 'deny' ? 'block' : 'block',
+      'block',
       runId,
       started,
       false,
-      iter.applied,
+      iter.applied,  // will be false (apply sees non-running status)
       policyReview.decision,
       iter.review?.action ?? null,
-      final?.status ?? null,
+      final?.status ?? 'blocked',
       policyReview.error?.code ?? null,
     );
   }

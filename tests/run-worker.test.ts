@@ -102,7 +102,7 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
-  it('records review step and does not call executor on policy deny/manual', async () => {
+  it('records review step and does not call executor on policy deny/manual (even with valid non-empty proof contract)', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
     vi.stubGlobal('crypto', { randomUUID: () => 'policy-block' });
@@ -110,6 +110,12 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     const run = await createAutonomousRun({
       goal: 'Policy block',
       policy: { ...DEFAULT_AUTONOMOUS_RUN_POLICY, approvalMode: 'manual_all' },
+      // non-empty valid proof contract: must still durably block from policy, not via empty-proof path
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: ['shell_output'],
+        antiProof: [],
+      },
     }, 100);
     await transitionAutonomousRun(run.id, 'running', null, 110);
 
@@ -119,9 +125,15 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(result).toMatchObject({
       action: 'block',
       policyDecision: 'manual_review',
-      applied: true,
+      finalStatus: 'blocked',
+      applied: false,
     });
     expect(executor).not.toHaveBeenCalled();
+
+    const final = await getAutonomousRunById(run.id);
+    expect(final?.status).toBe('blocked');
+    expect(final?.error?.code).toContain('manual');
+
     const steps = await getAutonomousRunSteps(run.id);
     expect(steps.some(s => s.phase === 'review')).toBe(true);
   });
