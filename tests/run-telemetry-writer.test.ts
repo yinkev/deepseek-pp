@@ -15,13 +15,22 @@ describe('autonomous run telemetry writer', () => {
     expect(writes).toEqual([
       { path: '.runs/run-1/manifest.json', content: '{}\n' },
       { path: '.runs/run-1/report.md', content: '# Report\n' },
+      { path: '.runs/run-1/.complete.json', content: expect.stringContaining('"packageFileCount": 2') },
     ]);
     expect(result).toEqual({
       runId: 'run-1',
       rootDir: '.runs/run-1',
-      fileCount: 2,
-      contentLength: 12,
-      paths: ['.runs/run-1/manifest.json', '.runs/run-1/report.md'],
+      fileCount: 3,
+      contentLength: writes.reduce((total, write) => total + write.content.length, 0),
+      paths: ['.runs/run-1/manifest.json', '.runs/run-1/report.md', '.runs/run-1/.complete.json'],
+    });
+    expect(JSON.parse(writes[2].content)).toMatchObject({
+      schemaVersion: 1,
+      runId: 'run-1',
+      rootDir: '.runs/run-1',
+      packageFileCount: 2,
+      packageContentLength: 12,
+      packagePaths: ['.runs/run-1/manifest.json', '.runs/run-1/report.md'],
     });
   });
 
@@ -47,6 +56,7 @@ describe('autonomous run telemetry writer', () => {
           { path: '.runs/run-1/REPORT.md', content: '# Report\n' },
         ],
       }),
+      createPackage({ files: [{ path: '.runs/run-1/.complete.json', content: '{}\n' }] }),
     ];
 
     for (const pkg of unsafePackages) {
@@ -79,12 +89,27 @@ describe('autonomous run telemetry writer', () => {
     expect(writes).toEqual([
       { path: '.runs/run-1/manifest.json', content: '{}\n' },
       { path: '.runs/run-1/report.md', content: '# Report\n' },
+      { path: '.runs/run-1/.complete.json', content: expect.stringContaining('"packageFileCount": 2') },
     ]);
     expect(result).toMatchObject({
       runId: 'run-1',
       rootDir: '.runs/run-1',
-      paths: ['.runs/run-1/manifest.json', '.runs/run-1/report.md'],
+      paths: ['.runs/run-1/manifest.json', '.runs/run-1/report.md', '.runs/run-1/.complete.json'],
     });
+  });
+
+  it('does not write a completion marker when a package file write fails', async () => {
+    const writes: string[] = [];
+
+    await expect(writeAutonomousRunTelemetryPackage(createPackage(), {
+      writeTextFile(path) {
+        writes.push(path);
+        if (path.endsWith('/report.md')) throw new Error('disk failed');
+      },
+    })).rejects.toThrow(/disk failed/);
+
+    expect(writes).toEqual(['.runs/run-1/manifest.json', '.runs/run-1/report.md']);
+    expect(writes).not.toContain('.runs/run-1/.complete.json');
   });
 });
 

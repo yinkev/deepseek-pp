@@ -396,10 +396,11 @@ describe('autonomous run orchestrator startup bridge', () => {
       status: 'written',
       runId: 'run-1',
       rootDir: '.runs/run-1',
-      fileCount: 8,
+      fileCount: 9,
       errorCode: null,
     });
     expect(writes.map((write) => write.path)).toEqual(result.telemetryResult?.paths);
+    expect(writes[writes.length - 1].path).toBe('.runs/run-1/.complete.json');
     const final = await getAutonomousRunById(run.id);
     const manifest = readTelemetryJson(writes, 'manifest.json');
     const verification = readTelemetryJson(writes, 'verification.json');
@@ -459,13 +460,17 @@ describe('autonomous run orchestrator startup bridge', () => {
       goal: 'Write telemetry failure',
       proofContract: createProofContract(),
     }, 100);
+    const writes: string[] = [];
 
     const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
       now: 120,
       telemetry: {
         target: {
-          writeTextFile() {
-            throw new Error('Authorization: Bearer secret-token from writer');
+          writeTextFile(path) {
+            writes.push(path);
+            if (path.endsWith('/checkpoint.json')) {
+              throw new Error('Authorization: Bearer secret-token from writer');
+            }
           },
         },
       },
@@ -482,6 +487,9 @@ describe('autonomous run orchestrator startup bridge', () => {
       errorCode: 'telemetry_write_failed',
     });
     expect(JSON.stringify(result.telemetryResult)).not.toMatch(/Authorization|Bearer|secret-token/);
+    expect(writes).toContain('.runs/run-1/manifest.json');
+    expect(writes).toContain('.runs/run-1/checkpoint.json');
+    expect(writes).not.toContain('.runs/run-1/.complete.json');
     await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
       status: result.workerResult?.finalStatus,
     });

@@ -16,9 +16,11 @@ export async function writeAutonomousRunTelemetryPackage(
   pkg: AutonomousRunTelemetryPackage,
   target: AutonomousRunTelemetryWriteTarget,
 ): Promise<AutonomousRunTelemetryWriteResult> {
-  const files = validateTelemetryPackage(pkg);
+  const packageFiles = validateTelemetryPackage(pkg);
   const runId = pkg.runId;
   const rootDir = pkg.rootDir;
+  const completionMarker = createCompletionMarker(runId, rootDir, packageFiles);
+  const files = [...packageFiles, completionMarker];
   for (const file of files) {
     await target.writeTextFile(file.path, file.content);
   }
@@ -40,7 +42,8 @@ function validateTelemetryPackage(pkg: AutonomousRunTelemetryPackage): readonly 
   }
 
   const expectedPrefix = `${pkg.rootDir}/`;
-  const seen = new Set<string>();
+  const completionPath = `${pkg.rootDir}/.complete.json`;
+  const seen = new Set<string>([completionPath.toLowerCase()]);
   const validated: AutonomousRunTelemetryFile[] = [];
   for (const file of pkg.files) {
     if (!file.path.startsWith(expectedPrefix)) {
@@ -57,6 +60,25 @@ function validateTelemetryPackage(pkg: AutonomousRunTelemetryPackage): readonly 
     validated.push({ path: file.path, content: file.content });
   }
   return validated;
+}
+
+function createCompletionMarker(
+  runId: string,
+  rootDir: string,
+  files: readonly AutonomousRunTelemetryFile[],
+): AutonomousRunTelemetryFile {
+  const marker = {
+    schemaVersion: 1,
+    runId,
+    rootDir,
+    packageFileCount: files.length,
+    packageContentLength: files.reduce((total, file) => total + file.content.length, 0),
+    packagePaths: files.map((file) => file.path),
+  };
+  return {
+    path: `${rootDir}/.complete.json`,
+    content: `${JSON.stringify(marker, null, 2)}\n`,
+  };
 }
 
 function isSafeRelativePath(value: string): boolean {

@@ -11,6 +11,7 @@ Let `executeAutonomousOrchestratorCycle` optionally export the selected run's po
 | Written telemetry is generated after the worker cycle and agrees with durable final run state. | `writes selected run telemetry after the worker cycle using post-cycle durable state` |
 | No selected runnable run skips telemetry without calling the target. | `skips telemetry when no runnable run is selected` |
 | Writer failures do not throw from the orchestrator and expose only safe error metadata. | `returns safe telemetry failure metadata without leaking writer errors` |
+| Partial writer failures do not produce the final `.complete.json` marker. | `returns safe telemetry failure metadata without leaking writer errors` |
 | Orchestrator telemetry writes preserve existing privacy guarantees. | `keeps orchestrator cycle snapshots private` |
 
 ## Mechanism
@@ -32,7 +33,7 @@ Telemetry is non-blocking for run state:
 - package creation failure returns `status: skipped` with `errorCode: package_unavailable`;
 - writer failure returns `status: failed` with `errorCode: telemetry_write_failed`.
 
-Writer exception messages are intentionally not surfaced.
+Writer exception messages are intentionally not surfaced. Consumers must only trust written telemetry directories that contain the final `.complete.json` marker.
 
 ## Adversarial Probe
 
