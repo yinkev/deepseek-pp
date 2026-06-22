@@ -7,10 +7,12 @@ Add a pure review-lane dispatch planner for autonomous runs. This slice does not
 | Requirement | Coverage |
 | --- | --- |
 | Defaults or non-runnable status return `idle`, no selected roles, `canRunWorker: false`. | `returns idle for defaults or no runnable run and allows no roles` |
+| Non-runnable terminal/paused states ignore stale blocked gates and expose no stale blocking priority/count. | `returns idle for non-runnable runs even with a stale blocked gate` |
 | P1, P2, or block recommendation halts before any dispatch logic. | `halts on P1, P2, or block recommendation before dispatching roles` |
 | Contradictory blocked gate fields fail closed. | `halts on contradictory blocked gate fields before any dispatch` |
 | Attention gate reasons (`active_review`, `failed_lane`, `blocked_lane`) do not halt when `canProceed` is true. | `does not halt on attention gates and can still dispatch` |
 | Active lane count at capacity returns `hold`, no roles, `canRunWorker: true`. | `holds when active lane count is already at maxParallel` |
+| Unknown active lane roles still count against capacity without leaking raw role text. | `counts unknown active lanes against maxParallel without leaking the role` |
 | Queued/running work dispatches implementer first. | `dispatches implementer first for queued or running work` |
 | Worker progress dispatches reviewer when implementer is occupied. | `dispatches reviewer after worker progress when implementer is occupied` |
 | Shell/browser/memory risk dispatches safety. | `dispatches safety for shell, browser, or memory risk` |

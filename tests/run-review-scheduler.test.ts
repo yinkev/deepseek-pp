@@ -21,6 +21,30 @@ describe('autonomous review lane scheduler', () => {
     });
   });
 
+  it('returns idle for non-runnable runs even with a stale blocked gate', () => {
+    expect(planAutonomousReviewLanes({
+      runStatus: 'succeeded',
+      reviewLaneGate: {
+        status: 'blocked',
+        reason: 'p1',
+        canProceed: false,
+        blockingPriority: 'P1',
+        blockingLaneCount: 9,
+      },
+      workerAdvanced: true,
+      risk: { shell: true },
+      oracleRequested: true,
+    })).toEqual({
+      action: 'idle',
+      selectedRoles: [],
+      canRunWorker: false,
+      reason: 'no_runnable_run',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+      maxParallel: 2,
+    });
+  });
+
   it('halts on P1, P2, or block recommendation before dispatching roles', () => {
     const cases = [
       {
@@ -128,6 +152,33 @@ describe('autonomous review lane scheduler', () => {
       reason: 'at_capacity',
       maxParallel: 2,
     });
+  });
+
+  it('counts unknown active lanes against maxParallel without leaking the role', () => {
+    const input = {
+      runStatus: 'queued',
+      maxParallel: 1,
+      lanes: [
+        {
+          role: 'SECRET_UNKNOWN_ROLE',
+          status: 'running',
+          prompt: 'SECRET_PROMPT',
+        },
+      ],
+      workerAdvanced: true,
+      risk: { shell: true },
+    } as any;
+
+    const plan = planAutonomousReviewLanes(input);
+
+    expect(plan).toMatchObject({
+      action: 'hold',
+      selectedRoles: [],
+      canRunWorker: true,
+      reason: 'at_capacity',
+      maxParallel: 1,
+    });
+    expect(JSON.stringify(plan)).not.toMatch(/SECRET_UNKNOWN_ROLE|SECRET_PROMPT/);
   });
 
   it('dispatches implementer first for queued or running work', () => {

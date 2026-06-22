@@ -50,7 +50,7 @@ export interface AutonomousReviewLanePlan {
 }
 
 interface NormalizedReviewLane {
-  role: AutonomousReviewLaneRole;
+  role: AutonomousReviewLaneRole | null;
   status: AutonomousReviewLaneStatus;
 }
 
@@ -67,13 +67,14 @@ export function planAutonomousReviewLanes(
   input: AutonomousReviewLaneSchedulerInput = {},
 ): AutonomousReviewLanePlan {
   const maxParallel = normalizeMaxParallel(input.maxParallel);
+
+  if (!isRunnableRunStatus(input.runStatus)) {
+    return createPlan('idle', [], false, 'no_runnable_run', createNeutralGate(), maxParallel);
+  }
+
   const gate = normalizeReviewLaneGate(input.reviewLaneGate);
   if (gate.blocked) {
     return createPlan('halt', [], false, gate.reason ?? 'review_gate_blocked', gate, maxParallel);
-  }
-
-  if (!isRunnableRunStatus(input.runStatus)) {
-    return createPlan('idle', [], false, 'no_runnable_run', gate, maxParallel);
   }
 
   const lanes = normalizeLanes(input.lanes);
@@ -106,6 +107,15 @@ function createPlan(
     blockingPriority: gate.blockingPriority,
     blockingLaneCount: gate.blockingLaneCount,
     maxParallel,
+  };
+}
+
+function createNeutralGate(): NormalizedGate {
+  return {
+    blocked: false,
+    reason: null,
+    blockingPriority: null,
+    blockingLaneCount: 0,
   };
 }
 
@@ -156,8 +166,7 @@ function normalizeLanes(
     .map((lane) => ({
       role: normalizeRole(lane?.role),
       status: normalizeStatus(lane?.status),
-    }))
-    .filter((lane): lane is NormalizedReviewLane => lane.role !== null);
+    }));
 }
 
 function normalizeRole(role: unknown): AutonomousReviewLaneRole | null {
