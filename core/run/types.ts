@@ -35,6 +35,13 @@ export type AutonomousRunObservationKind =
   | 'memory'
   | 'model_text';
 
+export type AutonomousTargetLeaseId = string;
+export type AutonomousEvidenceId = string;
+
+export type AutonomousTargetLeaseStatus = 'active' | 'released' | 'expired' | 'stale';
+
+export type AutonomousEvidenceFreshness = 'fresh' | 'stale' | 'expired';
+
 export interface AutonomousRunBudgets {
   maxWallMs: number;
   maxModelTurns: number;
@@ -95,6 +102,43 @@ export interface AutonomousRun {
   updatedAt: number;
 }
 
+export interface AutonomousTargetLease {
+  id: AutonomousTargetLeaseId;
+  runId: AutonomousRunId;
+  status: AutonomousTargetLeaseStatus;
+  label: string;
+  tabId: number;
+  windowId: number;
+  origin: string;
+  title: string;
+  acquiredAt: number;
+  expiresAt: number;
+  lastVerifiedAt: number | null;
+  releasedAt: number | null;
+}
+
+export interface AutonomousEvidenceSource {
+  tabId?: number;
+  windowId?: number;
+  toolName?: string;
+  automationId?: string;
+  automationRunId?: string;
+}
+
+export interface AutonomousEvidenceRecord {
+  id: AutonomousEvidenceId;
+  runId: AutonomousRunId;
+  leaseId: AutonomousTargetLeaseId | null;
+  kind: AutonomousRunObservationKind;
+  freshness: AutonomousEvidenceFreshness;
+  capturedAt: number;
+  expiresAt: number;
+  summary: string;
+  refs: string[];
+  source: AutonomousEvidenceSource;
+  metadata: Record<string, unknown> | null;
+}
+
 export interface AutonomousRunStep {
   id: AutonomousRunStepId;
   runId: AutonomousRunId;
@@ -136,6 +180,30 @@ export interface AutonomousRunUpdateInput {
   completedAt?: number | null;
 }
 
+export interface AutonomousTargetLeaseCreateInput {
+  id?: AutonomousTargetLeaseId;
+  runId: AutonomousRunId;
+  label?: string;
+  tabId: number;
+  windowId: number;
+  origin: string;
+  title?: string;
+  ttlMs?: number;
+  acquiredAt?: number;
+}
+
+export interface AutonomousEvidenceCreateInput {
+  id?: AutonomousEvidenceId;
+  leaseId?: AutonomousTargetLeaseId | null;
+  kind: AutonomousRunObservationKind;
+  capturedAt?: number;
+  ttlMs?: number;
+  summary?: string;
+  refs?: string[];
+  source?: AutonomousEvidenceSource;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface AutonomousRunStepCreateInput {
   id?: AutonomousRunStepId;
   phase: AutonomousRunPhase;
@@ -155,4 +223,6 @@ export interface AutonomousRunStorageState {
   version: 1;
   runs: AutonomousRun[];
   steps: AutonomousRunStep[];
+  targetLeases: AutonomousTargetLease[];
+  evidence: AutonomousEvidenceRecord[];
 }

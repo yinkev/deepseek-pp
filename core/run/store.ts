@@ -3,7 +3,13 @@ import {
   isTerminalRunStatus,
   shouldTransitionAutonomousRun,
 } from './kernel';
+import {
+  DEFAULT_AUTONOMOUS_EVIDENCE_TTL_MS,
+  DEFAULT_AUTONOMOUS_TARGET_LEASE_TTL_MS,
+} from './target';
 import type {
+  AutonomousEvidenceCreateInput,
+  AutonomousEvidenceRecord,
   AutonomousRun,
   AutonomousRunBudgets,
   AutonomousRunCheckpoint,
@@ -16,6 +22,8 @@ import type {
   AutonomousRunStepCreateInput,
   AutonomousRunStorageState,
   AutonomousRunUpdateInput,
+  AutonomousTargetLease,
+  AutonomousTargetLeaseCreateInput,
 } from './types';
 
 export const AUTONOMOUS_RUN_STORAGE_KEY = 'deepseek_pp_autonomous_runs_v1';
@@ -23,6 +31,8 @@ export const AUTONOMOUS_RUN_STORAGE_KEY = 'deepseek_pp_autonomous_runs_v1';
 const STORAGE_VERSION = 1;
 const MAX_RUNS = 100;
 const MAX_STEPS = 1_000;
+const MAX_TARGET_LEASES = 200;
+const MAX_EVIDENCE_RECORDS = 500;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_LIST_ITEMS = 32;
 const MAX_DETAILS_DEPTH = 3;
@@ -31,6 +41,7 @@ const MAX_DETAILS_ARRAY_ITEMS = 16;
 const MAX_DETAILS_STRING_LENGTH = 512;
 const MAX_DETAILS_JSON_LENGTH = 4_000;
 const MUTATION_LOCK_NAME = `${AUTONOMOUS_RUN_STORAGE_KEY}:mutation`;
+const GENERIC_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]+/gi;
 
 export const DEFAULT_AUTONOMOUS_RUN_BUDGETS: AutonomousRunBudgets = {
   maxWallMs: 2 * 60 * 60 * 1000,
@@ -64,6 +75,8 @@ const EMPTY_STATE: AutonomousRunStorageState = {
   version: STORAGE_VERSION,
   runs: [],
   steps: [],
+  targetLeases: [],
+  evidence: [],
 };
 
 let storageMutationQueue: Promise<unknown> = Promise.resolve();
@@ -95,6 +108,8 @@ export async function createAutonomousRun(
       ...state,
       runs: pruneRuns([run, ...state.runs.filter((stored) => stored.id !== run.id)]),
       steps: state.steps.filter((step) => step.runId !== run.id),
+      targetLeases: state.targetLeases.filter((lease) => lease.runId !== run.id),
+      evidence: state.evidence.filter((record) => record.runId !== run.id),
     },
     result: run,
   }));
@@ -232,6 +247,7 @@ export async function appendAutonomousRunStep(
       : item);
     return {
       state: {
+        ...state,
         runs: pruneRuns(runs),
         steps: pruneSteps([step, ...state.steps.filter((stored) => stored.id !== step.id)]),
         version: STORAGE_VERSION,
@@ -270,6 +286,130 @@ export async function updateAutonomousRunCheckpoint(
       write: updated !== null,
     };
   });
+}
+
+export async function upsertAutonomousTargetLease(
+  input: AutonomousTargetLeaseCreateInput,
+  now = Date.now(),
+): Promise<AutonomousTargetLease | null> {
+  return mutateAutonomousRunState((state) => {
+    const run = state.runs.find((item) => item.id === input.runId);
+    if (!run || isTerminalRunStatus(run.status)) return { state, result: null, write: false };
+    const lease = normalizeTargetLease({
+      id: input.id ?? createId('lease'),
+      runId: input.runId,
+      status: 'active',
+      label: input.label ?? 'Dev++',
+      tabId: input.tabId,
+      windowId: input.windowId,
+      origin: input.origin,
+      title: input.title ?? '',
+      acquiredAt: input.acquiredAt ?? now,
+      expiresAt: (input.acquiredAt ?? now) + normalizeLeaseTtlMs(input.ttlMs),
+      lastVerifiedAt: now,
+      releasedAt: null,
+    });
+    if (!lease) return { state, result: null, write: false };
+    const runs = state.runs.map((item) => item.id === input.runId
+      ? { ...item, targetLeaseId: lease.id, updatedAt: now }
+      : item);
+    const priorLeases = state.targetLeases.map((stored) => {
+      if (stored.runId !== input.runId || stored.id === lease.id || stored.status !== 'active') return stored;
+      return normalizeTargetLease({
+        ...stored,
+        status: 'stale',
+        releasedAt: now,
+        expiresAt: Math.min(stored.expiresAt, now),
+      }) ?? stored;
+    });
+    return {
+      state: {
+        ...state,
+        runs: pruneRuns(runs),
+        targetLeases: pruneTargetLeases([lease, ...priorLeases.filter((stored) => stored.id !== lease.id)]),
+      },
+      result: lease,
+    };
+  });
+}
+
+export async function releaseAutonomousTargetLease(
+  id: string,
+  now = Date.now(),
+): Promise<AutonomousTargetLease | null> {
+  return mutateAutonomousRunState((state) => {
+    let released: AutonomousTargetLease | null = null;
+    const targetLeases = state.targetLeases.map((lease) => {
+      if (lease.id !== id) return lease;
+      released = normalizeTargetLease({
+        ...lease,
+        status: 'released',
+        releasedAt: now,
+        expiresAt: Math.min(lease.expiresAt, now),
+      });
+      return released ?? lease;
+    });
+    const runs = released
+      ? state.runs.map((run) => run.targetLeaseId === released?.id ? { ...run, targetLeaseId: null, updatedAt: now } : run)
+      : state.runs;
+    return {
+      state: released ? { ...state, runs: pruneRuns(runs), targetLeases: pruneTargetLeases(targetLeases) } : state,
+      result: released,
+      write: released !== null,
+    };
+  });
+}
+
+export async function getAutonomousTargetLeaseById(id: string): Promise<AutonomousTargetLease | null> {
+  const state = await readAutonomousRunState();
+  return state.targetLeases.find((lease) => lease.id === id) ?? null;
+}
+
+export async function getAutonomousRunTargetLeases(runId: AutonomousRunId): Promise<AutonomousTargetLease[]> {
+  const state = await readAutonomousRunState();
+  return state.targetLeases
+    .filter((lease) => lease.runId === runId)
+    .sort((a, b) => b.acquiredAt - a.acquiredAt);
+}
+
+export async function appendAutonomousEvidenceRecord(
+  runId: AutonomousRunId,
+  input: AutonomousEvidenceCreateInput,
+  now = Date.now(),
+): Promise<AutonomousEvidenceRecord | null> {
+  return mutateAutonomousRunState((state) => {
+    const run = state.runs.find((item) => item.id === runId);
+    if (!run || isTerminalRunStatus(run.status)) return { state, result: null, write: false };
+    const record = normalizeEvidenceRecord({
+      id: input.id ?? createId('evidence'),
+      runId,
+      leaseId: 'leaseId' in input ? input.leaseId : run.targetLeaseId,
+      kind: input.kind,
+      freshness: 'fresh',
+      capturedAt: input.capturedAt ?? now,
+      expiresAt: (input.capturedAt ?? now) + normalizeEvidenceTtlMs(input.ttlMs),
+      summary: input.summary ?? '',
+      refs: input.refs ?? [],
+      source: input.source ?? {},
+      metadata: input.metadata ?? null,
+    });
+    if (!record) return { state, result: null, write: false };
+    return {
+      state: {
+        ...state,
+        runs: pruneRuns(state.runs.map((item) => item.id === runId ? { ...item, updatedAt: now } : item)),
+        evidence: pruneEvidenceRecords([record, ...state.evidence.filter((stored) => stored.id !== record.id)]),
+      },
+      result: record,
+    };
+  });
+}
+
+export async function getAutonomousRunEvidence(runId: AutonomousRunId): Promise<AutonomousEvidenceRecord[]> {
+  const state = await readAutonomousRunState();
+  return state.evidence
+    .filter((record) => record.runId === runId)
+    .sort((a, b) => b.capturedAt - a.capturedAt);
 }
 
 export async function reconcileInterruptedAutonomousRuns(
@@ -315,6 +455,8 @@ async function writeAutonomousRunState(state: AutonomousRunStorageState): Promis
       version: STORAGE_VERSION,
       runs: pruneRuns(state.runs),
       steps: pruneSteps(state.steps),
+      targetLeases: pruneTargetLeases(state.targetLeases),
+      evidence: pruneEvidenceRecords(state.evidence),
     },
   });
 }
@@ -376,6 +518,12 @@ function normalizeState(raw: unknown): AutonomousRunStorageState {
     steps: Array.isArray(value.steps)
       ? value.steps.map(normalizeStep).filter((item): item is AutonomousRunStep => item !== null)
       : [],
+    targetLeases: Array.isArray(value.targetLeases)
+      ? value.targetLeases.map(normalizeTargetLease).filter((item): item is AutonomousTargetLease => item !== null)
+      : [],
+    evidence: Array.isArray(value.evidence)
+      ? value.evidence.map(normalizeEvidenceRecord).filter((item): item is AutonomousEvidenceRecord => item !== null)
+      : [],
   };
 }
 
@@ -428,6 +576,58 @@ function normalizeStep(raw: unknown): AutonomousRunStep | null {
     error: normalizeError(step.error),
     startedAt,
     endedAt: normalizeTimestamp(step.endedAt),
+  };
+}
+
+function normalizeTargetLease(raw: unknown): AutonomousTargetLease | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const lease = raw as Partial<AutonomousTargetLease>;
+  const id = normalizeId(lease.id);
+  const runId = normalizeId(lease.runId);
+  const tabId = normalizeNonNegativeInteger(lease.tabId);
+  const windowId = normalizeNonNegativeInteger(lease.windowId);
+  const origin = normalizeOrigin(lease.origin);
+  const acquiredAt = normalizeTimestamp(lease.acquiredAt);
+  const expiresAt = normalizeTimestamp(lease.expiresAt);
+  if (!id || !runId || tabId === null || windowId === null || !origin || acquiredAt === null || expiresAt === null) {
+    return null;
+  }
+  return {
+    id,
+    runId,
+    status: normalizeTargetLeaseStatus(lease.status),
+    label: normalizeText(lease.label, 80) ?? 'Dev++',
+    tabId,
+    windowId,
+    origin,
+    title: normalizeText(lease.title, 160) ?? '',
+    acquiredAt,
+    expiresAt,
+    lastVerifiedAt: normalizeTimestamp(lease.lastVerifiedAt),
+    releasedAt: normalizeTimestamp(lease.releasedAt),
+  };
+}
+
+function normalizeEvidenceRecord(raw: unknown): AutonomousEvidenceRecord | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Partial<AutonomousEvidenceRecord>;
+  const id = normalizeId(record.id);
+  const runId = normalizeId(record.runId);
+  const capturedAt = normalizeTimestamp(record.capturedAt);
+  const expiresAt = normalizeTimestamp(record.expiresAt);
+  if (!id || !runId || capturedAt === null || expiresAt === null || !isObservationKind(record.kind)) return null;
+  return {
+    id,
+    runId,
+    leaseId: normalizeId(record.leaseId),
+    kind: record.kind,
+    freshness: normalizeEvidenceFreshness(record.freshness),
+    capturedAt,
+    expiresAt,
+    summary: normalizeText(record.summary, 512) ?? '',
+    refs: normalizeStringList(record.refs, MAX_LIST_ITEMS, 128),
+    source: normalizeEvidenceSource(record.source),
+    metadata: normalizeDetails(record.metadata) ?? null,
   };
 }
 
@@ -539,6 +739,11 @@ function normalizeDetailValue(value: unknown, depth: number): unknown {
 
 function normalizeDetailKey(key: string, index: number): string {
   const lower = key.toLowerCase();
+  if (GENERIC_URL_PATTERN.test(key)) {
+    GENERIC_URL_PATTERN.lastIndex = 0;
+    return `redactedPage${index}`;
+  }
+  GENERIC_URL_PATTERN.lastIndex = 0;
   if (isDetailSecretKey(lower)) return `redactedCred${index}`;
   if (isDetailMediaKey(lower)) return `redactedMedia${index}`;
   if (isDetailVisionKey(lower)) return `redactedVisionRef${index}`;
@@ -590,6 +795,29 @@ function normalizeStatus(value: unknown): AutonomousRun['status'] {
   return 'queued';
 }
 
+function normalizeTargetLeaseStatus(value: unknown): AutonomousTargetLease['status'] {
+  if (value === 'released' || value === 'expired' || value === 'stale') return value;
+  return 'active';
+}
+
+function normalizeEvidenceFreshness(value: unknown): AutonomousEvidenceRecord['freshness'] {
+  if (value === 'expired') return 'expired';
+  if (value === 'stale') return 'stale';
+  return 'fresh';
+}
+
+function normalizeEvidenceSource(value: unknown): AutonomousEvidenceRecord['source'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const source = value as Partial<AutonomousEvidenceRecord['source']>;
+  return {
+    ...(typeof source.tabId === 'number' && Number.isInteger(source.tabId) ? { tabId: source.tabId } : {}),
+    ...(typeof source.windowId === 'number' && Number.isInteger(source.windowId) ? { windowId: source.windowId } : {}),
+    ...(typeof source.toolName === 'string' ? { toolName: normalizeText(source.toolName, 80) ?? '' } : {}),
+    ...(typeof source.automationId === 'string' ? { automationId: normalizeId(source.automationId) ?? '' } : {}),
+    ...(typeof source.automationRunId === 'string' ? { automationRunId: normalizeId(source.automationRunId) ?? '' } : {}),
+  };
+}
+
 function isPhase(value: unknown): value is AutonomousRunStep['phase'] {
   return value === 'plan' ||
     value === 'model_turn' ||
@@ -606,6 +834,17 @@ function isStepStatus(value: unknown): value is AutonomousRunStep['status'] {
   return value === 'running' || value === 'succeeded' || value === 'failed' || value === 'skipped';
 }
 
+function isObservationKind(value: unknown): value is AutonomousEvidenceRecord['kind'] {
+  return value === 'tool_result' ||
+    value === 'browser_snapshot' ||
+    value === 'browser_screenshot' ||
+    value === 'file' ||
+    value === 'shell_output' ||
+    value === 'web' ||
+    value === 'memory' ||
+    value === 'model_text';
+}
+
 function normalizeId(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const redacted = redactDurableToolString(value.trim()) ?? '';
@@ -615,8 +854,12 @@ function normalizeId(value: unknown): string | null {
 
 function normalizeText(value: unknown, maxLength: number): string | null {
   if (typeof value !== 'string') return null;
-  const redacted = redactDurableToolString(value.trim())?.slice(0, maxLength) ?? '';
+  const redacted = redactRunStoreText(value.trim())?.slice(0, maxLength) ?? '';
   return redacted || null;
+}
+
+function redactRunStoreText(value: string): string | undefined {
+  return redactDurableToolString(value)?.replace(GENERIC_URL_PATTERN, '[redacted:url]');
 }
 
 function normalizeStringList(value: unknown, maxItems: number, maxLength: number): string[] {
@@ -630,6 +873,16 @@ function normalizeStringList(value: unknown, maxItems: number, maxLength: number
   return output;
 }
 
+function normalizeOrigin(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const origin = new URL(value.trim()).origin;
+    return origin.length <= 240 ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeTimestamp(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
@@ -640,6 +893,18 @@ function normalizePositiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : null;
+}
+
+function normalizeLeaseTtlMs(value: unknown): number {
+  const ttl = normalizePositiveInteger(value);
+  if (ttl === null) return DEFAULT_AUTONOMOUS_TARGET_LEASE_TTL_MS;
+  return Math.min(60 * 60 * 1000, Math.max(10_000, ttl));
+}
+
+function normalizeEvidenceTtlMs(value: unknown): number {
+  const ttl = normalizePositiveInteger(value);
+  if (ttl === null) return DEFAULT_AUTONOMOUS_EVIDENCE_TTL_MS;
+  return Math.min(10 * 60 * 1000, Math.max(5_000, ttl));
 }
 
 function normalizeNonNegativeInteger(value: unknown): number | null {
@@ -663,6 +928,18 @@ function pruneSteps(steps: AutonomousRunStep[]): AutonomousRunStep[] {
   return [...steps]
     .sort((a, b) => b.startedAt - a.startedAt)
     .slice(0, MAX_STEPS);
+}
+
+function pruneTargetLeases(leases: AutonomousTargetLease[]): AutonomousTargetLease[] {
+  return [...leases]
+    .sort((a, b) => b.acquiredAt - a.acquiredAt)
+    .slice(0, MAX_TARGET_LEASES);
+}
+
+function pruneEvidenceRecords(records: AutonomousEvidenceRecord[]): AutonomousEvidenceRecord[] {
+  return [...records]
+    .sort((a, b) => b.capturedAt - a.capturedAt)
+    .slice(0, MAX_EVIDENCE_RECORDS);
 }
 
 function createId(prefix: string): string {
