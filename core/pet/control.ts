@@ -24,6 +24,17 @@ export type PetBlockerCategory =
 
 export type PetBlockerCategoryCounts = Record<PetBlockerCategory, number>;
 
+export type PetReviewHeatLevel = 'none' | 'cool' | 'warm' | 'hot' | 'blocked';
+
+export type PetReviewHeatReason =
+  | 'no_review'
+  | 'ready_to_finalize'
+  | 'needs_iteration'
+  | 'low_grade'
+  | 'proof_debt'
+  | 'review_issues'
+  | 'review_failed';
+
 export interface PetControlSnapshot {
   schemaVersion: 1;
   generatedAt: number;
@@ -73,10 +84,15 @@ export interface PetControlSnapshot {
     acceptedEvidenceCount: number;
     canFinalize: boolean;
   };
+  reviewHeat: {
+    level: PetReviewHeatLevel;
+    reasons: PetReviewHeatReason[];
+  };
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
 type PetBlockerLens = PetControlSnapshot['blockerLens'];
+type PetReviewHeat = PetControlSnapshot['reviewHeat'];
 
 const PET_BLOCKER_CATEGORY_PRIORITY: PetBlockerCategory[] = [
   'leak',
@@ -210,6 +226,15 @@ export function createPetControlSnapshotFromRunCockpit(
       break;
   }
 
+  const review: PetControlSnapshot['review'] = {
+    grade: null,
+    decision: null,
+    proofDebtCount: 0,
+    issueCount: 0,
+    acceptedEvidenceCount: 0,
+    canFinalize: false,
+  };
+
   return {
     schemaVersion: 1,
     generatedAt: snapshot.generatedAt,
@@ -245,14 +270,8 @@ export function createPetControlSnapshotFromRunCockpit(
       issueCount: 0,
     }),
     evidence,
-    review: {
-      grade: null,
-      decision: null,
-      proofDebtCount: 0,
-      issueCount: 0,
-      acceptedEvidenceCount: 0,
-      canFinalize: false,
-    },
+    review,
+    reviewHeat: createPetReviewHeat(review),
   };
 }
 
@@ -313,6 +332,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
       proofDebtCount: next.review.proofDebtCount,
       issueCount: next.review.issueCount,
     }),
+    reviewHeat: createPetReviewHeat(next.review),
   };
 }
 
@@ -401,6 +421,7 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
       proofDebtCount: next.review.proofDebtCount,
       issueCount: next.review.issueCount,
     }),
+    reviewHeat: createPetReviewHeat(next.review),
   };
 }
 
@@ -462,6 +483,48 @@ function classifyPetBlocker(blocker: string): PetBlockerCategory {
   return 'unknown';
 }
 
+function createPetReviewHeat(review: PetControlSnapshot['review']): PetReviewHeat {
+  if (!review.grade && !review.decision) {
+    return {
+      level: 'none',
+      reasons: ['no_review'],
+    };
+  }
+
+  const reasons: PetReviewHeatReason[] = [];
+  if (review.proofDebtCount > 0) reasons.push('proof_debt');
+  if (review.issueCount > 0) reasons.push('review_issues');
+  if (review.decision === 'fail') reasons.push('review_failed');
+  if (review.decision === 'iterate') reasons.push('needs_iteration');
+  if (review.grade === 'C' || review.grade === 'D' || review.grade === 'F') reasons.push('low_grade');
+
+  if (review.decision === 'fail' || review.grade === 'F') {
+    return {
+      level: 'blocked',
+      reasons: reasons.length > 0 ? reasons : ['review_failed'],
+    };
+  }
+
+  if (review.proofDebtCount > 0 || review.issueCount > 0) {
+    return {
+      level: 'hot',
+      reasons,
+    };
+  }
+
+  if (review.decision === 'iterate' || review.grade === 'C' || review.grade === 'D') {
+    return {
+      level: 'warm',
+      reasons: reasons.length > 0 ? reasons : ['needs_iteration'],
+    };
+  }
+
+  return {
+    level: 'cool',
+    reasons: ['ready_to_finalize'],
+  };
+}
+
 export type PetHandoffNextAction =
   | 'idle'
   | 'make_ready'
@@ -489,6 +552,8 @@ export interface PetHandoffCapsule {
   proofDebtCount: number;
   issueCount: number;
   acceptedEvidenceCount: number;
+  reviewHeatLevel: PetReviewHeatLevel;
+  reviewHeatReasons: PetReviewHeatReason[];
   evidenceStatus: PetControlSnapshot['evidence']['status'];
   evidenceCount: number;
   latestEvidenceAgeMs: number | null;
@@ -523,6 +588,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const proofDebtCount = review.proofDebtCount;
   const issueCount = review.issueCount;
   const acceptedEvidenceCount = review.acceptedEvidenceCount;
+  const reviewHeat = snapshot.reviewHeat;
   const evidenceStatus = evidence.status;
   const evidenceCount = evidence.count;
   const latestEvidenceAgeMs = evidence.latestAgeMs;
@@ -565,6 +631,8 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     proofDebtCount,
     issueCount,
     acceptedEvidenceCount,
+    reviewHeatLevel: reviewHeat.level,
+    reviewHeatReasons: reviewHeat.reasons,
     evidenceStatus,
     evidenceCount,
     latestEvidenceAgeMs,

@@ -58,6 +58,7 @@ describe('pet control snapshot', () => {
     blockerLens?: Partial<PetControlSnapshot['blockerLens']>;
     evidence?: Partial<PetControlSnapshot['evidence']>;
     review?: Partial<PetControlSnapshot['review']>;
+    reviewHeat?: Partial<PetControlSnapshot['reviewHeat']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -126,6 +127,11 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         canFinalize: false,
         ...overrides.review,
+      },
+      reviewHeat: {
+        level: 'none',
+        reasons: ['no_review'],
+        ...overrides.reviewHeat,
       },
     };
   }
@@ -306,6 +312,7 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         canFinalize: false,
       },
+      reviewHeat: { level: 'none', reasons: ['no_review'] },
     });
     expect(pet.run.label).toBeNull();
     expect(pet.target.label).toBeNull();
@@ -999,6 +1006,7 @@ describe('pet control snapshot', () => {
       acceptedEvidenceCount: 0,
       canFinalize: false,
     });
+    expect(pet.reviewHeat).toEqual({ level: 'none', reasons: ['no_review'] });
     const idleCockpit = {
       schemaVersion: 1 as const,
       generatedAt: 123,
@@ -1011,6 +1019,7 @@ describe('pet control snapshot', () => {
     expect(fromCockpit.review.decision).toBeNull();
     expect(fromCockpit.review.proofDebtCount).toBe(0);
     expect(fromCockpit.review.canFinalize).toBe(false);
+    expect(fromCockpit.reviewHeat).toEqual({ level: 'none', reasons: ['no_review'] });
   });
 
   it('Runtime Doctor merge preserves review values already present in the base snapshot', () => {
@@ -1029,6 +1038,7 @@ describe('pet control snapshot', () => {
     expect(pet.review).toEqual(base.review);
     expect(pet.review.grade).toBe('B');
     expect(pet.review.canFinalize).toBe(true);
+    expect(pet.reviewHeat).toEqual({ level: 'hot', reasons: ['review_issues'] });
   });
 
   it('completion review pass produces grade A/B, decision pass, proofDebtCount 0, issueCount 0, acceptedEvidenceCount > 0, canFinalize true', () => {
@@ -1050,12 +1060,14 @@ describe('pet control snapshot', () => {
     expect(pet.review.issueCount).toBe(0);
     expect(pet.review.acceptedEvidenceCount).toBe(2);
     expect(pet.review.canFinalize).toBe(true);
+    expect(pet.reviewHeat).toEqual({ level: 'cool', reasons: ['ready_to_finalize'] });
 
     // B grade pass
     const passB: AutonomousRunCompletionReview = { ...passReview, grade: 'B' };
     const petB = mergeAutonomousCompletionReviewIntoSnapshot(base, passB);
     expect(petB.review.grade).toBe('B');
     expect(petB.review.canFinalize).toBe(true);
+    expect(petB.reviewHeat).toEqual({ level: 'cool', reasons: ['ready_to_finalize'] });
   });
 
   it('iterate/fail review produces correct counts and canFinalize false', () => {
@@ -1077,6 +1089,10 @@ describe('pet control snapshot', () => {
     expect(pet.review.issueCount).toBe(2);
     expect(pet.review.acceptedEvidenceCount).toBe(1);
     expect(pet.review.canFinalize).toBe(false);
+    expect(pet.reviewHeat).toEqual({
+      level: 'hot',
+      reasons: ['proof_debt', 'review_issues', 'needs_iteration', 'low_grade'],
+    });
     expect(pet.blockerLens.primary).toBe('evidence');
     expect(pet.blockerLens.categories).toEqual(['evidence', 'review']);
     expect(pet.blockerLens.counts).toMatchObject({ evidence: 2, review: 2 });
@@ -1096,6 +1112,10 @@ describe('pet control snapshot', () => {
     expect(petF.review.issueCount).toBe(1);
     expect(petF.review.acceptedEvidenceCount).toBe(0);
     expect(petF.review.canFinalize).toBe(false);
+    expect(petF.reviewHeat).toEqual({
+      level: 'blocked',
+      reasons: ['proof_debt', 'review_issues', 'review_failed', 'low_grade'],
+    });
   });
 
   it('if review is null/undefined, return the original snapshot object unchanged', () => {
@@ -1128,14 +1148,23 @@ describe('pet control snapshot', () => {
     const base = createBasePetSnapshot();
     const pet = mergeAutonomousCompletionReviewIntoSnapshot(base, secretReview);
     const petJson = JSON.stringify(pet);
+    const capsule = createPetHandoffCapsule(pet);
+    const capsuleJson = JSON.stringify(capsule);
     expect(pet.review.grade).toBe('D');
     expect(pet.review.decision).toBe('iterate');
     expect(pet.review.proofDebtCount).toBe(2);
     expect(pet.review.issueCount).toBe(2);
     expect(pet.review.acceptedEvidenceCount).toBe(1);
     expect(pet.review.canFinalize).toBe(false);
+    expect(pet.reviewHeat).toEqual({
+      level: 'hot',
+      reasons: ['proof_debt', 'review_issues', 'needs_iteration', 'low_grade'],
+    });
     // prove no leak of raw
     expect(petJson).not.toMatch(/SECRET_TOKEN|SECRET_PASS|ultra_secret|SECRET_123|SECRET data/);
+    expect(capsule.reviewHeatLevel).toBe('hot');
+    expect(capsule.reviewHeatReasons).toEqual(['proof_debt', 'review_issues', 'needs_iteration', 'low_grade']);
+    expect(capsuleJson).not.toMatch(/SECRET_TOKEN|SECRET_PASS|ultra_secret|SECRET_123|SECRET data/);
     expect(petJson).toContain('D'); // grade
   });
 
@@ -1195,6 +1224,8 @@ describe('pet control snapshot', () => {
         proofDebtCount: 0,
         issueCount: 0,
         acceptedEvidenceCount: 0,
+        reviewHeatLevel: 'none',
+        reviewHeatReasons: ['no_review'],
         evidenceStatus: 'none',
         evidenceCount: 0,
         latestEvidenceAgeMs: null,
@@ -1256,10 +1287,13 @@ describe('pet control snapshot', () => {
         target: { locked: true, stale: false },
         run: { active: true, phase: 'done' },
         review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 5, canFinalize: true },
+        reviewHeat: { level: 'cool', reasons: ['ready_to_finalize'] },
       });
       const capsule = createPetHandoffCapsule(snap);
       expect(capsule.reviewState).toBe('pass');
       expect(capsule.canFinalize).toBe(true);
+      expect(capsule.reviewHeatLevel).toBe('cool');
+      expect(capsule.reviewHeatReasons).toEqual(['ready_to_finalize']);
       expect(capsule.nextAction).toBe('finalize');
     });
 
@@ -1269,16 +1303,24 @@ describe('pet control snapshot', () => {
         target: { locked: true, stale: false },
         run: { active: true, phase: 'reviewing' },
         review: { grade: 'C', decision: 'iterate', proofDebtCount: 1, issueCount: 1, acceptedEvidenceCount: 1, canFinalize: false },
+        reviewHeat: { level: 'hot', reasons: ['proof_debt', 'review_issues', 'needs_iteration', 'low_grade'] },
       });
-      expect(createPetHandoffCapsule(iterateSnap).nextAction).toBe('iterate');
+      const iterateCapsule = createPetHandoffCapsule(iterateSnap);
+      expect(iterateCapsule.reviewHeatLevel).toBe('hot');
+      expect(iterateCapsule.reviewHeatReasons).toEqual(['proof_debt', 'review_issues', 'needs_iteration', 'low_grade']);
+      expect(iterateCapsule.nextAction).toBe('iterate');
 
       const debtSnap = createBaseForHandoff({
         readiness: { status: 'ready', preparing: false },
         target: { locked: true, stale: false },
         run: { active: true, phase: 'working' },
         review: { grade: 'B', decision: null, proofDebtCount: 3, issueCount: 0, acceptedEvidenceCount: 2, canFinalize: false },
+        reviewHeat: { level: 'hot', reasons: ['proof_debt'] },
       });
-      expect(createPetHandoffCapsule(debtSnap).nextAction).toBe('iterate');
+      const debtCapsule = createPetHandoffCapsule(debtSnap);
+      expect(debtCapsule.reviewHeatLevel).toBe('hot');
+      expect(debtCapsule.reviewHeatReasons).toEqual(['proof_debt']);
+      expect(debtCapsule.nextAction).toBe('iterate');
     });
 
     it('review fail produces reviewState fail while preserving safe issue count', () => {
@@ -1287,11 +1329,14 @@ describe('pet control snapshot', () => {
         target: { locked: true, stale: false },
         run: { active: true, phase: 'reviewing' },
         review: { grade: 'F', decision: 'fail', proofDebtCount: 0, issueCount: 1, acceptedEvidenceCount: 0, canFinalize: false },
+        reviewHeat: { level: 'blocked', reasons: ['review_issues', 'review_failed', 'low_grade'] },
       });
       const capsule = createPetHandoffCapsule(snap);
 
       expect(capsule.reviewState).toBe('fail');
       expect(capsule.issueCount).toBe(1);
+      expect(capsule.reviewHeatLevel).toBe('blocked');
+      expect(capsule.reviewHeatReasons).toEqual(['review_issues', 'review_failed', 'low_grade']);
       expect(capsule.nextAction).toBe('iterate');
     });
 
@@ -1353,6 +1398,10 @@ describe('pet control snapshot', () => {
           acceptedEvidenceCount: 1,
           canFinalize: false,
         },
+        reviewHeat: {
+          level: 'hot',
+          reasons: ['proof_debt', 'review_issues', 'needs_iteration', 'low_grade'],
+        },
         evidence: {
           status: 'stale',
           count: 3,
@@ -1378,6 +1427,8 @@ describe('pet control snapshot', () => {
       expect(capsule.blockerCategories).toEqual(['leak', 'target', 'policy']);
       expect(capsule.blockerCategoryCounts).toMatchObject({ leak: 1, target: 1, policy: 1 });
       expect(capsule.proofDebtCount).toBe(2);
+      expect(capsule.reviewHeatLevel).toBe('hot');
+      expect(capsule.reviewHeatReasons).toEqual(['proof_debt', 'review_issues', 'needs_iteration', 'low_grade']);
       expect(capsule.evidenceStatus).toBe('stale');
       expect(capsule.evidenceCount).toBe(3);
       expect(capsule.latestEvidenceAgeMs).toBe(12);
