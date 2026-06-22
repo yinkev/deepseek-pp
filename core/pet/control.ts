@@ -92,6 +92,7 @@ export type PetReviewLaneGateReason =
   | 'block_recommendation'
   | 'failed_lane'
   | 'blocked_lane';
+export type PetRunQueuePosture = 'idle' | 'waiting' | 'draining' | 'held' | 'blocked_ahead';
 
 export interface PetReviewLaneSummary {
   role: PetReviewLaneRole;
@@ -121,6 +122,16 @@ export interface PetReviewLaneGate {
   blockingLaneCount: number;
 }
 
+export interface PetRunQueue {
+  queuedDepth: number;
+  runningCount: number;
+  pausedCount: number;
+  blockedCount: number;
+  backlog: boolean;
+  contention: boolean;
+  posture: PetRunQueuePosture;
+}
+
 export interface PetControlSnapshot {
   schemaVersion: 1;
   generatedAt: number;
@@ -135,6 +146,7 @@ export interface PetControlSnapshot {
     phase: 'idle' | 'thinking' | 'speaking' | 'working' | 'reviewing' | 'blocked' | 'done';
     nextAction: string | null;
   };
+  runQueue: PetRunQueue;
   target: {
     locked: boolean;
     label: string | null;
@@ -402,6 +414,7 @@ export function createPetControlSnapshotFromRunCockpit(
     lanes: [],
   };
   const reviewLaneGate = createPetReviewLaneGate(reviewLanes);
+  const runQueue = createPetRunQueue(snapshot.totals);
 
   return {
     schemaVersion: 1,
@@ -417,6 +430,7 @@ export function createPetControlSnapshotFromRunCockpit(
       phase: runPhase,
       nextAction: runNextAction,
     },
+    runQueue,
     target: {
       locked: targetLocked,
       label: targetLabel,
@@ -497,6 +511,41 @@ export async function applyPetStopLine(now = Date.now()): Promise<PetStopLineRes
     afterStatus,
     errorCode: afterStatus === nextStatus ? null : 'transition_rejected',
   };
+}
+
+export function createPetRunQueue(totals: AutonomousRunCockpitSnapshot['totals'] | null | undefined): PetRunQueue {
+  const queuedDepth = normalizeQueueCount(totals?.queued);
+  const runningCount = normalizeQueueCount(totals?.running);
+  const pausedCount = normalizeQueueCount(totals?.paused);
+  const blockedCount = normalizeQueueCount(totals?.blocked);
+  const backlog = queuedDepth > 0;
+  const contention = runningCount > 0 && queuedDepth > 0;
+  let posture: PetRunQueuePosture = 'idle';
+  if (blockedCount > 0 && queuedDepth > 0) {
+    posture = 'blocked_ahead';
+  } else if (runningCount > 0) {
+    posture = 'draining';
+  } else if (queuedDepth > 0) {
+    posture = 'waiting';
+  } else if (pausedCount > 0 || blockedCount > 0) {
+    posture = 'held';
+  }
+  return {
+    queuedDepth,
+    runningCount,
+    pausedCount,
+    blockedCount,
+    backlog,
+    contention,
+    posture,
+  };
+}
+
+function normalizeQueueCount(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  return 0;
 }
 
 export function mergeRuntimeDoctorReportIntoSnapshot(
@@ -794,6 +843,13 @@ export interface PetHandoffCapsule {
   generatedAt: number;
   readinessStatus: PetControlSnapshot['readiness']['status'];
   runPhase: PetControlSnapshot['run']['phase'];
+  runQueueQueuedDepth: number;
+  runQueueRunningCount: number;
+  runQueuePausedCount: number;
+  runQueueBlockedCount: number;
+  runQueueBacklog: boolean;
+  runQueueContention: boolean;
+  runQueuePosture: PetRunQueuePosture;
   targetState: 'locked' | 'missing' | 'stale' | 'none';
   targetLeaseStatus: PetControlSnapshot['target']['leaseStatus'];
   targetLeaseAgeMs: number | null;
@@ -868,6 +924,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     memoryPressure: mp,
     workerCycle: wc,
     reviewLanes: rl,
+    runQueue: rq,
   } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
@@ -900,6 +957,13 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const latestEvidenceAgeMs = evidence.latestAgeMs;
   const grade = review.grade;
   const canFinalize = review.canFinalize;
+  const runQueueQueuedDepth = rq ? rq.queuedDepth : 0;
+  const runQueueRunningCount = rq ? rq.runningCount : 0;
+  const runQueuePausedCount = rq ? rq.pausedCount : 0;
+  const runQueueBlockedCount = rq ? rq.blockedCount : 0;
+  const runQueueBacklog = rq ? rq.backlog : false;
+  const runQueueContention = rq ? rq.contention : false;
+  const runQueuePosture = rq ? rq.posture : 'idle';
 
   let nextAction: PetHandoffNextAction = 'idle';
   if (safety.leakIssueCount > 0) {
@@ -981,6 +1045,13 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     generatedAt,
     readinessStatus: readiness.status,
     runPhase: run.phase,
+    runQueueQueuedDepth,
+    runQueueRunningCount,
+    runQueuePausedCount,
+    runQueueBlockedCount,
+    runQueueBacklog,
+    runQueueContention,
+    runQueuePosture,
     targetState,
     targetLeaseStatus: target.leaseStatus,
     targetLeaseAgeMs: target.leaseAgeMs,

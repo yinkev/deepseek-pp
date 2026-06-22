@@ -17,6 +17,7 @@ import {
   createPetHandoffCapsule,
   mergeAutonomousWorkerCycleResultIntoSnapshot,
   createPetReviewLaneGate,
+  createPetRunQueue,
   mergePetReviewLanesIntoSnapshot,
   type PetControlSnapshot,
 } from '../core/pet/control';
@@ -61,6 +62,7 @@ describe('pet control snapshot', () => {
     run?: Partial<PetControlSnapshot['run']>;
     target?: Partial<PetControlSnapshot['target']>;
     safety?: Partial<PetControlSnapshot['safety']>;
+    runQueue?: Partial<PetControlSnapshot['runQueue']>;
     blockerLens?: Partial<PetControlSnapshot['blockerLens']>;
     evidence?: Partial<PetControlSnapshot['evidence']>;
     review?: Partial<PetControlSnapshot['review']>;
@@ -100,6 +102,16 @@ describe('pet control snapshot', () => {
         leakIssueCount: 0,
         highRiskArmed: false,
         ...overrides.safety,
+      },
+      runQueue: {
+        queuedDepth: 0,
+        runningCount: 0,
+        pausedCount: 0,
+        blockedCount: 0,
+        backlog: false,
+        contention: false,
+        posture: 'idle',
+        ...overrides.runQueue,
       },
       blockerLens: {
         primary: null,
@@ -1373,6 +1385,13 @@ describe('pet control snapshot', () => {
         generatedAt: 123,
         readinessStatus: 'ready',
         runPhase: 'idle',
+        runQueueQueuedDepth: 0,
+        runQueueRunningCount: 0,
+        runQueuePausedCount: 0,
+        runQueueBlockedCount: 0,
+        runQueueBacklog: false,
+        runQueueContention: false,
+        runQueuePosture: 'idle',
         targetState: 'none',
         targetLeaseStatus: 'none',
         targetLeaseAgeMs: null,
@@ -1660,6 +1679,290 @@ describe('pet control snapshot', () => {
       // but does reflect the safe structure
       expect(capsuleJson).toContain('"reviewState":"iterate"');
       expect(capsuleJson).toContain('"blockerCount":2');
+    });
+  });
+
+  describe('run queue telemetry', () => {
+    const defaultRunQueue: PetControlSnapshot['runQueue'] = {
+      queuedDepth: 0,
+      runningCount: 0,
+      pausedCount: 0,
+      blockedCount: 0,
+      backlog: false,
+      contention: false,
+      posture: 'idle',
+    };
+    const emptyTotals = {
+      queued: 0,
+      running: 0,
+      paused: 0,
+      blocked: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+    };
+
+    it('createPetControlSnapshotFromRunCockpit and createBase default to no queued work observed', () => {
+      const pet = createBasePetSnapshot();
+      expect(pet.runQueue).toEqual(defaultRunQueue);
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: emptyTotals,
+        activeRun: null,
+      };
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).runQueue).toEqual(defaultRunQueue);
+      expect(createPetRunQueue(null)).toEqual(defaultRunQueue);
+      expect(createPetRunQueue(undefined)).toEqual(defaultRunQueue);
+    });
+
+    it('createPetRunQueue derives waiting, draining, contention, and blocked-ahead posture from totals', () => {
+      expect(createPetRunQueue({ ...emptyTotals, queued: 3 })).toEqual({
+        ...defaultRunQueue,
+        queuedDepth: 3,
+        backlog: true,
+        posture: 'waiting',
+      });
+      expect(createPetRunQueue({ ...emptyTotals, running: 1, queued: 2 })).toEqual({
+        ...defaultRunQueue,
+        queuedDepth: 2,
+        runningCount: 1,
+        backlog: true,
+        contention: true,
+        posture: 'draining',
+      });
+      expect(createPetRunQueue({ ...emptyTotals, blocked: 1, queued: 2 })).toEqual({
+        ...defaultRunQueue,
+        queuedDepth: 2,
+        blockedCount: 1,
+        backlog: true,
+        posture: 'blocked_ahead',
+      });
+      expect(createPetRunQueue({ ...emptyTotals, paused: 1 })).toEqual({
+        ...defaultRunQueue,
+        pausedCount: 1,
+        posture: 'held',
+      });
+      expect(createPetRunQueue({ ...emptyTotals, blocked: 1 })).toEqual({
+        ...defaultRunQueue,
+        blockedCount: 1,
+        posture: 'held',
+      });
+      expect(createPetRunQueue({
+        ...emptyTotals,
+        queued: 2.8,
+        running: Number.NaN,
+        paused: -1,
+        blocked: Number.POSITIVE_INFINITY,
+      })).toEqual({
+        ...defaultRunQueue,
+        queuedDepth: 2,
+        backlog: true,
+        posture: 'waiting',
+      });
+    });
+
+    it('createPetControlSnapshotFromRunCockpit wires non-idle totals into run queue projection', () => {
+      const drainingPet = createPetControlSnapshotFromRunCockpit({
+        schemaVersion: 1,
+        generatedAt: 456,
+        status: 'running',
+        totals: { ...emptyTotals, running: 1, queued: 2 },
+        activeRun: null,
+      });
+
+      expect(drainingPet.runQueue).toEqual({
+        ...defaultRunQueue,
+        queuedDepth: 2,
+        runningCount: 1,
+        backlog: true,
+        contention: true,
+        posture: 'draining',
+      });
+
+      const heldPet = createPetControlSnapshotFromRunCockpit({
+        schemaVersion: 1,
+        generatedAt: 457,
+        status: 'paused',
+        totals: { ...emptyTotals, paused: 1 },
+        activeRun: null,
+      });
+
+      expect(heldPet.runQueue).toEqual({
+        ...defaultRunQueue,
+        pausedCount: 1,
+        posture: 'held',
+      });
+
+      const blockedHeldPet = createPetControlSnapshotFromRunCockpit({
+        schemaVersion: 1,
+        generatedAt: 458,
+        status: 'blocked',
+        totals: { ...emptyTotals, blocked: 1 },
+        activeRun: null,
+      });
+
+      expect(blockedHeldPet.runQueue).toEqual({
+        ...defaultRunQueue,
+        blockedCount: 1,
+        posture: 'held',
+      });
+    });
+
+    it('getPetControlSnapshot projects held posture from a durable blocked run', async () => {
+      const { chromeStub } = createChromeStub();
+      vi.stubGlobal('chrome', chromeStub);
+      vi.stubGlobal('crypto', { randomUUID: () => 'queue-held-run' });
+
+      const run = await createAutonomousRun({ id: 'queue-held-run', goal: 'Queue held run' }, 100);
+      await transitionAutonomousRun(run.id, 'running', null, 110);
+      await transitionAutonomousRun(run.id, 'blocked', {
+        code: 'needs_review',
+        message: 'Needs review',
+        phase: 'review',
+        retryable: true,
+        at: 120,
+      }, 120);
+
+      const pet = await getPetControlSnapshot(130);
+      const capsule = createPetHandoffCapsule(pet);
+
+      expect(pet.runQueue).toEqual({
+        ...defaultRunQueue,
+        blockedCount: 1,
+        posture: 'held',
+      });
+      expect(capsule.runQueueBlockedCount).toBe(1);
+      expect(capsule.runQueuePosture).toBe('held');
+
+      const pausedEnv = createChromeStub();
+      vi.stubGlobal('chrome', pausedEnv.chromeStub);
+      vi.stubGlobal('crypto', { randomUUID: () => 'queue-paused-run' });
+
+      const paused = await createAutonomousRun({ id: 'queue-paused-run', goal: 'Queue paused run' }, 200);
+      await transitionAutonomousRun(paused.id, 'running', null, 210);
+      await transitionAutonomousRun(paused.id, 'paused', null, 220);
+
+      const pausedPet = await getPetControlSnapshot(230);
+      const pausedCapsule = createPetHandoffCapsule(pausedPet);
+
+      expect(pausedPet.runQueue).toEqual({
+        ...defaultRunQueue,
+        pausedCount: 1,
+        posture: 'held',
+      });
+      expect(pausedCapsule.runQueuePausedCount).toBe(1);
+      expect(pausedCapsule.runQueuePosture).toBe('held');
+    });
+
+
+    it('createPetHandoffCapsule projects run queue fields and does not alter nextAction or adjacent lenses', () => {
+      const base = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 4, canFinalize: true },
+      });
+      const baseCapsule = createPetHandoffCapsule(base);
+      const withQueue = createBaseForHandoff({
+        run: base.run,
+        review: base.review,
+        runQueue: {
+          queuedDepth: 2,
+          runningCount: 1,
+          pausedCount: 0,
+          blockedCount: 0,
+          backlog: true,
+          contention: true,
+          posture: 'draining',
+        },
+      });
+      const capsule = createPetHandoffCapsule(withQueue);
+
+      expect(capsule.nextAction).toBe(baseCapsule.nextAction);
+      expect(capsule.nextAction).toBe('finalize');
+      expect(capsule.runQueueQueuedDepth).toBe(withQueue.runQueue.queuedDepth);
+      expect(capsule.runQueueRunningCount).toBe(withQueue.runQueue.runningCount);
+      expect(capsule.runQueuePausedCount).toBe(withQueue.runQueue.pausedCount);
+      expect(capsule.runQueueBlockedCount).toBe(withQueue.runQueue.blockedCount);
+      expect(capsule.runQueueBacklog).toBe(withQueue.runQueue.backlog);
+      expect(capsule.runQueueContention).toBe(withQueue.runQueue.contention);
+      expect(capsule.runQueuePosture).toBe(withQueue.runQueue.posture);
+      expect(withQueue.review).toEqual(base.review);
+      expect(withQueue.reviewLaneGate).toEqual(base.reviewLaneGate);
+      expect(withQueue.stopLine).toEqual(base.stopLine);
+      expect(withQueue.workerCycle).toEqual(base.workerCycle);
+
+      for (const queue of [
+        {
+          queuedDepth: 1,
+          runningCount: 0,
+          pausedCount: 0,
+          blockedCount: 0,
+          backlog: true,
+          contention: false,
+          posture: 'waiting' as const,
+        },
+        {
+          queuedDepth: 0,
+          runningCount: 0,
+          pausedCount: 1,
+          blockedCount: 0,
+          backlog: false,
+          contention: false,
+          posture: 'held' as const,
+        },
+        {
+          queuedDepth: 1,
+          runningCount: 0,
+          pausedCount: 0,
+          blockedCount: 1,
+          backlog: true,
+          contention: false,
+          posture: 'blocked_ahead' as const,
+        },
+      ]) {
+        const projected = createPetHandoffCapsule(createBaseForHandoff({ runQueue: queue }));
+        expect(projected).toMatchObject({
+          runQueueQueuedDepth: queue.queuedDepth,
+          runQueueRunningCount: queue.runningCount,
+          runQueuePausedCount: queue.pausedCount,
+          runQueueBlockedCount: queue.blockedCount,
+          runQueueBacklog: queue.backlog,
+          runQueueContention: queue.contention,
+          runQueuePosture: queue.posture,
+        });
+      }
+    });
+
+    it('run queue projection carries counts only and does not leak run ids, goals, blockers, or labels', () => {
+      const pet = createBaseForHandoff({
+        readiness: { blockers: ['SECRET_BLOCKER'] },
+        run: { active: true, label: 'SECRET_GOAL_LABEL run-id-SECRET', phase: 'working' },
+        runQueue: {
+          queuedDepth: 7,
+          runningCount: 1,
+          pausedCount: 1,
+          blockedCount: 1,
+          backlog: true,
+          contention: true,
+          posture: 'blocked_ahead',
+        },
+      });
+      const capsule = createPetHandoffCapsule(pet);
+      const capsuleRunQueue = {
+        runQueueQueuedDepth: capsule.runQueueQueuedDepth,
+        runQueueRunningCount: capsule.runQueueRunningCount,
+        runQueuePausedCount: capsule.runQueuePausedCount,
+        runQueueBlockedCount: capsule.runQueueBlockedCount,
+        runQueueBacklog: capsule.runQueueBacklog,
+        runQueueContention: capsule.runQueueContention,
+        runQueuePosture: capsule.runQueuePosture,
+      };
+
+      expect(JSON.stringify(pet.runQueue)).not.toMatch(/SECRET_BLOCKER|SECRET_GOAL_LABEL|run-id|goal/i);
+      expect(JSON.stringify(capsuleRunQueue)).not.toMatch(/SECRET_BLOCKER|SECRET_GOAL_LABEL|run-id-SECRET|goal/i);
+      expect(JSON.stringify(capsule)).not.toMatch(/SECRET_BLOCKER|SECRET_GOAL_LABEL|run-id-SECRET/);
+      expect(capsule.runQueueQueuedDepth).toBe(7);
     });
   });
 
