@@ -2548,6 +2548,8 @@ describe('pet control snapshot', () => {
       expect(capsule.reviewLaneGateStatus).toBe('blocked');
       expect(capsule.reviewLaneGateReason).toBe('p1');
       expect(capsule.reviewLaneGateCanProceed).toBe(false);
+      expect(capsule.reviewLaneGateBlockingPriority).toBe('P1');
+      expect(capsule.reviewLaneGateBlockingLaneCount).toBe(1);
       expect(JSON.stringify(capsule)).not.toMatch(/SECRET_HIDDEN_LANE/);
     });
 
