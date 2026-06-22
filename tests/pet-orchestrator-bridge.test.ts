@@ -126,6 +126,46 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(JSON.stringify(options)).not.toMatch(/SECRET_GATE|SECRET_LANE_MESSAGE/);
   });
 
+  it('derives blocking gate from lanes beyond scheduler output cap', () => {
+    const snapshot = {
+      ...createBasePetSnapshot(),
+      reviewLanes: {
+        ...createBasePetSnapshot().reviewLanes,
+        lanes: [
+          { role: 'implementer', status: 'passed', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
+          { role: 'reviewer', status: 'passed', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
+          { role: 'safety', status: 'passed', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
+          { role: 'ux', status: 'passed', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
+          {
+            role: 'oracle',
+            status: 'blocked',
+            recommendation: 'iterate',
+            highestPriority: 'P1',
+            issueCount: 1,
+            transcript: 'SECRET_FIFTH_LANE',
+          },
+        ],
+      },
+    } as unknown as PetControlSnapshot;
+
+    const options = createPetOrchestratorReviewLaneOptions(snapshot);
+
+    expect(options.reviewLaneGate).toEqual({
+      status: 'blocked',
+      reason: 'p1',
+      canProceed: false,
+      blockingPriority: 'P1',
+      blockingLaneCount: 1,
+    });
+    expect(options.reviewLaneScheduler?.lanes).toEqual([
+      { role: 'implementer', status: 'passed' },
+      { role: 'reviewer', status: 'passed' },
+      { role: 'safety', status: 'passed' },
+      { role: 'ux', status: 'passed' },
+    ]);
+    expect(JSON.stringify(options)).not.toMatch(/SECRET_FIFTH_LANE/);
+  });
+
   it('feeds pet-derived blocking gate into orchestrator and durable worker block', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);

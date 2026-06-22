@@ -26,6 +26,7 @@ export function createPetOrchestratorReviewLaneOptions(
   options: PetOrchestratorReviewLaneBridgeOptions = {},
 ): PetOrchestratorReviewLaneOptions {
   const reviewLanes = sanitizeReviewLanes(snapshot.reviewLanes?.lanes);
+  const schedulerLanes = reviewLanes.slice(0, 4);
   const reviewLaneGate = createPetReviewLaneGate(createReviewLaneAggregate(reviewLanes));
   return {
     reviewLaneGate: {
@@ -36,7 +37,7 @@ export function createPetOrchestratorReviewLaneOptions(
       blockingLaneCount: reviewLaneGate.blockingLaneCount,
     },
     reviewLaneScheduler: {
-      lanes: reviewLanes.map((lane) => ({
+      lanes: schedulerLanes.map((lane) => ({
         role: lane.role,
         status: lane.status,
       })),
@@ -69,7 +70,7 @@ function isMemoryRisk(snapshot: PetControlSnapshot): boolean {
 
 function sanitizeReviewLanes(lanes: readonly unknown[] | null | undefined): PetReviewLaneSummary[] {
   if (!Array.isArray(lanes)) return [];
-  return lanes.slice(0, 4).map((lane) => {
+  return lanes.map((lane) => {
     const record = (lane ?? {}) as Record<string, unknown>;
     return {
       role: normalizeRole(record.role),
