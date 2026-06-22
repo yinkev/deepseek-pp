@@ -10,6 +10,7 @@ import type {
   AutonomousRunCompletionGrade,
   AutonomousRunCompletionReview,
 } from '../run/review';
+import type { MemoryPressure } from '../prompt';
 
 export type PetBlockerCategory =
   | 'auth'
@@ -108,6 +109,15 @@ export interface PetControlSnapshot {
     action: PetStopLineAction;
     reason: PetStopLineReason;
     runStatus: AutonomousRunCockpitRun['status'] | null;
+  };
+  memoryPressure: {
+    enabled: boolean;
+    level: 'none' | 'low' | 'medium' | 'high';
+    truncated: boolean;
+    selectedCount: number;
+    availableCount: number;
+    selectedTokenEstimate: number;
+    budgetTokens: number;
   };
 }
 
@@ -265,6 +275,16 @@ export function createPetControlSnapshotFromRunCockpit(
     canFinalize: false,
   };
 
+  const memoryPressure: PetControlSnapshot['memoryPressure'] = {
+    enabled: false,
+    level: 'none',
+    truncated: false,
+    selectedCount: 0,
+    availableCount: 0,
+    selectedTokenEstimate: 0,
+    budgetTokens: 0,
+  };
+
   return {
     schemaVersion: 1,
     generatedAt: snapshot.generatedAt,
@@ -303,6 +323,7 @@ export function createPetControlSnapshotFromRunCockpit(
     review,
     reviewHeat: createPetReviewHeat(review),
     stopLine: createPetStopLineState(activeRun),
+    memoryPressure,
   };
 }
 
@@ -396,6 +417,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
     },
     evidence: snapshot.evidence,
     review: snapshot.review,
+    memoryPressure: snapshot.memoryPressure,
   };
   return {
     ...next,
@@ -486,6 +508,7 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
       acceptedEvidenceCount,
       canFinalize,
     },
+    memoryPressure: snapshot.memoryPressure,
   };
   return {
     ...next,
@@ -673,10 +696,17 @@ export interface PetHandoffCapsule {
   grade: PetControlSnapshot['review']['grade'];
   canFinalize: boolean;
   nextAction: PetHandoffNextAction;
+  memoryPressureEnabled: boolean;
+  memoryPressureLevel: 'none' | 'low' | 'medium' | 'high';
+  memoryPressureTruncated: boolean;
+  memorySelectedCount: number;
+  memoryAvailableCount: number;
+  memorySelectedTokenEstimate: number;
+  memoryBudgetTokens: number;
 }
 
 export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
-  const { readiness, run, target, safety, review, evidence, generatedAt } = snapshot;
+  const { readiness, run, target, safety, review, evidence, generatedAt, memoryPressure: mp } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
   if (target.stale) {
@@ -728,6 +758,14 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     nextAction = 'idle';
   }
 
+  const memoryPressureEnabled = mp ? mp.enabled : false;
+  const memoryPressureLevel = mp ? mp.level : 'none';
+  const memoryPressureTruncated = mp ? mp.truncated : false;
+  const memorySelectedCount = mp ? mp.selectedCount : 0;
+  const memoryAvailableCount = mp ? mp.availableCount : 0;
+  const memorySelectedTokenEstimate = mp ? mp.selectedTokenEstimate : 0;
+  const memoryBudgetTokens = mp ? mp.budgetTokens : 0;
+
   return {
     schemaVersion: 1,
     generatedAt,
@@ -756,5 +794,33 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     grade,
     canFinalize,
     nextAction,
+    memoryPressureEnabled,
+    memoryPressureLevel,
+    memoryPressureTruncated,
+    memorySelectedCount,
+    memoryAvailableCount,
+    memorySelectedTokenEstimate,
+    memoryBudgetTokens,
+  };
+}
+
+export function mergePromptMemoryPressureIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  pressure: MemoryPressure | null | undefined,
+): PetControlSnapshot {
+  if (!pressure) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    memoryPressure: {
+      enabled: pressure.enabled,
+      level: pressure.pressure,
+      truncated: pressure.truncated,
+      selectedCount: pressure.selectedCount,
+      availableCount: pressure.availableCount,
+      selectedTokenEstimate: pressure.selectedTokenEstimate,
+      budgetTokens: pressure.budgetTokens,
+    },
   };
 }

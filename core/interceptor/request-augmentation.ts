@@ -1,5 +1,5 @@
 import { DEFAULT_LOCALE, translate, type SupportedLocale } from '../i18n';
-import { buildPromptAugmentation, shouldAutoEnableResearchControls } from '../prompt';
+import { buildPromptAugmentation, shouldAutoEnableResearchControls, type MemoryPressure } from '../prompt';
 import {
   DEFAULT_PROMPT_INJECTION_SETTINGS,
   normalizePromptInjectionSettings,
@@ -28,6 +28,7 @@ export interface RequestBodyAugmentationResult {
   agentTaskPrompt: string;
   usedMemoryIds: number[];
   messageCount: number;
+  memoryPressure: MemoryPressure;
 }
 
 interface ResolvedSkills {
@@ -79,7 +80,7 @@ export function augmentRequestBody(
     const resolved = resolveSkills(state.skills, invocation.skillName, invocation.args, locale);
     if (resolved) {
       const scopedMemories = filterMemoriesByProjectScope(state.memories, state.projectId);
-      const { augmented, usedMemoryIds } = buildPromptAugmentation(resolved.combinedPrompt, {
+      const { augmented, usedMemoryIds, memoryPressure } = buildPromptAugmentation(resolved.combinedPrompt, {
         memories: scopedMemories,
         thinkingEnabled,
         identityOnly: !resolved.memoryEnabled,
@@ -98,11 +99,12 @@ export function augmentRequestBody(
         agentTaskPrompt: resolved.combinedPrompt,
         usedMemoryIds,
         messageCount,
+        memoryPressure,
       };
     }
   }
 
-  const { augmented, usedMemoryIds } = buildPromptAugmentation(originalPrompt, {
+  const { augmented, usedMemoryIds, memoryPressure } = buildPromptAugmentation(originalPrompt, {
     memories: filterMemoriesByProjectScope(state.memories, state.projectId),
     thinkingEnabled,
     presetContent,
@@ -120,6 +122,7 @@ export function augmentRequestBody(
     agentTaskPrompt: originalPrompt,
     usedMemoryIds,
     messageCount,
+    memoryPressure,
   };
 }
 

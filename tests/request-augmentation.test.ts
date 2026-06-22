@@ -466,6 +466,56 @@ describe('augmentRequestBody', () => {
     const idsAgree = result.memoryPressure.selectedCount === result.usedMemoryIds.length;
     expect(idsAgree).toBe(true);
   });
+
+  it('augmentRequestBody returns memoryPressure for normal path and agrees with usedMemoryIds', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'hello with memory context',
+      parent_message_id: null,
+      thinking_enabled: false,
+    }), {
+      memories: [
+        memory(1, 'global', undefined, 'm1', 'content1'),
+      ],
+      skills: [],
+      activePreset: null,
+      modelType: 'expert',
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.memoryPressure).toBeDefined();
+    expect(result!.memoryPressure.enabled).toBe(true);
+    expect(result!.memoryPressure.selectedCount).toBe(1);
+    expect(result!.usedMemoryIds.length).toBe(1);
+    expect(result!.memoryPressure.selectedCount).toBe(result!.usedMemoryIds.length);
+  });
+
+  it('augmentRequestBody returns memoryPressure for skill invocation path and agrees with usedMemoryIds', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: '/review do the task',
+      parent_message_id: null,
+      thinking_enabled: false,
+    }), {
+      memories: [
+        memory(10, 'global', undefined, 'skillmem', 'skill content'),
+      ],
+      skills: [{
+        name: 'review',
+        instructions: 'Review carefully.',
+        memoryEnabled: true,
+      }],
+      activePreset: null,
+      projectContext: null,
+      modelType: 'expert',
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+      locale: 'en',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.memoryPressure).toBeDefined();
+    expect(result!.memoryPressure.selectedCount).toBeGreaterThanOrEqual(0);
+    expect(result!.usedMemoryIds.length).toBe(result!.memoryPressure.selectedCount);
+  });
 });
 
 function memory(

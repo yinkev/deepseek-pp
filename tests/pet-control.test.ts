@@ -13,6 +13,7 @@ import {
   getPetControlSnapshot,
   mergeAutonomousCompletionReviewIntoSnapshot,
   mergeRuntimeDoctorReportIntoSnapshot,
+  mergePromptMemoryPressureIntoSnapshot,
   createPetHandoffCapsule,
   type PetControlSnapshot,
 } from '../core/pet/control';
@@ -61,6 +62,7 @@ describe('pet control snapshot', () => {
     review?: Partial<PetControlSnapshot['review']>;
     reviewHeat?: Partial<PetControlSnapshot['reviewHeat']>;
     stopLine?: Partial<PetControlSnapshot['stopLine']>;
+    memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -141,6 +143,16 @@ describe('pet control snapshot', () => {
         reason: 'no_run',
         runStatus: null,
         ...overrides.stopLine,
+      },
+      memoryPressure: {
+        enabled: false,
+        level: 'none',
+        truncated: false,
+        selectedCount: 0,
+        availableCount: 0,
+        selectedTokenEstimate: 0,
+        budgetTokens: 0,
+        ...overrides.memoryPressure,
       },
     };
   }
@@ -1327,6 +1339,13 @@ describe('pet control snapshot', () => {
         latestEvidenceAgeMs: null,
         grade: null,
         canFinalize: false,
+        memoryPressureEnabled: false,
+        memoryPressureLevel: 'none',
+        memoryPressureTruncated: false,
+        memorySelectedCount: 0,
+        memoryAvailableCount: 0,
+        memorySelectedTokenEstimate: 0,
+        memoryBudgetTokens: 0,
         nextAction: 'idle',
       });
       const json = JSON.stringify(capsule);
@@ -1544,5 +1563,125 @@ describe('pet control snapshot', () => {
       expect(capsuleJson).toContain('"reviewState":"iterate"');
       expect(capsuleJson).toContain('"blockerCount":2');
     });
+
+  describe('memory pressure consumption', () => {
+    it('createPetControlSnapshotFromRunCockpit and createBase default to no prompt pressure observed', () => {
+      const pet = createBasePetSnapshot();
+      expect(pet.memoryPressure).toEqual({
+        enabled: false,
+        level: 'none',
+        truncated: false,
+        selectedCount: 0,
+        availableCount: 0,
+        selectedTokenEstimate: 0,
+        budgetTokens: 0,
+      });
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).memoryPressure).toEqual(pet.memoryPressure);
+    });
+
+    it('mergePromptMemoryPressureIntoSnapshot returns original snapshot object unchanged if pressure null or undefined', () => {
+      const snap = createBasePetSnapshot();
+      const same1 = mergePromptMemoryPressureIntoSnapshot(snap, null);
+      const same2 = mergePromptMemoryPressureIntoSnapshot(snap, undefined);
+      expect(same1).toBe(snap);
+      expect(same2).toBe(snap);
+    });
+
+    it('mergePromptMemoryPressureIntoSnapshot merges safe aggregate fields', () => {
+      const snap = createBasePetSnapshot();
+      const pressure = {
+        enabled: true,
+        promptTokens: 100,
+        budgetTokens: 200,
+        selectedCount: 2,
+        selectedTokenEstimate: 150,
+        availableCount: 5,
+        pressure: 'medium' as const,
+        truncated: true,
+      };
+      const merged = mergePromptMemoryPressureIntoSnapshot(snap, pressure);
+      expect(merged).not.toBe(snap);
+      expect(merged.memoryPressure).toEqual({
+        enabled: true,
+        level: 'medium',
+        truncated: true,
+        selectedCount: 2,
+        availableCount: 5,
+        selectedTokenEstimate: 150,
+        budgetTokens: 200,
+      });
+      // original other fields preserved
+      expect(merged.readiness.status).toBe('ready');
+    });
+
+    it('createPetHandoffCapsule projects compact safe memory pressure fields only', () => {
+      const snap = createBaseForHandoff({
+        memoryPressure: {
+          enabled: true,
+          level: 'high',
+          truncated: true,
+          selectedCount: 3,
+          availableCount: 10,
+          selectedTokenEstimate: 1200,
+          budgetTokens: 1500,
+        },
+      });
+      const capsule = createPetHandoffCapsule(snap);
+      expect(capsule.memoryPressureEnabled).toBe(true);
+      expect(capsule.memoryPressureLevel).toBe('high');
+      expect(capsule.memoryPressureTruncated).toBe(true);
+      expect(capsule.memorySelectedCount).toBe(3);
+      expect(capsule.memoryAvailableCount).toBe(10);
+      expect(capsule.memorySelectedTokenEstimate).toBe(1200);
+      expect(capsule.memoryBudgetTokens).toBe(1500);
+      // no raw ids or content in capsule (already in structure)
+      const capJson = JSON.stringify(capsule);
+      expect(capJson).not.toMatch(/memory ids|content|name|tag/);
+    });
+
+    it('memory pressure as metadata does not alter nextAction priority', () => {
+      const base = createBaseForHandoff({ run: { active: true, phase: 'working' } });
+      const baseCapsule = createPetHandoffCapsule(base);
+      const withPressure = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        memoryPressure: { enabled: true, level: 'high', truncated: false, selectedCount: 5, availableCount: 5, selectedTokenEstimate: 800, budgetTokens: 1000 },
+      });
+      const pressureCapsule = createPetHandoffCapsule(withPressure);
+      expect(pressureCapsule.nextAction).toBe(baseCapsule.nextAction);
+      expect(pressureCapsule.nextAction).toBe('continue_run');
+    });
+
+    it('privacy false-positive source probe: secrets in names/content/tags/prompt not present in pressure or handoff projection', () => {
+      const snap = createBaseForHandoff({
+        memoryPressure: {
+          enabled: true,
+          level: 'low',
+          truncated: false,
+          selectedCount: 1,
+          availableCount: 1,
+          selectedTokenEstimate: 10,
+          budgetTokens: 100,
+        },
+      });
+      // simulate source with secrets (though pressure itself is aggregate)
+      const sourceWithSecret = { ...snap, _secretSource: 'memory name: TOPSECRET_MEM_NAME content: very secret prompt text tag: confidential' };
+      const sourceJson = JSON.stringify(sourceWithSecret);
+      expect(sourceJson).toMatch(/TOPSECRET_MEM_NAME|very secret|confidential/);
+
+      const capsule = createPetHandoffCapsule(snap);
+      const capJson = JSON.stringify(capsule);
+      expect(capJson).not.toMatch(/TOPSECRET_MEM_NAME|very secret prompt|confidential/);
+      // pressure fields are numbers/enums only
+      expect(typeof capsule.memorySelectedCount).toBe('number');
+    });
+  });
+
   });
 });
