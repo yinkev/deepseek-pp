@@ -279,6 +279,105 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(steps.length).toBeGreaterThan(0);
     expect(result.errorCode).toBe('executor_error');
   });
+
+  it('blocks on review lane gate before starting queued work or calling executor', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'review-lane-gate' });
+
+    const run = await createAutonomousRun({
+      goal: 'Blocked by review lane',
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: ['review clear'],
+        antiProof: [],
+      },
+    }, 100);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, {
+      now: 120,
+      reviewLaneGate: {
+        status: 'blocked',
+        reason: 'p2',
+        canProceed: false,
+        blockingPriority: 'P2',
+        blockingLaneCount: 1,
+      },
+    });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      started: false,
+      advanced: false,
+      applied: false,
+      policyDecision: null,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(executor).not.toHaveBeenCalled();
+
+    const final = await getAutonomousRunById(run.id);
+    expect(final).toMatchObject({
+      status: 'blocked',
+      error: { code: 'autonomous_review_lane_gate_blocked' },
+    });
+
+    const steps = await getAutonomousRunSteps(run.id);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({
+      phase: 'review',
+      status: 'failed',
+      error: { code: 'autonomous_review_lane_gate_blocked' },
+      observationRefs: [
+        'review_lane_gate:p2',
+        'review_lane_gate_priority:P2',
+        'review_lane_gate_blocking_lanes:1',
+      ],
+      proofDelta: [],
+      evidenceRefs: [],
+      toolCallIds: [],
+    });
+  });
+
+  it('does not block on non-blocking review lane attention', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'review-lane-attention' });
+
+    const run = await createAutonomousRun({
+      goal: 'Attention but can proceed',
+      proofContract: {
+        doneCriteria: ['done'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    const executor = vi.fn(async ({ runId }) => {
+      await appendAutonomousRunStep(runId, {
+        phase: 'verification',
+        progressScore: 1,
+        proofDelta: ['done'],
+      }, 130);
+    });
+    const result = await executeAutonomousRunCycle(run.id, executor, {
+      now: 120,
+      reviewLaneGate: {
+        status: 'attention',
+        reason: 'active_review',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      },
+    });
+
+    expect(result.action).toBe('advance');
+    expect(result.advanced).toBe(true);
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(result.errorCode).not.toBe('autonomous_review_lane_gate_blocked');
+  });
 });
 
 function createChromeStub() {

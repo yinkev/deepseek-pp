@@ -7,6 +7,7 @@ import {
   type AutonomousRunActionKind,
   type AutonomousRunCycleResult,
   type AutonomousRunExecutor,
+  type AutonomousRunReviewLaneGateInput,
 } from './worker';
 import type {
   AutonomousRun,
@@ -59,6 +60,7 @@ export interface AutonomousRunOrchestratorCycleOptions {
   interruptedThresholdMs?: number;
   now?: number;
   actionKind?: AutonomousRunActionKind;
+  reviewLaneGate?: AutonomousRunReviewLaneGateInput | null;
 }
 
 export interface AutonomousRunOrchestratorCycleResult {
@@ -101,6 +103,7 @@ export async function executeAutonomousOrchestratorCycle(
     ? await executeAutonomousRunCycle(selectedRunId, executor, {
       now,
       actionKind: options.actionKind,
+      reviewLaneGate: options.reviewLaneGate,
     })
     : null;
   return {

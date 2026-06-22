@@ -8,6 +8,7 @@ import {
 import { reviewAutonomousRunAction } from './policy';
 import { isTerminalRunStatus, type AutonomousRunProgressReview } from './kernel';
 import type {
+  AutonomousRunError,
   AutonomousRunId,
   AutonomousRunStatus,
 } from './types';
@@ -22,6 +23,17 @@ import type {
 } from './review';
 
 export type AutonomousRunActionKind = 'model_turn' | 'tool_call';
+export type AutonomousRunReviewLaneGateStatus = 'clear' | 'attention' | 'blocked';
+export type AutonomousRunReviewLaneGatePriority = 'P1' | 'P2' | 'P3';
+export type AutonomousRunReviewLaneGateReason =
+  | 'none'
+  | 'active_review'
+  | 'p1'
+  | 'p2'
+  | 'block_recommendation'
+  | 'failed_lane'
+  | 'blocked_lane'
+  | 'unknown';
 
 export interface AutonomousRunExecutorInput {
   runId: AutonomousRunId;
@@ -29,6 +41,21 @@ export interface AutonomousRunExecutorInput {
 }
 
 export type AutonomousRunExecutor = (input: AutonomousRunExecutorInput) => Promise<void> | void;
+
+export interface AutonomousRunReviewLaneGateInput {
+  status?: AutonomousRunReviewLaneGateStatus | null;
+  reason?: AutonomousRunReviewLaneGateReason | string | null;
+  canProceed?: boolean | null;
+  blockingPriority?: AutonomousRunReviewLaneGatePriority | null;
+  blockingLaneCount?: number | null;
+}
+
+interface NormalizedReviewLaneGate {
+  blocked: boolean;
+  reason: AutonomousRunReviewLaneGateReason;
+  blockingPriority: AutonomousRunReviewLaneGatePriority | null;
+  blockingLaneCount: number;
+}
 
 export interface AutonomousRunCycleResult {
   action: 'noop' | 'start' | 'advance' | 'block' | 'fail';
@@ -58,7 +85,7 @@ export interface AutonomousRunCycleReviewSummary {
 export async function executeAutonomousRunCycle(
   runId: AutonomousRunId,
   executor: AutonomousRunExecutor,
-  options: { now?: number; actionKind?: AutonomousRunActionKind } = {},
+  options: { now?: number; actionKind?: AutonomousRunActionKind; reviewLaneGate?: AutonomousRunReviewLaneGateInput | null } = {},
 ): Promise<AutonomousRunCycleResult> {
   const now = options.now ?? Date.now();
   const actionKind = options.actionKind ?? 'model_turn';
@@ -71,15 +98,45 @@ export async function executeAutonomousRunCycle(
     return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
   }
 
+  if (run.status === 'paused' || run.status === 'blocked') {
+    return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
+  }
+
+  const reviewLaneGate = normalizeReviewLaneGate(options.reviewLaneGate);
+  if (reviewLaneGate.blocked) {
+    const error = createReviewLaneGateError(reviewLaneGate, now);
+    await appendAutonomousRunStep(runId, {
+      phase: 'review',
+      status: 'failed',
+      error,
+      progressScore: 0,
+      proofDelta: [],
+      evidenceRefs: [],
+      toolCallIds: [],
+      observationRefs: createReviewLaneGateObservationRefs(reviewLaneGate),
+    }, now);
+    await transitionAutonomousRun(runId, 'blocked', error, now);
+    const iter = await applyAutonomousRunIterationReview({ runId }, now);
+    const final = await getAutonomousRunById(runId);
+    return makeResult(
+      'block',
+      runId,
+      false,
+      false,
+      iter.applied,
+      null,
+      iter.review?.action ?? null,
+      summarizeIterationReview(iter.review),
+      final?.status ?? 'blocked',
+      error.code,
+    );
+  }
+
   let started = false;
   if (run.status === 'queued') {
     await transitionAutonomousRun(runId, 'running', null, now);
     started = true;
     run = await getAutonomousRunById(runId) ?? run;
-  }
-
-  if (run.status === 'paused' || run.status === 'blocked') {
-    return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
   }
 
   const steps = await getAutonomousRunSteps(runId);
@@ -187,6 +244,79 @@ function makeResult(
     finalStatus,
     errorCode,
   };
+}
+
+function normalizeReviewLaneGate(
+  gate: AutonomousRunReviewLaneGateInput | null | undefined,
+): NormalizedReviewLaneGate {
+  if (!gate) {
+    return {
+      blocked: false,
+      reason: 'none',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    };
+  }
+  const reason = normalizeReviewLaneGateReason(gate.reason);
+  const blockingPriority = normalizeReviewLaneGatePriority(gate.blockingPriority);
+  const blockingLaneCount = typeof gate.blockingLaneCount === 'number' && Number.isFinite(gate.blockingLaneCount)
+    ? Math.max(0, Math.floor(gate.blockingLaneCount))
+    : 0;
+  const blocked = gate.canProceed === false ||
+    gate.status === 'blocked' ||
+    blockingPriority === 'P1' ||
+    blockingPriority === 'P2' ||
+    reason === 'p1' ||
+    reason === 'p2' ||
+    reason === 'block_recommendation';
+  return {
+    blocked,
+    reason,
+    blockingPriority,
+    blockingLaneCount,
+  };
+}
+
+function normalizeReviewLaneGateReason(reason: unknown): AutonomousRunReviewLaneGateReason {
+  if (
+    reason === 'none' ||
+    reason === 'active_review' ||
+    reason === 'p1' ||
+    reason === 'p2' ||
+    reason === 'block_recommendation' ||
+    reason === 'failed_lane' ||
+    reason === 'blocked_lane'
+  ) {
+    return reason;
+  }
+  return 'unknown';
+}
+
+function normalizeReviewLaneGatePriority(priority: unknown): AutonomousRunReviewLaneGatePriority | null {
+  if (priority === 'P1' || priority === 'P2' || priority === 'P3') {
+    return priority;
+  }
+  return null;
+}
+
+function createReviewLaneGateError(
+  gate: NormalizedReviewLaneGate,
+  now: number,
+): AutonomousRunError {
+  return {
+    code: 'autonomous_review_lane_gate_blocked',
+    message: `Autonomous run is blocked by review lane gate (${gate.reason}).`,
+    phase: 'review' as const,
+    retryable: true,
+    at: now,
+  };
+}
+
+function createReviewLaneGateObservationRefs(gate: NormalizedReviewLaneGate): string[] {
+  const refs = [`review_lane_gate:${gate.reason}`];
+  if (gate.blockingPriority) refs.push(`review_lane_gate_priority:${gate.blockingPriority}`);
+  if (gate.blockingLaneCount > 0) refs.push(`review_lane_gate_blocking_lanes:${gate.blockingLaneCount}`);
+  return refs;
 }
 
 function summarizeIterationReview(

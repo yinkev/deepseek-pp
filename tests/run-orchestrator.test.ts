@@ -176,6 +176,50 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
   });
 
+  it('passes review lane gate to the selected worker and blocks before executor work', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-review-gate' });
+
+    const run = await createAutonomousRun({
+      id: 'orchestrator-review-gate',
+      goal: 'Blocked by review gate',
+      proofContract: createProofContract(),
+    }, 100);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 120,
+      reviewLaneGate: {
+        status: 'blocked',
+        reason: 'p1',
+        canProceed: false,
+        blockingPriority: 'P1',
+        blockingLaneCount: 1,
+      },
+    });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.workerResult).toMatchObject({
+      runId: run.id,
+      action: 'block',
+      started: false,
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+      error: { code: result.workerResult?.errorCode },
+    });
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+  });
+
   it('reconciles stale running runs before falling back to queued work', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
