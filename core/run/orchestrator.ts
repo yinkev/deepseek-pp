@@ -9,6 +9,16 @@ import {
   type AutonomousReviewLaneSchedulerLaneInput,
 } from './review-scheduler';
 import {
+  createAutonomousRunTelemetryPackage,
+  type AutonomousRunTelemetryCommit,
+  type AutonomousRunTelemetryVerification,
+} from './telemetry';
+import {
+  writeAutonomousRunTelemetryPackage,
+  type AutonomousRunTelemetryWriteResult,
+  type AutonomousRunTelemetryWriteTarget,
+} from './telemetry-writer';
+import {
   executeAutonomousRunCycle,
   type AutonomousRunActionKind,
   type AutonomousRunCycleResult,
@@ -68,6 +78,7 @@ export interface AutonomousRunOrchestratorCycleOptions {
   actionKind?: AutonomousRunActionKind;
   reviewLaneGate?: AutonomousRunReviewLaneGateInput | null;
   reviewLaneScheduler?: AutonomousRunOrchestratorReviewLaneSchedulerInput | null;
+  telemetry?: AutonomousRunOrchestratorTelemetryInput | null;
 }
 
 export interface AutonomousRunOrchestratorReviewLaneSchedulerInput {
@@ -85,8 +96,45 @@ export interface AutonomousRunOrchestratorCycleResult {
   beforeSnapshot: AutonomousRunCockpitSnapshot;
   reviewLanePlan: AutonomousReviewLanePlan;
   workerResult: AutonomousRunCycleResult | null;
+  telemetryResult: AutonomousRunOrchestratorTelemetryResult | null;
   afterSnapshot: AutonomousRunCockpitSnapshot;
 }
+
+export interface AutonomousRunOrchestratorTelemetryInput {
+  target?: AutonomousRunTelemetryWriteTarget | null;
+  rootDir?: string;
+  verification?: readonly AutonomousRunTelemetryVerification[] | null;
+  commits?: readonly AutonomousRunTelemetryCommit[] | null;
+}
+
+export type AutonomousRunOrchestratorTelemetryResult =
+  | {
+    status: 'written';
+    runId: string;
+    rootDir: string;
+    fileCount: number;
+    contentLength: number;
+    paths: string[];
+    errorCode: null;
+  }
+  | {
+    status: 'skipped';
+    runId: null;
+    rootDir: null;
+    fileCount: 0;
+    contentLength: 0;
+    paths: [];
+    errorCode: 'no_selected_run' | 'package_unavailable' | 'target_unavailable';
+  }
+  | {
+    status: 'failed';
+    runId: string | null;
+    rootDir: string | null;
+    fileCount: 0;
+    contentLength: 0;
+    paths: [];
+    errorCode: 'telemetry_write_failed';
+  };
 
 export async function initializeAutonomousRunOrchestrator(
   options: {
@@ -134,13 +182,16 @@ export async function executeAutonomousOrchestratorCycle(
       reviewLaneGate: options.reviewLaneGate,
     })
     : null;
+  const afterSnapshot = await getAutonomousRunCockpitSnapshot(now);
+  const telemetryResult = await writeOrchestratorTelemetry(selectedRunId, options.telemetry, now);
   return {
     selectedRunId,
     reconciledInterruptedRuns,
     beforeSnapshot,
     reviewLanePlan,
     workerResult,
-    afterSnapshot: await getAutonomousRunCockpitSnapshot(now),
+    telemetryResult,
+    afterSnapshot,
   };
 }
 
@@ -266,4 +317,62 @@ function getCockpitTargetLeaseStatus(
   if (!lease) return 'none';
   if (lease.status === 'active' && lease.expiresAt <= now) return 'expired';
   return lease.status;
+}
+
+async function writeOrchestratorTelemetry(
+  selectedRunId: AutonomousRunId | null,
+  input: AutonomousRunOrchestratorTelemetryInput | null | undefined,
+  now: number,
+): Promise<AutonomousRunOrchestratorTelemetryResult | null> {
+  if (!input) return null;
+  if (!selectedRunId) return createSkippedTelemetryResult('no_selected_run');
+  if (!input.target) return createSkippedTelemetryResult('target_unavailable');
+
+  const pkg = createAutonomousRunTelemetryPackage(await getAutonomousRunLedgerSnapshot(), selectedRunId, {
+    generatedAt: now,
+    rootDir: input.rootDir,
+    verification: input.verification,
+    commits: input.commits,
+  });
+  if (!pkg) return createSkippedTelemetryResult('package_unavailable');
+
+  try {
+    return toTelemetryResult(await writeAutonomousRunTelemetryPackage(pkg, input.target));
+  } catch {
+    return {
+      status: 'failed',
+      runId: pkg.runId,
+      rootDir: pkg.rootDir,
+      fileCount: 0,
+      contentLength: 0,
+      paths: [],
+      errorCode: 'telemetry_write_failed',
+    };
+  }
+}
+
+function toTelemetryResult(result: AutonomousRunTelemetryWriteResult): AutonomousRunOrchestratorTelemetryResult {
+  return {
+    status: 'written',
+    runId: result.runId,
+    rootDir: result.rootDir,
+    fileCount: result.fileCount,
+    contentLength: result.contentLength,
+    paths: result.paths,
+    errorCode: null,
+  };
+}
+
+function createSkippedTelemetryResult(
+  errorCode: Extract<AutonomousRunOrchestratorTelemetryResult, { status: 'skipped' }>['errorCode'],
+): AutonomousRunOrchestratorTelemetryResult {
+  return {
+    status: 'skipped',
+    runId: null,
+    rootDir: null,
+    fileCount: 0,
+    contentLength: 0,
+    paths: [],
+    errorCode,
+  };
 }

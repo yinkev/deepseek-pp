@@ -57,6 +57,7 @@ describe('autonomous run orchestrator startup bridge', () => {
         errorCode: 'completion_review_fail',
       },
     });
+    expect(result.telemetryResult).toBeNull();
     expect(executor).toHaveBeenCalledWith({ runId: newer.id, now: 300 });
     expect(executor).toHaveBeenCalledTimes(1);
 
@@ -340,10 +341,150 @@ describe('autonomous run orchestrator startup bridge', () => {
       metadata: { url: 'https://example.com/private?token=secret' },
     }, 130);
 
-    const result = await executeAutonomousOrchestratorCycle(vi.fn(), { now: 140 });
+    const writes: Array<{ path: string; content: string }> = [];
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 140,
+      telemetry: {
+        target: {
+          writeTextFile(path, content) {
+            writes.push({ path, content });
+          },
+        },
+      },
+    });
 
     expect(result.selectedRunId).toBe(running.id);
     expect(JSON.stringify(result)).not.toMatch(/snapshot-private-ref|Bearer|secret-token|private\?token/);
+    expect(result.telemetryResult).toMatchObject({ status: 'written', runId: 'run-1' });
+    expect(JSON.stringify(writes)).not.toMatch(/private-running|private-lease|private-evidence|snapshot-private-ref|Bearer|secret-token|private\?token/);
+  });
+
+  it('writes selected run telemetry after the worker cycle using post-cycle durable state', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'telemetry-cycle' });
+
+    const run = await createAutonomousRun({
+      id: 'telemetry-cycle',
+      goal: 'Write telemetry',
+      proofContract: createProofContract(),
+    }, 100);
+    const writes: Array<{ path: string; content: string }> = [];
+    const executor = vi.fn(async ({ runId, now: execNow }) => {
+      await appendAutonomousRunStep(runId, {
+        phase: 'model_turn',
+        progressScore: 0.5,
+        proofDelta: ['intermediate progress'],
+      }, execNow);
+    });
+
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 300,
+      telemetry: {
+        target: {
+          writeTextFile(path, content) {
+            writes.push({ path, content });
+          },
+        },
+        verification: [{ command: 'npm test -- tests/run-orchestrator.test.ts', exitCode: 0 }],
+        commits: [{ sha: 'abc123', message: 'Telemetry cycle', linkedStepId: 'telemetry-cycle' }],
+      },
+    });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.telemetryResult).toMatchObject({
+      status: 'written',
+      runId: 'run-1',
+      rootDir: '.runs/run-1',
+      fileCount: 8,
+      errorCode: null,
+    });
+    expect(writes.map((write) => write.path)).toEqual(result.telemetryResult?.paths);
+    const final = await getAutonomousRunById(run.id);
+    const manifest = readTelemetryJson(writes, 'manifest.json');
+    const verification = readTelemetryJson(writes, 'verification.json');
+    expect(manifest.run).toMatchObject({
+      id: 'run-1',
+      status: final?.status,
+      updatedAt: final?.updatedAt,
+    });
+    expect(verification.summary).toMatchObject({
+      commandStatus: 'passed',
+      durableStatus: final?.status,
+    });
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: final?.status,
+    });
+  });
+
+  it('skips telemetry when no runnable run is selected', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'telemetry-skip' });
+
+    const writes: string[] = [];
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 100,
+      telemetry: {
+        target: {
+          writeTextFile(path) {
+            writes.push(path);
+          },
+        },
+      },
+    });
+
+    expect(result.selectedRunId).toBeNull();
+    expect(result.workerResult).toBeNull();
+    expect(result.telemetryResult).toEqual({
+      status: 'skipped',
+      runId: null,
+      rootDir: null,
+      fileCount: 0,
+      contentLength: 0,
+      paths: [],
+      errorCode: 'no_selected_run',
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it('returns safe telemetry failure metadata without leaking writer errors', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'telemetry-failure' });
+
+    const run = await createAutonomousRun({
+      id: 'telemetry-failure',
+      goal: 'Write telemetry failure',
+      proofContract: createProofContract(),
+    }, 100);
+
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 120,
+      telemetry: {
+        target: {
+          writeTextFile() {
+            throw new Error('Authorization: Bearer secret-token from writer');
+          },
+        },
+      },
+    });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.telemetryResult).toEqual({
+      status: 'failed',
+      runId: 'run-1',
+      rootDir: '.runs/run-1',
+      fileCount: 0,
+      contentLength: 0,
+      paths: [],
+      errorCode: 'telemetry_write_failed',
+    });
+    expect(JSON.stringify(result.telemetryResult)).not.toMatch(/Authorization|Bearer|secret-token/);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+    });
   });
 
   it('returns review lane hold plan without preventing worker progress', async () => {
@@ -677,6 +818,12 @@ function createProofContract() {
     requiredEvidence: [],
     antiProof: [],
   };
+}
+
+function readTelemetryJson(writes: Array<{ path: string; content: string }>, name: string): any {
+  const write = writes.find((item) => item.path.endsWith(`/${name}`));
+  expect(write).toBeDefined();
+  return JSON.parse(write?.content ?? '{}');
 }
 
 function createChromeStub() {
