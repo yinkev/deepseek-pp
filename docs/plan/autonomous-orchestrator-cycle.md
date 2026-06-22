@@ -11,7 +11,7 @@
   - otherwise newest `queued` run by `updatedAt`;
   - never select `paused`, `blocked`, `succeeded`, `failed`, or `cancelled`.
 - If no runnable run exists, return `selectedRunId=null` and `workerResult=null`.
-- If a run is selected, call `executeAutonomousRunCycle` once with the injected executor.
+- If a run is selected, call `executeAutonomousRunCycle` once with the injected executor, provided `now`, and provided `actionKind`.
 - Build an `afterSnapshot` from the cockpit snapshot contract after worker execution.
 
 ## Return Shape
@@ -43,5 +43,6 @@ Tests prove:
 - stale running runs are reconciled before queued fallback selection;
 - paused, blocked, and terminal runs are not resumed;
 - no-runnable cycles do not call the executor;
+- selected cycles forward `actionKind` to the worker gate;
 - cycle result snapshots preserve cockpit privacy;
 - selected result status agrees with durable stored state.

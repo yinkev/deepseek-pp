@@ -3,6 +3,7 @@ import {
   appendAutonomousEvidenceRecord,
   appendAutonomousRunStep,
   createAutonomousRun,
+  DEFAULT_AUTONOMOUS_RUN_POLICY,
   getAutonomousRunById,
   transitionAutonomousRun,
   upsertAutonomousTargetLease,
@@ -87,6 +88,40 @@ describe('autonomous run orchestrator startup bridge', () => {
     expect(executor).toHaveBeenCalledTimes(1);
   });
 
+  it('forwards actionKind to the selected worker cycle', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'action-kind' });
+
+    const run = await createAutonomousRun({
+      id: 'manual-tool-run',
+      goal: 'Manual tool action',
+      policy: { ...DEFAULT_AUTONOMOUS_RUN_POLICY, approvalMode: 'manual_all' },
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 120,
+      actionKind: 'tool_call',
+    });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.workerResult).toMatchObject({
+      runId: run.id,
+      action: 'block',
+      policyDecision: 'manual_review',
+      finalStatus: 'blocked',
+      applied: false,
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+      error: { code: result.workerResult?.errorCode },
+    });
+  });
+
   it('reconciles stale running runs before falling back to queued work', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
@@ -140,6 +175,18 @@ describe('autonomous run orchestrator startup bridge', () => {
     const succeeded = await createAutonomousRun({ id: 'succeeded-run', goal: 'Succeeded run' }, 300);
     await transitionAutonomousRun(succeeded.id, 'running', null, 310);
     await transitionAutonomousRun(succeeded.id, 'succeeded', null, 320);
+    const failed = await createAutonomousRun({ id: 'failed-run', goal: 'Failed run' }, 330);
+    await transitionAutonomousRun(failed.id, 'running', null, 340);
+    await transitionAutonomousRun(failed.id, 'failed', {
+      code: 'failed_terminal',
+      message: 'Terminal failure',
+      phase: 'finish',
+      retryable: false,
+      at: 350,
+    }, 350);
+    const cancelled = await createAutonomousRun({ id: 'cancelled-run', goal: 'Cancelled run' }, 360);
+    await transitionAutonomousRun(cancelled.id, 'running', null, 370);
+    await transitionAutonomousRun(cancelled.id, 'cancelled', null, 380);
 
     const executor = vi.fn();
     const result = await executeAutonomousOrchestratorCycle(executor, { now: 400 });
@@ -149,6 +196,8 @@ describe('autonomous run orchestrator startup bridge', () => {
     expect(executor).not.toHaveBeenCalled();
     await expect(getAutonomousRunById(paused.id)).resolves.toMatchObject({ status: 'paused' });
     await expect(getAutonomousRunById(blocked.id)).resolves.toMatchObject({ status: 'blocked' });
+    await expect(getAutonomousRunById(failed.id)).resolves.toMatchObject({ status: 'failed' });
+    await expect(getAutonomousRunById(cancelled.id)).resolves.toMatchObject({ status: 'cancelled' });
   });
 
   it('keeps orchestrator cycle snapshots private', async () => {
