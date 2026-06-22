@@ -32,6 +32,7 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
       advanced: false,
       applied: false,
       policyDecision: null,
+      reviewSummary: null,
       finalStatus: null,
     });
   });
@@ -78,7 +79,18 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
       advanced: true,
       applied: true,
       policyDecision: 'allow',
+      reviewSummary: {
+        action: 'iterate',
+        completionDecision: 'iterate',
+        grade: 'A',
+        issueCount: 1,
+        proofDebtCount: 0,
+        acceptedEvidenceCount: 0,
+        progressReason: null,
+        errorCode: 'completion_review_iterate',
+      },
     });
+    expect(result.reviewSummary?.score).toBeGreaterThan(0);
     expect(executor).toHaveBeenCalledTimes(1);
     const finalRun = await getAutonomousRunById(run.id);
     expect(finalRun?.status).toBe('running');
@@ -99,6 +111,7 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     const result = await executeAutonomousRunCycle(run.id, executor, { now: 130 });
 
     expect(result).toMatchObject({ action: 'noop', finalStatus: 'paused' });
+    expect(result.reviewSummary).toBeNull();
     expect(executor).not.toHaveBeenCalled();
   });
 
@@ -127,7 +140,15 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
       policyDecision: 'manual_review',
       finalStatus: 'blocked',
       applied: false,
+      reviewSummary: {
+        action: 'noop',
+        completionDecision: 'fail',
+        proofDebtCount: 2,
+        acceptedEvidenceCount: 0,
+        progressReason: null,
+      },
     });
+    expect(result.reviewSummary?.issueCount).toBeGreaterThan(0);
     expect(executor).not.toHaveBeenCalled();
 
     const final = await getAutonomousRunById(run.id);
@@ -163,6 +184,12 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
       finalStatus: 'blocked',
       applied: false,
       errorCode: 'autonomous_gate_tool_not_allowlisted',
+      reviewSummary: {
+        action: 'noop',
+        completionDecision: 'fail',
+        proofDebtCount: 2,
+        acceptedEvidenceCount: 0,
+      },
     });
     expect(executor).not.toHaveBeenCalled();
 
@@ -208,6 +235,13 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     const result = await executeAutonomousRunCycle(run.id, executor, { now: 120 });
 
     expect(result.policyDecision).toBe('allow');
+    expect(result.reviewSummary).toMatchObject({
+      action: 'block',
+      completionDecision: 'fail',
+      grade: 'A',
+      acceptedEvidenceCount: 0,
+      errorCode: 'autonomous_iteration_empty_proof_contract',
+    });
     expect(executor).toHaveBeenCalledTimes(1);
     expect(result.advanced).toBe(true);
     expect(result.applied).toBe(true);
@@ -231,7 +265,15 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
       action: 'fail',
       errorCode: 'executor_error',
       applied: true,
+      reviewSummary: {
+        action: 'block',
+        completionDecision: 'fail',
+        grade: 'B',
+        acceptedEvidenceCount: 0,
+        errorCode: 'autonomous_iteration_empty_proof_contract',
+      },
     });
+    expect(JSON.stringify(result.reviewSummary)).not.toContain('executor failed hard');
     expect(executor).toHaveBeenCalledTimes(1);
     const steps = await getAutonomousRunSteps(run.id);
     expect(steps.length).toBeGreaterThan(0);

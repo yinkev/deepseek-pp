@@ -6,12 +6,20 @@ import {
   transitionAutonomousRun,
 } from './store';
 import { reviewAutonomousRunAction } from './policy';
-import { isTerminalRunStatus } from './kernel';
+import { isTerminalRunStatus, type AutonomousRunProgressReview } from './kernel';
 import type {
   AutonomousRunId,
   AutonomousRunStatus,
 } from './types';
 import type { AutonomousRunGateDecision } from './policy';
+import type {
+  AutonomousRunIterationAction,
+  AutonomousRunIterationReview,
+} from './iteration';
+import type {
+  AutonomousRunCompletionDecision,
+  AutonomousRunCompletionGrade,
+} from './review';
 
 export type AutonomousRunActionKind = 'model_turn' | 'tool_call';
 
@@ -30,7 +38,20 @@ export interface AutonomousRunCycleResult {
   applied: boolean;
   policyDecision: AutonomousRunGateDecision | null;
   iterationAction: string | null;
+  reviewSummary: AutonomousRunCycleReviewSummary | null;
   finalStatus: AutonomousRunStatus | null;
+  errorCode: string | null;
+}
+
+export interface AutonomousRunCycleReviewSummary {
+  action: AutonomousRunIterationAction;
+  completionDecision: AutonomousRunCompletionDecision;
+  grade: AutonomousRunCompletionGrade;
+  score: number;
+  issueCount: number;
+  proofDebtCount: number;
+  acceptedEvidenceCount: number;
+  progressReason: AutonomousRunProgressReview['reason'];
   errorCode: string | null;
 }
 
@@ -44,10 +65,10 @@ export async function executeAutonomousRunCycle(
 
   let run = await getAutonomousRunById(runId);
   if (!run) {
-    return makeResult('noop', runId, false, false, false, null, null, null, null);
+    return makeResult('noop', runId, false, false, false, null, null, null, null, null);
   }
   if (isTerminalRunStatus(run.status)) {
-    return makeResult('noop', runId, false, false, false, null, null, run.status, null);
+    return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
   }
 
   let started = false;
@@ -58,7 +79,7 @@ export async function executeAutonomousRunCycle(
   }
 
   if (run.status === 'paused' || run.status === 'blocked') {
-    return makeResult('noop', runId, false, false, false, null, null, run.status, null);
+    return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
   }
 
   const steps = await getAutonomousRunSteps(runId);
@@ -91,6 +112,7 @@ export async function executeAutonomousRunCycle(
       iter.applied,  // will be false (apply sees non-running status)
       policyReview.decision,
       iter.review?.action ?? null,
+      summarizeIterationReview(iter.review),
       final?.status ?? 'blocked',
       policyReview.error?.code ?? null,
     );
@@ -135,6 +157,7 @@ export async function executeAutonomousRunCycle(
     iter.applied,
     'allow',
     iter.review?.action ?? null,
+    summarizeIterationReview(iter.review),
     final?.status ?? null,
     execErrorCode ?? iter.review?.error?.code ?? null,
   );
@@ -148,6 +171,7 @@ function makeResult(
   applied: boolean,
   policyDecision: AutonomousRunGateDecision | null,
   iterationAction: string | null,
+  reviewSummary: AutonomousRunCycleReviewSummary | null,
   finalStatus: AutonomousRunStatus | null,
   errorCode: string | null,
 ): AutonomousRunCycleResult {
@@ -159,7 +183,25 @@ function makeResult(
     applied,
     policyDecision,
     iterationAction,
+    reviewSummary,
     finalStatus,
     errorCode,
+  };
+}
+
+function summarizeIterationReview(
+  review: AutonomousRunIterationReview | null | undefined,
+): AutonomousRunCycleReviewSummary | null {
+  if (!review) return null;
+  return {
+    action: review.action,
+    completionDecision: review.completionDecision,
+    grade: review.grade,
+    score: review.score,
+    issueCount: review.issueCodes.length,
+    proofDebtCount: review.doneCriteriaMissing.length + review.requiredEvidenceMissing.length,
+    acceptedEvidenceCount: review.acceptedEvidenceIds.length,
+    progressReason: review.progressReason,
+    errorCode: review.error?.code ?? null,
   };
 }

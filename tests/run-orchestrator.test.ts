@@ -49,6 +49,13 @@ describe('autonomous run orchestrator startup bridge', () => {
       runId: newer.id,
       started: true,
       finalStatus: 'running',
+      reviewSummary: {
+        action: 'iterate',
+        completionDecision: 'fail',
+        grade: 'F',
+        acceptedEvidenceCount: 0,
+        errorCode: 'completion_review_fail',
+      },
     });
     expect(executor).toHaveBeenCalledWith({ runId: newer.id, now: 300 });
     expect(executor).toHaveBeenCalledTimes(1);
