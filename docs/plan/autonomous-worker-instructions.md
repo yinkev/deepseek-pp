@@ -32,6 +32,19 @@ DeepSeek++ should not become:
 - A hidden actor that mutates browser/account/local state without policy gates.
 - A system that treats Oracle or any advisor as authority.
 
+## Long-Term Goal
+
+Build DeepSeek++ into a self-governing autonomous worker control plane:
+
+- durable run state is the source of truth;
+- each implementation slice has an explicit contract coverage table;
+- result objects must agree with durable stored state before success is trusted;
+- independent P1/P2 review blocks the next slice;
+- the pet becomes the compact cockpit for state, blockers, evidence, review gates, and safe controls;
+- Chrome/runtime mutation stays frozen until explicitly resumed.
+
+The operating default is autonomy, not supervision. The user should not be the relay, evaluator, or babysitter. Agents and workers should continue through safe, scoped, verifiable slices until a real blocker appears.
+
 ## Execution Loop
 
 For each autonomous work cycle:
@@ -72,6 +85,53 @@ Priority order:
 6. Subagent worker/reviewer lanes.
 7. Pet cockpit over autonomous worker state.
 8. UI polish.
+
+## Nine Major Tracks
+
+1. Durable iteration apply and run-state mutation discipline.
+   - Status: complete.
+   - Accomplish by keeping review/apply inside storage mutation locks, appending metadata-only review steps, and proving terminal transitions agree with durable state.
+   - Gate: iteration/store tests, no-progress filtering tests, compile, commit, independent review.
+
+2. Worker prompt contract and quality gate.
+   - Status: complete.
+   - Accomplish by generating deterministic worker prompts that always require Evaluate, Review, Grade, Iterate, contract coverage, false-positive success probing, self-grade, commit, and XML reporting.
+   - Gate: prompt snapshot tests, marker tests, no Chrome/runtime edits.
+
+3. Contract coverage and result-state consistency.
+   - Status: complete as of `d119af5`.
+   - Accomplish by producing pure reviewers for required behavior coverage and result/durable-state agreement, including malformed-result adversarial cases.
+   - Gate: focused consistency/coverage tests, adjacent worker/orchestrator tests, full serial suite, independent P1/P2 review.
+
+4. Durable quality-gate persistence.
+   - Status: next implementation slice.
+   - Accomplish by storing compact gate results for each run/iteration: contract coverage summary, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
+   - Gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
+
+5. Orchestrator enforcement.
+   - Status: pending.
+   - Accomplish by making the orchestrator consult persisted quality gates before selecting or advancing the next runnable run.
+   - Gate: P1/P2 review state blocks the next cycle; green gate allows continuation; no Chrome/runtime wiring.
+
+6. Review-lane worker coordination.
+   - Status: pending.
+   - Accomplish by formalizing implementer, reviewer, safety, UX, Oracle/advisor, and optional Grok advisory lanes as bounded inputs to the run ledger.
+   - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
+
+7. Autonomous telemetry and repo-visible handoff.
+   - Status: partially complete.
+   - Accomplish by exporting complete, marker-based telemetry packages and handoff capsules that reflect post-cycle durable state.
+   - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state.
+
+8. Pet cockpit projection.
+   - Status: partially complete.
+   - Accomplish by projecting run status, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, and quality gate status into pet snapshot/handoff fields.
+   - Gate: pet surfaces expose safe metadata only and never trigger browser/file mutation by themselves.
+
+9. Controlled runtime resume.
+   - Status: blocked until the user explicitly resumes Chrome/runtime work.
+   - Accomplish by wiring background/runtime only after pure core gates are complete and verified.
+   - Gate: no `entrypoints/background.ts` change until explicit resume; runtime smoke required before claiming live autonomy.
 
 ## Subagent Use
 
