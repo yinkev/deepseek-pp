@@ -16,6 +16,7 @@ import {
   mergePromptMemoryPressureIntoSnapshot,
   createPetHandoffCapsule,
   mergeAutonomousWorkerCycleResultIntoSnapshot,
+  mergeOrchestratorTelemetryResultIntoSnapshot,
   createPetReviewLaneGate,
   createPetRunQueue,
   mergePetReviewLanesIntoSnapshot,
@@ -26,6 +27,7 @@ import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
 import type { RuntimeDoctorReport } from '../core/chat/runtime-doctor';
 import type { AutonomousRunCompletionReview } from '../core/run/review';
 import type { AutonomousRunCycleResult } from '../core/run/worker';
+import type { AutonomousRunOrchestratorTelemetryResult } from '../core/run/orchestrator';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -71,6 +73,7 @@ describe('pet control snapshot', () => {
     stopLine?: Partial<PetControlSnapshot['stopLine']>;
     memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
     workerCycle?: Partial<PetControlSnapshot['workerCycle']>;
+    telemetry?: Partial<PetControlSnapshot['telemetry']>;
     reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
     reviewLaneGate?: Partial<PetControlSnapshot['reviewLaneGate']>;
   } = {}): PetControlSnapshot {
@@ -189,6 +192,14 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         reviewErrorCode: null,
         ...overrides.workerCycle,
+      },
+      telemetry: {
+        status: 'none',
+        complete: false,
+        fileCount: 0,
+        contentLength: 0,
+        errorCode: null,
+        ...overrides.telemetry,
       },
       reviewLanes: {
         total: 0,
@@ -1447,6 +1458,11 @@ describe('pet control snapshot', () => {
         workerCycleReviewProofDebtCount: 0,
         workerCycleAcceptedEvidenceCount: 0,
         workerCycleReviewErrorCode: null,
+        telemetryStatus: 'none',
+        telemetryComplete: false,
+        telemetryFileCount: 0,
+        telemetryContentLength: 0,
+        telemetryErrorCode: null,
         reviewLaneCount: 0,
         reviewLaneActiveCount: 0,
         reviewLanePassedCount: 0,
@@ -2296,6 +2312,203 @@ describe('pet control snapshot', () => {
       expect(capsule.workerCycleReviewErrorCode).toBe('unknown_worker_cycle_error');
       expect(petJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
       expect(capsuleJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
+    });
+  });
+
+  describe('telemetry handoff consumption', () => {
+    function createTelemetryResult(
+      overrides: Partial<Extract<AutonomousRunOrchestratorTelemetryResult, { status: 'written' }>> = {},
+    ): AutonomousRunOrchestratorTelemetryResult {
+      return {
+        status: 'written',
+        runId: 'run-secret-raw-id',
+        rootDir: '.runs/run-secret-raw-id',
+        fileCount: 9,
+        contentLength: 1234,
+        paths: [
+          '.runs/run-secret-raw-id/manifest.json',
+          '.runs/run-secret-raw-id/.complete.json',
+        ],
+        errorCode: null,
+        ...overrides,
+      };
+    }
+
+    it('createPetControlSnapshotFromRunCockpit and createBase default to no telemetry observed', () => {
+      const pet = createBasePetSnapshot();
+      expect(pet.telemetry).toEqual({
+        status: 'none',
+        complete: false,
+        fileCount: 0,
+        contentLength: 0,
+        errorCode: null,
+      });
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).telemetry).toEqual(pet.telemetry);
+    });
+
+    it('mergeOrchestratorTelemetryResultIntoSnapshot returns original snapshot object unchanged if result null or undefined', () => {
+      const snap = createBasePetSnapshot();
+      expect(mergeOrchestratorTelemetryResultIntoSnapshot(snap, null)).toBe(snap);
+      expect(mergeOrchestratorTelemetryResultIntoSnapshot(snap, undefined)).toBe(snap);
+    });
+
+    it('mergeOrchestratorTelemetryResultIntoSnapshot projects completion marker and safe counts only', () => {
+      const snap = createBasePetSnapshot();
+      const merged = mergeOrchestratorTelemetryResultIntoSnapshot(snap, createTelemetryResult());
+
+      expect(merged).not.toBe(snap);
+      expect(merged.telemetry).toEqual({
+        status: 'written',
+        complete: true,
+        fileCount: 9,
+        contentLength: 1234,
+        errorCode: null,
+      });
+    });
+
+    it('mergeOrchestratorTelemetryResultIntoSnapshot requires completion marker and normalizes counts', () => {
+      const snap = createBasePetSnapshot();
+      const merged = mergeOrchestratorTelemetryResultIntoSnapshot(snap, createTelemetryResult({
+        fileCount: -9.8,
+        contentLength: Number.NaN,
+        paths: ['.runs/run-secret-raw-id/manifest.json'],
+      }));
+
+      expect(merged.telemetry).toEqual({
+        status: 'written',
+        complete: false,
+        fileCount: 0,
+        contentLength: 0,
+        errorCode: null,
+      });
+    });
+
+    it('mergeOrchestratorTelemetryResultIntoSnapshot never trusts a completion marker on non-written telemetry', () => {
+      const snap = createBasePetSnapshot();
+      const malformedSkippedResult = {
+        status: 'skipped',
+        runId: null,
+        rootDir: null,
+        fileCount: 3,
+        contentLength: 500,
+        paths: ['.runs/run-secret-raw-id/.complete.json'],
+        errorCode: 'target_unavailable',
+      } as unknown as AutonomousRunOrchestratorTelemetryResult;
+
+      const merged = mergeOrchestratorTelemetryResultIntoSnapshot(snap, malformedSkippedResult);
+
+      expect(merged.telemetry).toEqual({
+        status: 'skipped',
+        complete: false,
+        fileCount: 3,
+        contentLength: 500,
+        errorCode: 'target_unavailable',
+      });
+    });
+
+    it('mergeOrchestratorTelemetryResultIntoSnapshot projects failed and skipped telemetry as safe metadata only', () => {
+      const snap = createBasePetSnapshot();
+      const failed: AutonomousRunOrchestratorTelemetryResult = {
+        status: 'failed',
+        runId: 'SECRET_FAILED_RUN',
+        rootDir: '.runs/SECRET_FAILED_RUN',
+        fileCount: 0,
+        contentLength: 0,
+        paths: [],
+        errorCode: 'telemetry_write_failed',
+      };
+      const skipped: AutonomousRunOrchestratorTelemetryResult = {
+        status: 'skipped',
+        runId: null,
+        rootDir: null,
+        fileCount: 0,
+        contentLength: 0,
+        paths: [],
+        errorCode: 'no_selected_run',
+      };
+
+      const failedPet = mergeOrchestratorTelemetryResultIntoSnapshot(snap, failed);
+      const skippedPet = mergeOrchestratorTelemetryResultIntoSnapshot(snap, skipped);
+
+      expect(failedPet.telemetry).toEqual({
+        status: 'failed',
+        complete: false,
+        fileCount: 0,
+        contentLength: 0,
+        errorCode: 'telemetry_write_failed',
+      });
+      expect(skippedPet.telemetry).toEqual({
+        status: 'skipped',
+        complete: false,
+        fileCount: 0,
+        contentLength: 0,
+        errorCode: 'no_selected_run',
+      });
+      expect(JSON.stringify(failedPet)).not.toMatch(/SECRET_FAILED_RUN/);
+    });
+
+    it('createPetHandoffCapsule projects telemetry fields that agree with the merged snapshot', () => {
+      const snap = createBaseForHandoff();
+      const merged = mergeOrchestratorTelemetryResultIntoSnapshot(snap, createTelemetryResult());
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(capsule.telemetryStatus).toBe(merged.telemetry.status);
+      expect(capsule.telemetryComplete).toBe(merged.telemetry.complete);
+      expect(capsule.telemetryFileCount).toBe(merged.telemetry.fileCount);
+      expect(capsule.telemetryContentLength).toBe(merged.telemetry.contentLength);
+      expect(capsule.telemetryErrorCode).toBe(merged.telemetry.errorCode);
+    });
+
+    it('telemetry metadata does not alter nextAction priority', () => {
+      const base = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 4, canFinalize: true },
+      });
+      const baseCapsule = createPetHandoffCapsule(base);
+      const merged = mergeOrchestratorTelemetryResultIntoSnapshot(base, createTelemetryResult());
+      const telemetryCapsule = createPetHandoffCapsule(merged);
+
+      expect(baseCapsule.nextAction).toBe('finalize');
+      expect(telemetryCapsule.nextAction).toBe(baseCapsule.nextAction);
+    });
+
+    it('privacy false-positive probe: raw telemetry paths, roots, run ids, and unknown errors stay out of pet and handoff projection', () => {
+      const snap = createBaseForHandoff();
+      const resultWithSecrets = createTelemetryResult({
+        runId: 'SECRET_TELEMETRY_RUN_ID',
+        rootDir: '.runs/SECRET_TELEMETRY_ROOT',
+        paths: [
+          '.runs/SECRET_TELEMETRY_ROOT/manifest.json',
+          '.runs/SECRET_TELEMETRY_ROOT/private?token=secret',
+          '.runs/SECRET_TELEMETRY_ROOT/.complete.json',
+        ],
+        errorCode: 'SECRET_TELEMETRY_ERROR' as any,
+      });
+      const sourceJson = JSON.stringify(resultWithSecrets);
+      expect(sourceJson).toMatch(/SECRET_TELEMETRY_RUN_ID|SECRET_TELEMETRY_ROOT|SECRET_TELEMETRY_ERROR|token=secret/);
+
+      const merged = mergeOrchestratorTelemetryResultIntoSnapshot(snap, resultWithSecrets);
+      const capsule = createPetHandoffCapsule(merged);
+      const petJson = JSON.stringify(merged);
+      const capsuleJson = JSON.stringify(capsule);
+
+      expect(merged.telemetry).toEqual({
+        status: 'written',
+        complete: true,
+        fileCount: 9,
+        contentLength: 1234,
+        errorCode: 'unknown_telemetry_error',
+      });
+      expect(capsule.telemetryErrorCode).toBe('unknown_telemetry_error');
+      expect(petJson).not.toMatch(/SECRET_TELEMETRY_RUN_ID|SECRET_TELEMETRY_ROOT|SECRET_TELEMETRY_ERROR|token=secret|private\?/);
+      expect(capsuleJson).not.toMatch(/SECRET_TELEMETRY_RUN_ID|SECRET_TELEMETRY_ROOT|SECRET_TELEMETRY_ERROR|token=secret|private\?/);
     });
   });
 

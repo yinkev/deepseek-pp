@@ -1,4 +1,5 @@
 import {
+  type AutonomousRunOrchestratorTelemetryResult,
   type AutonomousRunCockpitRun,
   type AutonomousRunCockpitSnapshot,
   getAutonomousRunCockpitSnapshot,
@@ -93,6 +94,13 @@ export type PetReviewLaneGateReason =
   | 'failed_lane'
   | 'blocked_lane';
 export type PetRunQueuePosture = 'idle' | 'waiting' | 'draining' | 'held' | 'blocked_ahead';
+export type PetTelemetryExportStatus = 'none' | 'written' | 'failed' | 'skipped';
+export type PetTelemetryExportErrorCode =
+  | 'no_selected_run'
+  | 'package_unavailable'
+  | 'target_unavailable'
+  | 'telemetry_write_failed'
+  | 'unknown_telemetry_error';
 
 export interface PetReviewLaneSummary {
   role: PetReviewLaneRole;
@@ -130,6 +138,14 @@ export interface PetRunQueue {
   backlog: boolean;
   contention: boolean;
   posture: PetRunQueuePosture;
+}
+
+export interface PetTelemetryExport {
+  status: PetTelemetryExportStatus;
+  complete: boolean;
+  fileCount: number;
+  contentLength: number;
+  errorCode: PetTelemetryExportErrorCode | null;
 }
 
 export interface PetControlSnapshot {
@@ -202,6 +218,7 @@ export interface PetControlSnapshot {
     budgetTokens: number;
   };
   workerCycle: PetWorkerCycle;
+  telemetry: PetTelemetryExport;
   reviewLanes: {
     total: number;
     activeCount: number;
@@ -398,6 +415,13 @@ export function createPetControlSnapshotFromRunCockpit(
     acceptedEvidenceCount: 0,
     reviewErrorCode: null,
   };
+  const telemetry: PetControlSnapshot['telemetry'] = {
+    status: 'none',
+    complete: false,
+    fileCount: 0,
+    contentLength: 0,
+    errorCode: null,
+  };
 
   const reviewLanes: PetControlSnapshot['reviewLanes'] = {
     total: 0,
@@ -457,6 +481,7 @@ export function createPetControlSnapshotFromRunCockpit(
     stopLine: createPetStopLineState(activeRun),
     memoryPressure,
     workerCycle,
+    telemetry,
     reviewLanes,
     reviewLaneGate,
   };
@@ -893,6 +918,11 @@ export interface PetHandoffCapsule {
   workerCycleReviewProofDebtCount: number;
   workerCycleAcceptedEvidenceCount: number;
   workerCycleReviewErrorCode: string | null;
+  telemetryStatus: PetTelemetryExportStatus;
+  telemetryComplete: boolean;
+  telemetryFileCount: number;
+  telemetryContentLength: number;
+  telemetryErrorCode: PetTelemetryExportErrorCode | null;
   reviewLaneCount: number;
   reviewLaneActiveCount: number;
   reviewLanePassedCount: number;
@@ -923,6 +953,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     generatedAt,
     memoryPressure: mp,
     workerCycle: wc,
+    telemetry: tel,
     reviewLanes: rl,
     runQueue: rq,
   } = snapshot;
@@ -1005,6 +1036,11 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const workerCycleReviewProofDebtCount = wc ? wc.reviewProofDebtCount : 0;
   const workerCycleAcceptedEvidenceCount = wc ? wc.acceptedEvidenceCount : 0;
   const workerCycleReviewErrorCode = wc ? wc.reviewErrorCode : null;
+  const telemetryStatus = tel ? tel.status : 'none';
+  const telemetryComplete = tel ? tel.complete : false;
+  const telemetryFileCount = tel ? tel.fileCount : 0;
+  const telemetryContentLength = tel ? tel.contentLength : 0;
+  const telemetryErrorCode = tel ? tel.errorCode : null;
 
   const allReviewLaneSummaries = rl && Array.isArray(rl.lanes)
     ? rl.lanes.map((lane) => normalizeLane(lane))
@@ -1096,6 +1132,11 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     workerCycleReviewProofDebtCount,
     workerCycleAcceptedEvidenceCount,
     workerCycleReviewErrorCode,
+    telemetryStatus,
+    telemetryComplete,
+    telemetryFileCount,
+    telemetryContentLength,
+    telemetryErrorCode,
     reviewLaneCount,
     reviewLaneActiveCount,
     reviewLanePassedCount,
@@ -1164,6 +1205,43 @@ export function mergeAutonomousWorkerCycleResultIntoSnapshot(
     ...snapshot,
     workerCycle,
   };
+}
+
+export function mergeOrchestratorTelemetryResultIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  result: AutonomousRunOrchestratorTelemetryResult | null | undefined,
+): PetControlSnapshot {
+  if (!result) {
+    return snapshot;
+  }
+  const telemetry: PetTelemetryExport = {
+    status: result.status,
+    complete: result.status === 'written' && result.paths.some((path) => path.endsWith('/.complete.json')),
+    fileCount: normalizePetTelemetryCount(result.fileCount),
+    contentLength: normalizePetTelemetryCount(result.contentLength),
+    errorCode: normalizePetTelemetryErrorCode(result.errorCode),
+  };
+  return {
+    ...snapshot,
+    telemetry,
+  };
+}
+
+function normalizePetTelemetryCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function normalizePetTelemetryErrorCode(errorCode: string | null): PetTelemetryExportErrorCode | null {
+  if (!errorCode) return null;
+  if (
+    errorCode === 'no_selected_run' ||
+    errorCode === 'package_unavailable' ||
+    errorCode === 'target_unavailable' ||
+    errorCode === 'telemetry_write_failed'
+  ) {
+    return errorCode;
+  }
+  return 'unknown_telemetry_error';
 }
 
 function toPetWorkerCycleReviewErrorCode(errorCode: string | null): string | null {
