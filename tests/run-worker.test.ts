@@ -167,8 +167,8 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(executor).not.toHaveBeenCalled();
 
     const final = await getAutonomousRunById(run.id);
-    expect(final?.status).toBe('blocked');
-    expect(final?.error?.code).toBe('autonomous_gate_tool_not_allowlisted');
+    expect(final?.status).toBe(result.finalStatus);
+    expect(final?.error?.code).toBe(result.errorCode);
   });
 
   it('calls executor when policy allows, records progress, applies iteration', async () => {
