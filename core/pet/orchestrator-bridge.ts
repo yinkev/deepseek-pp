@@ -1,9 +1,11 @@
 import {
   createPetReviewLaneGate,
+  mergePetReviewLanesIntoSnapshot,
   mergeAutonomousQualityGateDecisionIntoSnapshot,
   mergeAutonomousWorkerCycleResultIntoSnapshot,
   mergeOrchestratorTelemetryResultIntoSnapshot,
   type PetControlSnapshot,
+  type PetReviewLaneInput,
   type PetReviewLanePriority,
   type PetReviewLaneRecommendation,
   type PetReviewLaneRole,
@@ -15,6 +17,8 @@ import type {
   AutonomousRunOrchestratorCycleResult,
 } from '../run/orchestrator';
 import type { AutonomousReviewLaneRiskFlags } from '../run/review-scheduler';
+
+const MAX_PROJECTED_REVIEW_LANE_PLAN_COUNT = 500;
 
 export type PetOrchestratorReviewLaneOptions = Pick<
   AutonomousRunOrchestratorCycleOptions,
@@ -76,7 +80,18 @@ export function mergeAutonomousOrchestratorCycleResultIntoSnapshot(
   if (result.qualityGateDecision) {
     next = mergeAutonomousQualityGateDecisionIntoSnapshot(next, result.qualityGateDecision);
   }
+  next = mergeAutonomousReviewLanePlanIntoSnapshot(next, result.reviewLanePlan);
   return next;
+}
+
+export function mergeAutonomousReviewLanePlanIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  plan: AutonomousRunOrchestratorCycleResult['reviewLanePlan'] | null | undefined,
+): PetControlSnapshot {
+  if (!plan) {
+    return snapshot;
+  }
+  return mergePetReviewLanesIntoSnapshot(snapshot, createReviewLaneInputsFromPlan(plan));
 }
 
 function createRiskFlags(
@@ -95,6 +110,42 @@ function isMemoryRisk(snapshot: PetControlSnapshot): boolean {
   const memoryPressure = snapshot.memoryPressure;
   return memoryPressure?.enabled === true &&
     (memoryPressure.level === 'medium' || memoryPressure.level === 'high' || memoryPressure.truncated === true);
+}
+
+function createReviewLaneInputsFromPlan(
+  plan: AutonomousRunOrchestratorCycleResult['reviewLanePlan'],
+): PetReviewLaneInput[] {
+  if (plan.action === 'halt') {
+    const count = normalizeProjectedLaneCount(plan.blockingLaneCount) || 1;
+    return Array.from({ length: count }, () => ({
+      role: 'other',
+      status: 'blocked',
+      grade: null,
+      recommendation: 'block',
+      highestPriority: normalizePriority(plan.blockingPriority),
+      issueCount: 0,
+      updatedAt: null,
+    }));
+  }
+
+  if (plan.action === 'dispatch') {
+    return plan.selectedRoles.map((role) => ({
+      role,
+      status: 'running',
+      grade: null,
+      recommendation: 'unknown',
+      highestPriority: null,
+      issueCount: 0,
+      updatedAt: null,
+    }));
+  }
+
+  return [];
+}
+
+function normalizeProjectedLaneCount(count: unknown): number {
+  if (typeof count !== 'number' || !Number.isFinite(count)) return 0;
+  return Math.min(MAX_PROJECTED_REVIEW_LANE_PLAN_COUNT, Math.max(0, Math.floor(count)));
 }
 
 function sanitizeReviewLanes(lanes: readonly unknown[] | null | undefined): PetReviewLaneSummary[] {

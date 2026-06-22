@@ -8,6 +8,7 @@ import {
 import {
   createPetOrchestratorReviewLaneOptions,
   mergeAutonomousOrchestratorCycleResultIntoSnapshot,
+  mergeAutonomousReviewLanePlanIntoSnapshot,
 } from '../core/pet/orchestrator-bridge';
 import {
   createAutonomousRun,
@@ -264,6 +265,190 @@ describe('pet to orchestrator review lane bridge', () => {
 
     expect(mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, null)).toBe(snapshot);
     expect(mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, undefined)).toBe(snapshot);
+  });
+
+  it('projects blocking orchestrator review lane plans into pet snapshot and handoff fields', () => {
+    const snapshot = createBasePetSnapshot();
+    const result = createOrchestratorResult({
+      selectedRunId: 'SECRET_SELECTED_RUN',
+      reviewLanePlan: {
+        action: 'halt',
+        selectedRoles: [],
+        canRunWorker: false,
+        reason: 'review_gate_p2',
+        blockingPriority: 'P2',
+        blockingLaneCount: 2,
+        maxParallel: 2,
+      },
+      workerResult: createWorkerResult({
+        action: 'block',
+        runId: 'SECRET_WORKER_RUN',
+        started: false,
+        advanced: false,
+        applied: false,
+        finalStatus: 'blocked',
+        errorCode: 'autonomous_review_lane_gate_blocked',
+      }),
+    });
+
+    const merged = mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, result);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.reviewLanes).toMatchObject({
+      total: 2,
+      blockedCount: 2,
+      blockCount: 2,
+      highestPriority: 'P2',
+    });
+    expect(merged.reviewLanes.lanes).toEqual([
+      {
+        role: 'other',
+        status: 'blocked',
+        grade: null,
+        recommendation: 'block',
+        highestPriority: 'P2',
+        issueCount: 0,
+        updatedAt: null,
+      },
+      {
+        role: 'other',
+        status: 'blocked',
+        grade: null,
+        recommendation: 'block',
+        highestPriority: 'P2',
+        issueCount: 0,
+        updatedAt: null,
+      },
+    ]);
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'blocked',
+      reason: 'p2',
+      canProceed: false,
+      blockingPriority: 'P2',
+      blockingLaneCount: 2,
+    });
+    expect(capsule.reviewLaneGateStatus).toBe(merged.reviewLaneGate.status);
+    expect(capsule.reviewLaneGateReason).toBe(merged.reviewLaneGate.reason);
+    expect(capsule.reviewLaneGateCanProceed).toBe(false);
+    expect(capsule.reviewLaneGateBlockingPriority).toBe('P2');
+    expect(capsule.reviewLaneGateBlockingLaneCount).toBe(2);
+    expect(JSON.stringify(merged)).not.toMatch(/SECRET_SELECTED_RUN|SECRET_WORKER_RUN/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_SELECTED_RUN|SECRET_WORKER_RUN/);
+  });
+
+  it('projects dispatch review lane plans as safe running lane summaries', () => {
+    const snapshot = createBasePetSnapshot();
+    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, {
+      action: 'dispatch',
+      selectedRoles: ['oracle', 'grok'],
+      canRunWorker: true,
+      reason: 'dispatch_lanes',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+      maxParallel: 2,
+    });
+
+    expect(merged.reviewLanes).toMatchObject({
+      total: 2,
+      activeCount: 2,
+      unknownCount: 2,
+      highestPriority: null,
+    });
+    expect(merged.reviewLanes.lanes).toEqual([
+      {
+        role: 'oracle',
+        status: 'running',
+        grade: null,
+        recommendation: 'unknown',
+        highestPriority: null,
+        issueCount: 0,
+        updatedAt: null,
+      },
+      {
+        role: 'grok',
+        status: 'running',
+        grade: null,
+        recommendation: 'unknown',
+        highestPriority: null,
+        issueCount: 0,
+        updatedAt: null,
+      },
+    ]);
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'attention',
+      reason: 'active_review',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    });
+  });
+
+  it('keeps raw and malformed orchestrator review lane plan fields out of pet projection', () => {
+    const snapshot = createBasePetSnapshot();
+    const plan = {
+      action: 'halt',
+      selectedRoles: ['SECRET_ROLE'],
+      canRunWorker: false,
+      reason: 'SECRET_REASON',
+      blockingPriority: 'PX',
+      blockingLaneCount: Number.POSITIVE_INFINITY,
+      maxParallel: 999,
+      rawPrompt: 'SECRET_PROMPT',
+      transcript: 'SECRET_TRANSCRIPT',
+      url: 'https://secret.invalid/review?token=secret',
+    } as any;
+    expect(JSON.stringify(plan)).toMatch(/SECRET_ROLE|SECRET_REASON|SECRET_PROMPT|SECRET_TRANSCRIPT|secret\.invalid|token=secret/);
+
+    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, plan);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.reviewLanes).toMatchObject({
+      total: 1,
+      blockedCount: 1,
+      blockCount: 1,
+      highestPriority: null,
+    });
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'blocked',
+      reason: 'block_recommendation',
+      canProceed: false,
+      blockingPriority: null,
+      blockingLaneCount: 1,
+    });
+    expect(JSON.stringify(merged)).not.toMatch(/SECRET_ROLE|SECRET_REASON|SECRET_PROMPT|SECRET_TRANSCRIPT|secret\.invalid|token=secret|PX/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_ROLE|SECRET_REASON|SECRET_PROMPT|SECRET_TRANSCRIPT|secret\.invalid|token=secret|PX/);
+  });
+
+  it('clears stale projected review lanes when the orchestrator has no pending lane plan', () => {
+    const snapshot = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+      { role: 'safety', status: 'blocked', recommendation: 'block', highestPriority: 'P1', issueCount: 1 },
+    ]);
+
+    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, {
+      action: 'idle',
+      selectedRoles: [],
+      canRunWorker: true,
+      reason: 'no_pending_lanes',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+      maxParallel: 2,
+    });
+
+    expect(merged.reviewLanes).toMatchObject({
+      total: 0,
+      activeCount: 0,
+      blockedCount: 0,
+      blockCount: 0,
+      highestPriority: null,
+      lanes: [],
+    });
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'clear',
+      reason: 'none',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    });
   });
 
   it('projects worker, telemetry, and quality gate results from one orchestrator cycle', () => {
