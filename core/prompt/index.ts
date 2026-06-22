@@ -17,4 +17,5 @@ export {
 export type {
   PromptAugmentationOptions,
   PromptAugmentationResult,
+  MemoryPressure,
 } from './augmentation';

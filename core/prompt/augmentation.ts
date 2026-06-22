@@ -9,7 +9,7 @@ import {
   getToolInvocationNames,
   type ToolInvocationCatalog,
 } from '../tool';
-import { estimateTokens, formatMemoriesBlock, getMemoryBudget, selectMemories } from '../memory/selector';
+import { estimateTokens, formatMemoriesBlock, formatMemoryLine, getMemoryBudget, selectMemories } from '../memory/selector';
 import { markVisibleUserPrompt } from './visibility';
 
 export interface PromptAugmentationOptions {
@@ -29,6 +29,18 @@ export interface PromptAugmentationResult {
   augmented: string;
   usedMemoryIds: number[];
   renderedToolCount: number;
+  memoryPressure: MemoryPressure;
+}
+
+export interface MemoryPressure {
+  enabled: boolean;
+  promptTokens: number;
+  budgetTokens: number;
+  selectedCount: number;
+  selectedTokenEstimate: number;
+  availableCount: number;
+  pressure: 'none' | 'low' | 'medium' | 'high';
+  truncated: boolean;
 }
 
 export function buildPromptAugmentation(
@@ -59,6 +71,10 @@ export function buildPromptAugmentation(
         includePinnedOutsideAllowedTypes: !sourceGroundedPrompt,
       })
     : [];
+  const selectedTokenEstimate = selected.reduce(
+    (sum, memory) => sum + estimateTokens(formatMemoryLine(memory)),
+    0,
+  );
   const memBlock = memoryEnabled
     ? formatMemoriesBlock(selected, locale)
     : translate(locale, 'prompt.memoryDisabled');
@@ -84,10 +100,36 @@ export function buildPromptAugmentation(
   const toolReminder = systemPromptEnabled ? renderToolFormatReminder(toolDescriptors, locale) : '';
   const systemPrefix = system ? `${system}\n\n` : '';
 
+  const availableCount = memories.length;
+  const selectedCount = selected.length;
+  const budgetTokens = budget;
+  const ratio = budgetTokens > 0 ? selectedTokenEstimate / budgetTokens : 0;
+  let pressure: 'none' | 'low' | 'medium' | 'high' = 'none';
+  if (memoryEnabled && selectedTokenEstimate > 0) {
+    if (ratio >= 0.66) pressure = 'high';
+    else if (ratio >= 0.33) pressure = 'medium';
+    else pressure = 'low';
+  }
+  const truncated = memoryEnabled && (
+    selectedTokenEstimate > budgetTokens ||
+    (selectedCount < availableCount && availableCount > 0)
+  );
+  const memoryPressure: MemoryPressure = {
+    enabled: memoryEnabled,
+    promptTokens,
+    budgetTokens,
+    selectedCount,
+    selectedTokenEstimate,
+    availableCount,
+    pressure,
+    truncated,
+  };
+
   return {
     augmented: presetPrefix + systemPrefix + markVisibleUserPrompt(originalPrompt) + toolReminder,
     usedMemoryIds: selected.map((memory) => memory.id!).filter(Boolean),
     renderedToolCount: systemPromptEnabled ? toolDescriptors.length : 0,
+    memoryPressure,
   };
 }
 
@@ -175,7 +217,6 @@ function renderWebSearchGuidance(
 ): string {
   const hasWebSearch = descriptors.some((descriptor) => descriptor.name === 'web_search');
   if (!hasWebSearch) return '';
-
   return translate(locale, 'prompt.webSearchGuidance');
 }
 
@@ -187,7 +228,6 @@ function renderPythonMcpHint(
   const pythonExec = descriptors.find((descriptor) => descriptor.name === 'python_exec');
   const pythonStatus = descriptors.find((descriptor) => descriptor.name === 'python_status');
   if (!pythonExec && !pythonStatus) return '';
-
   const execName = pythonExec ? getPreferredToolInvocationName(pythonExec, catalog) : null;
   const statusName = pythonStatus ? getPreferredToolInvocationName(pythonStatus, catalog) : null;
 
@@ -217,7 +257,7 @@ function renderToolSchema(descriptor: ToolDescriptor, catalog: ToolInvocationCat
     `<${preferredName}>`,
     JSON.stringify(examplePayload, null, 2),
     `</${preferredName}>`,
-    `Invalid formats: <invoke name="${preferredName}">...</invoke>, <tool_call>...</tool_call>`,
+    `Invalid formats: <invoke name=\"${preferredName}\">...</invoke>, <tool_call>...</tool_call>`,
     `Parameters JSON Schema: ${JSON.stringify(descriptor.inputSchema)}`,
   ];
   return lines.filter(Boolean).join('\n');
@@ -230,7 +270,6 @@ function renderShellMcpHint(
 ): string {
   const shellExec = descriptors.find((descriptor) => descriptor.name === 'shell_exec');
   if (!shellExec) return '';
-
   const shellStatus = descriptors.find((descriptor) => descriptor.name === 'shell_status');
   const execName = getPreferredToolInvocationName(shellExec, catalog);
   const statusName = shellStatus ? getPreferredToolInvocationName(shellStatus, catalog) : null;
