@@ -1,8 +1,13 @@
 import { redactDurableToolString } from '../tool/redaction';
+import type { BrowserControlTarget } from '../browser-control/types';
 import {
   isTerminalRunStatus,
   shouldTransitionAutonomousRun,
 } from './kernel';
+import {
+  reviewAutonomousRunIteration,
+  type AutonomousRunIterationReview,
+} from './iteration';
 import {
   DEFAULT_AUTONOMOUS_EVIDENCE_TTL_MS,
   DEFAULT_AUTONOMOUS_TARGET_LEASE_TTL_MS,
@@ -70,6 +75,19 @@ export const DEFAULT_AUTONOMOUS_PROOF_CONTRACT: AutonomousRunProofContract = {
     'Do not claim browser actions succeeded without post-action evidence.',
   ],
 };
+
+export interface AutonomousRunIterationApplyInput {
+  runId: AutonomousRunId;
+  completionClaimed?: boolean;
+  liveTarget?: Pick<BrowserControlTarget, 'id' | 'windowId' | 'url' | 'controllable'> | null;
+}
+
+export interface AutonomousRunIterationApplyResult {
+  run: AutonomousRun | null;
+  step: AutonomousRunStep | null;
+  review: AutonomousRunIterationReview | null;
+  applied: boolean;
+}
 
 const EMPTY_STATE: AutonomousRunStorageState = {
   version: STORAGE_VERSION,
@@ -420,6 +438,65 @@ export async function getAutonomousRunEvidence(runId: AutonomousRunId): Promise<
     .sort((a, b) => b.capturedAt - a.capturedAt);
 }
 
+export async function applyAutonomousRunIterationReview(
+  input: AutonomousRunIterationApplyInput,
+  now = Date.now(),
+): Promise<AutonomousRunIterationApplyResult> {
+  return mutateAutonomousRunState<AutonomousRunIterationApplyResult>((state) => {
+    const run = state.runs.find((item) => item.id === input.runId) ?? null;
+    if (!run) {
+      return {
+        state,
+        result: { run: null, step: null, review: null, applied: false },
+        write: false,
+      };
+    }
+
+    const steps = state.steps.filter((step) => step.runId === run.id);
+    const evidence = state.evidence.filter((record) => record.runId === run.id);
+    const targetLease = run.targetLeaseId
+      ? state.targetLeases.find((lease) => lease.id === run.targetLeaseId) ?? null
+      : null;
+    const review = reviewAutonomousRunIteration({
+      run,
+      steps,
+      evidence,
+      targetLease,
+      liveTarget: input.liveTarget ?? null,
+      completionClaimed: input.completionClaimed,
+      now,
+    });
+
+    if (!review.nextStatus || review.action === 'noop') {
+      return {
+        state,
+        result: { run, step: null, review, applied: false },
+        write: false,
+      };
+    }
+
+    const step = createAutonomousRunIterationStep(run.id, nextStepSeq(state.steps, run.id), review, now);
+    if (!step) {
+      return {
+        state,
+        result: { run, step: null, review, applied: false },
+        write: false,
+      };
+    }
+
+    const updatedRun = applyAutonomousRunIterationStatus(run, step.id, review, now);
+    const nextState = {
+      ...state,
+      runs: pruneRuns(state.runs.map((item) => item.id === run.id ? updatedRun : item)),
+      steps: pruneSteps([step, ...state.steps.filter((stored) => stored.id !== step.id)]),
+    };
+    return {
+      state: nextState,
+      result: { run: updatedRun, step, review, applied: true },
+    };
+  });
+}
+
 export async function reconcileInterruptedAutonomousRuns(
   thresholdMs: number,
   now = Date.now(),
@@ -450,6 +527,61 @@ export async function reconcileInterruptedAutonomousRuns(
       write: count > 0,
     };
   });
+}
+
+function createAutonomousRunIterationStep(
+  runId: AutonomousRunId,
+  seq: number,
+  review: AutonomousRunIterationReview,
+  now: number,
+): AutonomousRunStep | null {
+  return normalizeStep({
+    id: createId('step'),
+    runId,
+    seq,
+    phase: 'review',
+    status: review.action === 'block' || review.action === 'fail' ? 'failed' : 'succeeded',
+    modelTurnId: null,
+    toolCallIds: [],
+    observationRefs: review.issueCodes.map((code) => `review:${code}`),
+    evidenceRefs: review.acceptedEvidenceIds,
+    progressScore: review.action === 'succeed' ? 1 : review.score / 100,
+    proofDelta: [],
+    error: review.action === 'block' || review.action === 'fail' ? review.error : null,
+    startedAt: now,
+    endedAt: now,
+  });
+}
+
+function applyAutonomousRunIterationStatus(
+  run: AutonomousRun,
+  latestStepId: AutonomousRunStep['id'],
+  review: AutonomousRunIterationReview,
+  now: number,
+): AutonomousRun {
+  const requestedStatus = review.nextStatus ?? run.status;
+  const status = shouldTransitionAutonomousRun(run.status, requestedStatus)
+    ? requestedStatus
+    : run.status;
+  return normalizeRun({
+    ...run,
+    status,
+    error: status === 'succeeded'
+      ? null
+      : (status !== run.status ? review.error : run.error),
+    completedAt: isTerminalRunStatus(status) ? now : run.completedAt,
+    checkpoint: {
+      ...run.checkpoint,
+      latestStepId,
+    },
+    updatedAt: now,
+  }) ?? run;
+}
+
+function nextStepSeq(steps: readonly AutonomousRunStep[], runId: AutonomousRunId): number {
+  return steps
+    .filter((step) => step.runId === runId)
+    .reduce((max, step) => Math.max(max, step.seq), 0) + 1;
 }
 
 async function readAutonomousRunState(): Promise<AutonomousRunStorageState> {

@@ -119,6 +119,14 @@ function filterVerifiedProgressSteps(
   const acceptedEvidence = new Set(completion.acceptedEvidenceIds);
   const doneCriteria = run.proofContract.doneCriteria.map(normalizeComparable);
   return steps.map((step) => {
+    if (step.phase === 'review' || step.phase === 'checkpoint') {
+      return {
+        ...step,
+        progressScore: 0,
+        proofDelta: [],
+        evidenceRefs: [],
+      };
+    }
     const proofDelta = step.proofDelta.filter((item) => matchesDoneCriteria(item, doneCriteria));
     const evidenceRefs = step.evidenceRefs.filter((item) => acceptedEvidence.has(item));
     const verifiedProgress = proofDelta.length > 0 || evidenceRefs.length > 0;

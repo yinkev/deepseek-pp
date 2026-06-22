@@ -23,7 +23,8 @@ After an implementation step, the worker must evaluate, review, grade, and decid
 
 Passing completion review takes precedence over no-progress checks. A run with sufficient accepted evidence should finish even if trailing bookkeeping steps did not add proof.
 
-For no-progress detection, the iteration gate does not trust arbitrary self-reported progress. It counts only step proof deltas that match the run's done criteria or evidence refs that match accepted fresh evidence ids.
+For no-progress detection, the iteration gate does not trust arbitrary self-reported progress. It counts only implementation step proof deltas that match the run's done criteria or evidence refs that match accepted fresh evidence ids.
+Review and checkpoint steps are bookkeeping and never reset no-progress detection.
 
 ## Actions
 
@@ -61,6 +62,7 @@ Current tests prove:
 - failed claimed completion becomes `fail`;
 - no-progress loops become `block`;
 - bogus progress scores, unrelated proof deltas, and unaccepted evidence refs still become `block`;
+- review/checkpoint bookkeeping does not count as verified progress;
 - repeated same-error loops become `block`;
 - empty proof contracts become `block` with a non-retryable error;
 - terminal and non-running runs produce `noop`.

@@ -138,6 +138,43 @@ describe('autonomous run iteration gate', () => {
     });
   });
 
+  it('does not count review bookkeeping steps as verified progress', () => {
+    const run = createRun({
+      budgets: {
+        ...DEFAULT_AUTONOMOUS_RUN_BUDGETS,
+        maxConsecutiveNoProgress: 2,
+      },
+    });
+    const review = reviewAutonomousRunIteration({
+      run,
+      steps: [
+        createStep({
+          id: 'step-review-1',
+          seq: 1,
+          phase: 'review',
+          progressScore: 1,
+          evidenceRefs: ['evidence-1'],
+        }),
+        createStep({
+          id: 'step-review-2',
+          seq: 2,
+          phase: 'review',
+          progressScore: 1,
+          evidenceRefs: ['evidence-1'],
+        }),
+      ],
+      evidence: [createEvidence()],
+      completionClaimed: false,
+      now: NOW,
+    });
+
+    expect(review).toMatchObject({
+      action: 'block',
+      nextStatus: 'blocked',
+      progressReason: 'no_progress',
+    });
+  });
+
   it('fails when completion was claimed but review fails', () => {
     const review = reviewAutonomousRunIteration({
       run: createRun(),
