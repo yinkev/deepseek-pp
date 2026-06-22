@@ -201,8 +201,13 @@ export async function evaluateAutonomousRunQualityGate(
   runId: AutonomousRunId,
 ): Promise<AutonomousRunQualityGateDecision> {
   const gates = await getAutonomousRunQualityGates(runId);
+  return evaluateAutonomousQualityGateRecord(gates[gates.length - 1] ?? null);
+}
 
-  if (gates.length === 0) {
+export function evaluateAutonomousQualityGateRecord(
+  latest: AutonomousQualityGateRecord | null,
+): AutonomousRunQualityGateDecision {
+  if (!latest) {
     return {
       blocked: false,
       reason: 'no_quality_gate',
@@ -217,8 +222,6 @@ export async function evaluateAutonomousRunQualityGate(
       verificationPassed: null,
     };
   }
-
-  const latest = gates[gates.length - 1];
 
   // Deep block conditions — independent of top-level status
   const deepBlocked =

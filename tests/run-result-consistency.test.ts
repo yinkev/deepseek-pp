@@ -304,6 +304,44 @@ describe('autonomous result-state consistency', () => {
     expect(review.issueCodes).toEqual(['worker_result_missing_for_selected_run']);
   });
 
+  it('accepts selected-run quality gate holds without a worker result', () => {
+    const selected = createRun({ id: 'selected-run', status: 'running' });
+    const review = reviewAutonomousOrchestratorResultStateConsistency({
+      result: createOrchestratorResult({
+        selectedRunId: selected.id,
+        workerResult: null,
+        qualityGateDecision: {
+          blocked: true,
+          reason: 'gate_failed',
+          latestGateStatus: 'failed',
+          seq: 3,
+          coverageComplete: true,
+          coveredCount: 5,
+          gapCount: 0,
+          conflictCount: 0,
+          notTestableCount: 0,
+          selfReviewGrade: 'F',
+          verificationPassed: false,
+        },
+      }),
+      state: createState([selected]),
+    });
+
+    expect(review).toMatchObject({
+      ok: true,
+      status: 'consistent',
+      issueCodes: [],
+      checked: {
+        resultPresent: true,
+        durableRunPresent: true,
+        workerResultPresent: false,
+        selectedRunPresent: true,
+      },
+      resultStatus: null,
+      durableStatus: 'running',
+    });
+  });
+
   it('does not require after-snapshot active run to be the selected run', () => {
     const selected = createRun({ id: 'selected-run', status: 'blocked' });
     const review = reviewAutonomousOrchestratorResultStateConsistency({

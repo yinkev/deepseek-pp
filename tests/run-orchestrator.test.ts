@@ -10,11 +10,13 @@ import {
   upsertAutonomousTargetLease,
 } from '../core/run/store';
 import {
+  evaluateAutonomousQualityGateRecord,
   evaluateAutonomousRunQualityGate,
   executeAutonomousOrchestratorCycle,
   getAutonomousRunCockpitSnapshot,
   initializeAutonomousRunOrchestrator,
 } from '../core/run/orchestrator';
+import type { AutonomousQualityGateRecord } from '../core/run/types';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -1209,6 +1211,73 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
+  it('pure evaluator blocks permissive top-level gates with deep blocking conditions', () => {
+    const cases: Array<{
+      name: string;
+      gate: AutonomousQualityGateRecord;
+      reason: NonNullable<ReturnType<typeof evaluateAutonomousQualityGateRecord>['reason']>;
+    }> = [
+      {
+        name: 'failed independent review',
+        gate: createQualityGateRecord({
+          status: 'passed',
+          independentReview: { status: 'failed', grade: 'D', blockingIssueCount: 0 },
+        }),
+        reason: 'review_issues',
+      },
+      {
+        name: 'blocked independent review',
+        gate: createQualityGateRecord({
+          status: 'warning',
+          independentReview: { status: 'blocked', grade: 'F', blockingIssueCount: 0 },
+        }),
+        reason: 'review_issues',
+      },
+      {
+        name: 'independent review blocking issue count',
+        gate: createQualityGateRecord({
+          status: 'passed',
+          independentReview: { status: 'passed', grade: 'A', blockingIssueCount: 1 },
+        }),
+        reason: 'review_issues',
+      },
+      {
+        name: 'inconsistent result state',
+        gate: createQualityGateRecord({
+          status: 'passed',
+          resultStateConsistency: { status: 'inconsistent', ok: false, issueCount: 1, blockingIssueCount: 0 },
+        }),
+        reason: 'state_inconsistent',
+      },
+      {
+        name: 'result state blocking issue count',
+        gate: createQualityGateRecord({
+          status: 'warning',
+          resultStateConsistency: { status: 'consistent', ok: true, issueCount: 1, blockingIssueCount: 1 },
+        }),
+        reason: 'state_inconsistent',
+      },
+      {
+        name: 'contract conflict count',
+        gate: createQualityGateRecord({
+          status: 'passed',
+          contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 1, notTestableCount: 0 },
+        }),
+        reason: 'contract_conflicts',
+      },
+    ];
+
+    for (const item of cases) {
+      const decision = evaluateAutonomousQualityGateRecord(item.gate);
+
+      expect(decision, item.name).toMatchObject({
+        blocked: true,
+        reason: item.reason,
+        latestGateStatus: item.gate.status,
+      });
+    }
+  });
+
   it('returns null qualityGateDecision when no selected run exists', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
@@ -1305,6 +1374,40 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     expect(json).not.toMatch(/raw-phrase|secret-token|Bearer/);
   });
 });
+
+function createQualityGateRecord(
+  overrides: Partial<AutonomousQualityGateRecord> = {},
+): AutonomousQualityGateRecord {
+  return {
+    id: 'gate-1',
+    runId: 'run-1',
+    seq: 1,
+    createdAt: 100,
+    status: 'passed',
+    contractCoverage: {
+      complete: true,
+      coveredCount: 3,
+      gapCount: 0,
+      conflictCount: 0,
+      notTestableCount: 0,
+    },
+    resultStateConsistency: {
+      status: 'consistent',
+      ok: true,
+      issueCount: 0,
+      blockingIssueCount: 0,
+    },
+    selfReview: { grade: 'A' },
+    verification: { commands: [] },
+    commit: null,
+    independentReview: {
+      status: 'passed',
+      grade: 'A',
+      blockingIssueCount: 0,
+    },
+    ...overrides,
+  };
+}
 
 function createProofContract() {
   return {

@@ -148,8 +148,11 @@ export function reviewAutonomousOrchestratorResultStateConsistency(
     issues.push(createIssue('selected_run_missing', 'P1'));
   }
 
+  const qualityGateHold = result.qualityGateDecision?.blocked === true;
   if (!result.workerResult) {
-    issues.push(createIssue('worker_result_missing_for_selected_run', 'P1'));
+    if (!qualityGateHold) {
+      issues.push(createIssue('worker_result_missing_for_selected_run', 'P1'));
+    }
   } else {
     if (result.workerResult.runId !== result.selectedRunId) {
       issues.push(createIssue('selected_worker_run_mismatch', 'P1'));
