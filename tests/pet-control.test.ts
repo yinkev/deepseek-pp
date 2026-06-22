@@ -16,6 +16,7 @@ import {
   mergePromptMemoryPressureIntoSnapshot,
   createPetHandoffCapsule,
   mergeAutonomousWorkerCycleResultIntoSnapshot,
+  createPetReviewLaneGate,
   mergePetReviewLanesIntoSnapshot,
   type PetControlSnapshot,
 } from '../core/pet/control';
@@ -68,6 +69,7 @@ describe('pet control snapshot', () => {
     memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
     workerCycle?: Partial<PetControlSnapshot['workerCycle']>;
     reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
+    reviewLaneGate?: Partial<PetControlSnapshot['reviewLaneGate']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -189,6 +191,14 @@ describe('pet control snapshot', () => {
         unknownCount: 0,
         lanes: [],
         ...overrides.reviewLanes,
+      },
+      reviewLaneGate: {
+        status: 'clear',
+        reason: 'none',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+        ...overrides.reviewLaneGate,
       },
     };
   }
@@ -1417,6 +1427,23 @@ describe('pet control snapshot', () => {
         workerCycleReviewProofDebtCount: 0,
         workerCycleAcceptedEvidenceCount: 0,
         workerCycleReviewErrorCode: null,
+        reviewLaneCount: 0,
+        reviewLaneActiveCount: 0,
+        reviewLanePassedCount: 0,
+        reviewLaneBlockedCount: 0,
+        reviewLaneFailedCount: 0,
+        reviewLaneHighestPriority: null,
+        reviewLaneWorstGrade: null,
+        reviewLaneProceedCount: 0,
+        reviewLaneIterateCount: 0,
+        reviewLaneBlockCount: 0,
+        reviewLaneUnknownCount: 0,
+        reviewLaneSummaries: [],
+        reviewLaneGateStatus: 'clear',
+        reviewLaneGateReason: 'none',
+        reviewLaneGateCanProceed: true,
+        reviewLaneGateBlockingPriority: null,
+        reviewLaneGateBlockingLaneCount: 0,
         nextAction: 'idle',
       });
       const json = JSON.stringify(capsule);
@@ -1983,10 +2010,18 @@ describe('pet control snapshot', () => {
       unknownCount: 0,
       lanes: [],
     };
+    const defaultReviewLaneGate: PetControlSnapshot['reviewLaneGate'] = {
+      status: 'clear',
+      reason: 'none',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    };
 
     it('createPetControlSnapshotFromRunCockpit and createBase default to no review lanes observed', () => {
       const pet = createBasePetSnapshot();
       expect(pet.reviewLanes).toEqual(defaultReviewLanes);
+      expect(pet.reviewLaneGate).toEqual(defaultReviewLaneGate);
       const idleCockpit = {
         schemaVersion: 1 as const,
         generatedAt: 123,
@@ -1994,7 +2029,9 @@ describe('pet control snapshot', () => {
         totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
         activeRun: null,
       };
-      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).reviewLanes).toEqual(defaultReviewLanes);
+      const cockpitPet = createPetControlSnapshotFromRunCockpit(idleCockpit);
+      expect(cockpitPet.reviewLanes).toEqual(defaultReviewLanes);
+      expect(cockpitPet.reviewLaneGate).toEqual(defaultReviewLaneGate);
     });
 
     it('mergePetReviewLanesIntoSnapshot returns original snapshot object unchanged if lanes null or undefined', () => {
@@ -2078,6 +2115,13 @@ describe('pet control snapshot', () => {
           },
         ],
       });
+      expect(merged.reviewLaneGate).toEqual({
+        status: 'blocked',
+        reason: 'p1',
+        canProceed: false,
+        blockingPriority: 'P1',
+        blockingLaneCount: 2,
+      });
     });
 
     it('mergePetReviewLanesIntoSnapshot caps to four lanes and clamps invalid values to safe defaults', () => {
@@ -2150,6 +2194,89 @@ describe('pet control snapshot', () => {
           updatedAt: null,
         },
       ]);
+      expect(merged.reviewLaneGate).toEqual({
+        status: 'blocked',
+        reason: 'p1',
+        canProceed: false,
+        blockingPriority: 'P1',
+        blockingLaneCount: 2,
+      });
+    });
+
+    it('createPetReviewLaneGate blocks on P2 and counts blocking lanes without requiring a block recommendation', () => {
+      const merged = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+        { role: 'reviewer', status: 'passed', grade: 'B', recommendation: 'iterate', highestPriority: 'P2', issueCount: 1 },
+        { role: 'safety', status: 'passed', grade: 'A', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
+      ]);
+
+      expect(createPetReviewLaneGate(merged.reviewLanes)).toEqual({
+        status: 'blocked',
+        reason: 'p2',
+        canProceed: false,
+        blockingPriority: 'P2',
+        blockingLaneCount: 1,
+      });
+      expect(merged.reviewLaneGate).toEqual(createPetReviewLaneGate(merged.reviewLanes));
+    });
+
+    it('createPetReviewLaneGate blocks on block recommendation when priority is not P1/P2', () => {
+      const merged = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+        { role: 'reviewer', status: 'passed', grade: 'A', recommendation: 'block', highestPriority: null, issueCount: 0 },
+        { role: 'safety', status: 'passed', grade: 'B', recommendation: 'block', highestPriority: 'P3', issueCount: 1 },
+      ]);
+
+      expect(merged.reviewLaneGate).toEqual({
+        status: 'blocked',
+        reason: 'block_recommendation',
+        canProceed: false,
+        blockingPriority: null,
+        blockingLaneCount: 2,
+      });
+    });
+
+    it('createPetReviewLaneGate marks failed, blocked, and running lanes as attention without blocking progress', () => {
+      const failed = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+        { role: 'reviewer', status: 'failed', grade: 'F', recommendation: 'unknown', highestPriority: null, issueCount: 1 },
+      ]);
+      expect(failed.reviewLaneGate).toEqual({
+        status: 'attention',
+        reason: 'failed_lane',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      });
+
+      const blocked = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+        { role: 'reviewer', status: 'blocked', grade: 'C', recommendation: 'iterate', highestPriority: null, issueCount: 1 },
+      ]);
+      expect(blocked.reviewLaneGate).toEqual({
+        status: 'attention',
+        reason: 'blocked_lane',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      });
+
+      const running = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+        { role: 'reviewer', status: 'running', grade: null, recommendation: 'unknown', highestPriority: null, issueCount: 0 },
+      ]);
+      expect(running.reviewLaneGate).toEqual({
+        status: 'attention',
+        reason: 'active_review',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      });
+    });
+
+    it('createPetReviewLaneGate stays clear for no lanes or clean passed lanes', () => {
+      expect(createPetReviewLaneGate(null)).toEqual(defaultReviewLaneGate);
+      expect(createPetReviewLaneGate(undefined)).toEqual(defaultReviewLaneGate);
+
+      const passed = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+        { role: 'reviewer', status: 'passed', grade: 'A', recommendation: 'proceed', highestPriority: null, issueCount: 0 },
+      ]);
+      expect(passed.reviewLaneGate).toEqual(defaultReviewLaneGate);
     });
 
     it('createPetHandoffCapsule projects review lane fields that agree with the merged snapshot', () => {
@@ -2173,6 +2300,11 @@ describe('pet control snapshot', () => {
       expect(capsule.reviewLaneBlockCount).toBe(merged.reviewLanes.blockCount);
       expect(capsule.reviewLaneUnknownCount).toBe(merged.reviewLanes.unknownCount);
       expect(capsule.reviewLaneSummaries).toEqual(merged.reviewLanes.lanes);
+      expect(capsule.reviewLaneGateStatus).toBe(merged.reviewLaneGate.status);
+      expect(capsule.reviewLaneGateReason).toBe(merged.reviewLaneGate.reason);
+      expect(capsule.reviewLaneGateCanProceed).toBe(merged.reviewLaneGate.canProceed);
+      expect(capsule.reviewLaneGateBlockingPriority).toBe(merged.reviewLaneGate.blockingPriority);
+      expect(capsule.reviewLaneGateBlockingLaneCount).toBe(merged.reviewLaneGate.blockingLaneCount);
     });
 
     it('review lane metadata does not alter nextAction priority or adjacent pet lenses', () => {
@@ -2189,6 +2321,9 @@ describe('pet control snapshot', () => {
 
       expect(capsule.nextAction).toBe(baseCapsule.nextAction);
       expect(capsule.nextAction).toBe('finalize');
+      expect(capsule.reviewLaneGateStatus).toBe('blocked');
+      expect(capsule.reviewLaneGateReason).toBe('p1');
+      expect(capsule.reviewLaneGateCanProceed).toBe(false);
       expect(merged.review).toEqual(base.review);
       expect(merged.reviewHeat).toEqual(base.reviewHeat);
       expect(merged.blockerLens).toEqual(base.blockerLens);
@@ -2235,9 +2370,92 @@ describe('pet control snapshot', () => {
         issueCount: 2,
         updatedAt: 500,
       });
+      expect(merged.reviewLaneGate).toEqual({
+        status: 'blocked',
+        reason: 'p2',
+        canProceed: false,
+        blockingPriority: 'P2',
+        blockingLaneCount: 1,
+      });
       expect(capsule.reviewLaneSummaries).toEqual(merged.reviewLanes.lanes);
+      expect(capsule.reviewLaneGateStatus).toBe(merged.reviewLaneGate.status);
+      expect(capsule.reviewLaneGateReason).toBe(merged.reviewLaneGate.reason);
+      expect(capsule.reviewLaneGateCanProceed).toBe(merged.reviewLaneGate.canProceed);
+      expect(capsule.reviewLaneGateBlockingPriority).toBe(merged.reviewLaneGate.blockingPriority);
+      expect(capsule.reviewLaneGateBlockingLaneCount).toBe(merged.reviewLaneGate.blockingLaneCount);
+      expect(capsule.nextAction).toBe('idle');
       expect(petJson).not.toMatch(/SECRET_ID_123|SECRET_NAME|lane-secret|SECRET_MESSAGE|SECRET_DETAILS|TOPSECRET_TRANSCRIPT|RAW_SECRET_FIELD|password=/);
       expect(capsuleJson).not.toMatch(/SECRET_ID_123|SECRET_NAME|lane-secret|SECRET_MESSAGE|SECRET_DETAILS|TOPSECRET_TRANSCRIPT|RAW_SECRET_FIELD|password=/);
+    });
+
+    it('createPetHandoffCapsule sanitizes hand-built review lane summaries before projection', () => {
+      const snap = createBaseForHandoff({
+        reviewLanes: {
+          total: 99,
+          activeCount: 99,
+          passedCount: 99,
+          blockedCount: 99,
+          failedCount: 99,
+          highestPriority: 'PX' as any,
+          worstGrade: 'Z' as any,
+          proceedCount: 99,
+          iterateCount: 99,
+          blockCount: 99,
+          unknownCount: 99,
+          lanes: [
+            {
+              role: 'reviewer',
+              status: 'blocked',
+              grade: 'C',
+              recommendation: 'iterate',
+              highestPriority: 'P2',
+              issueCount: 1,
+              updatedAt: 600,
+              message: 'SECRET_HAND_BUILT_LANE',
+              transcript: 'SECRET_HAND_BUILT_TRANSCRIPT',
+            } as PetControlSnapshot['reviewLanes']['lanes'][number] & Record<string, unknown>,
+          ],
+        },
+        reviewLaneGate: {
+          status: 'clear',
+          reason: 'none',
+          canProceed: true,
+          blockingPriority: null,
+          blockingLaneCount: 0,
+        },
+      });
+
+      const capsule = createPetHandoffCapsule(snap);
+      const capsuleJson = JSON.stringify(capsule);
+
+      expect(capsule.reviewLaneSummaries).toEqual([
+        {
+          role: 'reviewer',
+          status: 'blocked',
+          grade: 'C',
+          recommendation: 'iterate',
+          highestPriority: 'P2',
+          issueCount: 1,
+          updatedAt: 600,
+        },
+      ]);
+      expect(capsule.reviewLaneCount).toBe(1);
+      expect(capsule.reviewLaneActiveCount).toBe(0);
+      expect(capsule.reviewLanePassedCount).toBe(0);
+      expect(capsule.reviewLaneBlockedCount).toBe(1);
+      expect(capsule.reviewLaneFailedCount).toBe(0);
+      expect(capsule.reviewLaneHighestPriority).toBe('P2');
+      expect(capsule.reviewLaneWorstGrade).toBe('C');
+      expect(capsule.reviewLaneProceedCount).toBe(0);
+      expect(capsule.reviewLaneIterateCount).toBe(1);
+      expect(capsule.reviewLaneBlockCount).toBe(0);
+      expect(capsule.reviewLaneUnknownCount).toBe(0);
+      expect(capsule.reviewLaneGateStatus).toBe('blocked');
+      expect(capsule.reviewLaneGateReason).toBe('p2');
+      expect(capsule.reviewLaneGateCanProceed).toBe(false);
+      expect(capsule.reviewLaneGateBlockingPriority).toBe('P2');
+      expect(capsule.reviewLaneGateBlockingLaneCount).toBe(1);
+      expect(capsuleJson).not.toMatch(/SECRET_HAND_BUILT_LANE|SECRET_HAND_BUILT_TRANSCRIPT/);
     });
   });
 });

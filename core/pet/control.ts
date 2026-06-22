@@ -83,6 +83,15 @@ export type PetReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | '
 export type PetReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
 export type PetReviewLaneRecommendation = 'proceed' | 'iterate' | 'block' | 'unknown';
 export type PetReviewLanePriority = 'P1' | 'P2' | 'P3';
+export type PetReviewLaneGateStatus = 'clear' | 'attention' | 'blocked';
+export type PetReviewLaneGateReason =
+  | 'none'
+  | 'active_review'
+  | 'p1'
+  | 'p2'
+  | 'block_recommendation'
+  | 'failed_lane'
+  | 'blocked_lane';
 
 export interface PetReviewLaneSummary {
   role: PetReviewLaneRole;
@@ -102,6 +111,14 @@ export interface PetReviewLaneInput {
   highestPriority?: unknown;
   issueCount?: unknown;
   updatedAt?: unknown;
+}
+
+export interface PetReviewLaneGate {
+  status: PetReviewLaneGateStatus;
+  reason: PetReviewLaneGateReason;
+  canProceed: boolean;
+  blockingPriority: PetReviewLanePriority | null;
+  blockingLaneCount: number;
 }
 
 export interface PetControlSnapshot {
@@ -187,6 +204,7 @@ export interface PetControlSnapshot {
     unknownCount: number;
     lanes: PetReviewLaneSummary[];
   };
+  reviewLaneGate: PetReviewLaneGate;
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
@@ -383,6 +401,7 @@ export function createPetControlSnapshotFromRunCockpit(
     unknownCount: 0,
     lanes: [],
   };
+  const reviewLaneGate = createPetReviewLaneGate(reviewLanes);
 
   return {
     schemaVersion: 1,
@@ -425,6 +444,7 @@ export function createPetControlSnapshotFromRunCockpit(
     memoryPressure,
     workerCycle,
     reviewLanes,
+    reviewLaneGate,
   };
 }
 
@@ -829,10 +849,26 @@ export interface PetHandoffCapsule {
   reviewLaneBlockCount: number;
   reviewLaneUnknownCount: number;
   reviewLaneSummaries: PetReviewLaneSummary[];
+  reviewLaneGateStatus: PetReviewLaneGateStatus;
+  reviewLaneGateReason: PetReviewLaneGateReason;
+  reviewLaneGateCanProceed: boolean;
+  reviewLaneGateBlockingPriority: PetReviewLanePriority | null;
+  reviewLaneGateBlockingLaneCount: number;
 }
 
 export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
-  const { readiness, run, target, safety, review, evidence, generatedAt, memoryPressure: mp, workerCycle: wc, reviewLanes: rl } = snapshot;
+  const {
+    readiness,
+    run,
+    target,
+    safety,
+    review,
+    evidence,
+    generatedAt,
+    memoryPressure: mp,
+    workerCycle: wc,
+    reviewLanes: rl,
+  } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
   if (target.stale) {
@@ -906,18 +942,39 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const workerCycleAcceptedEvidenceCount = wc ? wc.acceptedEvidenceCount : 0;
   const workerCycleReviewErrorCode = wc ? wc.reviewErrorCode : null;
 
-  const reviewLaneCount = rl ? rl.total : 0;
-  const reviewLaneActiveCount = rl ? rl.activeCount : 0;
-  const reviewLanePassedCount = rl ? rl.passedCount : 0;
-  const reviewLaneBlockedCount = rl ? rl.blockedCount : 0;
-  const reviewLaneFailedCount = rl ? rl.failedCount : 0;
-  const reviewLaneHighestPriority = rl ? rl.highestPriority : null;
-  const reviewLaneWorstGrade = rl ? rl.worstGrade : null;
-  const reviewLaneProceedCount = rl ? rl.proceedCount : 0;
-  const reviewLaneIterateCount = rl ? rl.iterateCount : 0;
-  const reviewLaneBlockCount = rl ? rl.blockCount : 0;
-  const reviewLaneUnknownCount = rl ? rl.unknownCount : 0;
-  const reviewLaneSummaries = rl ? rl.lanes : [];
+  const reviewLaneSummaries = rl && Array.isArray(rl.lanes)
+    ? rl.lanes.slice(0, 4).map((lane) => normalizeLane(lane))
+    : [];
+  const reviewLaneCount = reviewLaneSummaries.length;
+  const reviewLaneActiveCount = reviewLaneSummaries.filter((lane) => lane.status === 'running').length;
+  const reviewLanePassedCount = reviewLaneSummaries.filter((lane) => lane.status === 'passed').length;
+  const reviewLaneBlockedCount = reviewLaneSummaries.filter((lane) => lane.status === 'blocked').length;
+  const reviewLaneFailedCount = reviewLaneSummaries.filter((lane) => lane.status === 'failed').length;
+  const reviewLaneHighestPriority = pickHighestPriority(reviewLaneSummaries);
+  const reviewLaneWorstGrade = pickWorstGrade(reviewLaneSummaries);
+  const reviewLaneProceedCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'proceed').length;
+  const reviewLaneIterateCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'iterate').length;
+  const reviewLaneBlockCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'block').length;
+  const reviewLaneUnknownCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'unknown').length;
+  const reviewLaneGate = createPetReviewLaneGate({
+    total: reviewLaneCount,
+    activeCount: reviewLaneActiveCount,
+    passedCount: reviewLanePassedCount,
+    blockedCount: reviewLaneBlockedCount,
+    failedCount: reviewLaneFailedCount,
+    highestPriority: reviewLaneHighestPriority,
+    worstGrade: reviewLaneWorstGrade,
+    proceedCount: reviewLaneProceedCount,
+    iterateCount: reviewLaneIterateCount,
+    blockCount: reviewLaneBlockCount,
+    unknownCount: reviewLaneUnknownCount,
+    lanes: reviewLaneSummaries,
+  });
+  const reviewLaneGateStatus = reviewLaneGate.status;
+  const reviewLaneGateReason = reviewLaneGate.reason;
+  const reviewLaneGateCanProceed = reviewLaneGate.canProceed;
+  const reviewLaneGateBlockingPriority = reviewLaneGate.blockingPriority;
+  const reviewLaneGateBlockingLaneCount = reviewLaneGate.blockingLaneCount;
 
   return {
     schemaVersion: 1,
@@ -979,6 +1036,11 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     reviewLaneBlockCount,
     reviewLaneUnknownCount,
     reviewLaneSummaries,
+    reviewLaneGateStatus,
+    reviewLaneGateReason,
+    reviewLaneGateCanProceed,
+    reviewLaneGateBlockingPriority,
+    reviewLaneGateBlockingLaneCount,
   };
 }
 
@@ -1130,6 +1192,92 @@ function pickWorstGrade(lanes: PetReviewLaneSummary[]): AutonomousRunCompletionG
   return worst;
 }
 
+export function createPetReviewLaneGate(
+  reviewLanes: PetControlSnapshot['reviewLanes'] | null | undefined,
+): PetReviewLaneGate {
+  if (!reviewLanes) {
+    return {
+      status: 'clear',
+      reason: 'none',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    };
+  }
+
+  const blockingLaneCount = reviewLanes.lanes.filter(
+    (lane) => lane.highestPriority === 'P1' || lane.highestPriority === 'P2' || lane.recommendation === 'block',
+  ).length;
+
+  if (reviewLanes.highestPriority === 'P1') {
+    return {
+      status: 'blocked',
+      reason: 'p1',
+      canProceed: false,
+      blockingPriority: 'P1',
+      blockingLaneCount,
+    };
+  }
+
+  if (reviewLanes.highestPriority === 'P2') {
+    return {
+      status: 'blocked',
+      reason: 'p2',
+      canProceed: false,
+      blockingPriority: 'P2',
+      blockingLaneCount,
+    };
+  }
+
+  if (reviewLanes.blockCount > 0) {
+    return {
+      status: 'blocked',
+      reason: 'block_recommendation',
+      canProceed: false,
+      blockingPriority: null,
+      blockingLaneCount,
+    };
+  }
+
+  if (reviewLanes.failedCount > 0) {
+    return {
+      status: 'attention',
+      reason: 'failed_lane',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    };
+  }
+
+  if (reviewLanes.blockedCount > 0) {
+    return {
+      status: 'attention',
+      reason: 'blocked_lane',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    };
+  }
+
+  if (reviewLanes.activeCount > 0) {
+    return {
+      status: 'attention',
+      reason: 'active_review',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    };
+  }
+
+  return {
+    status: 'clear',
+    reason: 'none',
+    canProceed: true,
+    blockingPriority: null,
+    blockingLaneCount: 0,
+  };
+}
+
 export function mergePetReviewLanesIntoSnapshot(
   snapshot: PetControlSnapshot,
   lanes: PetReviewLaneInput[] | null | undefined,
@@ -1174,8 +1322,10 @@ export function mergePetReviewLanesIntoSnapshot(
     unknownCount,
     lanes: normalized,
   };
+  const reviewLaneGate = createPetReviewLaneGate(reviewLanes);
   return {
     ...snapshot,
     reviewLanes,
+    reviewLaneGate,
   };
 }
