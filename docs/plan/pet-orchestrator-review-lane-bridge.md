@@ -21,7 +21,7 @@ Add a pure bridge from pet review-lane state to orchestrator review-lane options
 - `reviewLaneGate`
 - `reviewLaneScheduler`
 
-The bridge sanitizes all `snapshot.reviewLanes.lanes`, maps unknown roles to `other`, and re-derives the gate with `createPetReviewLaneGate`. It does not trust hand-built `snapshot.reviewLaneGate` fields. Scheduler lane output remains capped to four role/status pairs, but blocking gate derivation scans all sanitized lanes before that output cap is applied. Oracle/Grok advisor requests for advisor lanes are reduced to booleans (`oracleRequested`, `grokRequested`) and do not carry prompts, transcripts, sessions, URLs, or worker instructions.
+The bridge sanitizes all `snapshot.reviewLanes.lanes`, maps unknown roles to `other`, and re-derives the gate with `createPetReviewLaneGate`. It does not trust hand-built `snapshot.reviewLaneGate` fields. Scheduler lane output remains capped to four role/status pairs, but blocking gate derivation scans all sanitized lanes before that output cap is applied. Requests for Oracle/Grok advisor lanes are reduced to booleans (`oracleRequested`, `grokRequested`) and do not carry prompts, transcripts, sessions, URLs, or worker instructions.
 
 This is still a pure non-Chrome seam. It does not schedule timers, call Chrome APIs, execute review workers, mutate storage, or start browser/runtime work.
 
