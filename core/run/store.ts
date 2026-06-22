@@ -134,6 +134,10 @@ export async function getAutonomousRunSteps(runId: AutonomousRunId): Promise<Aut
     .sort((a, b) => a.seq - b.seq);
 }
 
+export async function getAutonomousRunLedgerSnapshot(): Promise<AutonomousRunStorageState> {
+  return readAutonomousRunState();
+}
+
 export async function updateAutonomousRun(
   id: AutonomousRunId,
   patch: AutonomousRunUpdateInput,
@@ -150,10 +154,14 @@ export async function updateAutonomousRun(
       const status = patch.status && shouldTransitionAutonomousRun(run.status, patch.status)
         ? patch.status
         : run.status;
+      const startedAt = status === 'running'
+        ? normalizeTimestamp(patch.startedAt) ?? run.startedAt ?? now
+        : ('startedAt' in patch ? normalizeTimestamp(patch.startedAt) : run.startedAt);
       updated = normalizeRun({
         ...run,
         ...patch,
         status,
+        startedAt,
         budgets: normalizeBudgets({ ...run.budgets, ...patch.budgets }),
         policy: normalizePolicy({ ...run.policy, ...patch.policy }),
         proofContract: normalizeProofContract({ ...run.proofContract, ...patch.proofContract }),
@@ -419,7 +427,7 @@ export async function reconcileInterruptedAutonomousRuns(
   return mutateAutonomousRunState((state) => {
     let count = 0;
     const runs = state.runs.map((run) => {
-      if (run.status !== 'running' || run.startedAt == null) return run;
+      if (run.status !== 'running') return run;
       if (now - run.updatedAt < thresholdMs) return run;
       count += 1;
       return normalizeRun({

@@ -8,6 +8,7 @@ import {
   getAutonomousRunSteps,
   reconcileInterruptedAutonomousRuns,
   transitionAutonomousRun,
+  updateAutonomousRun,
   updateAutonomousRunCheckpoint,
 } from '../core/run/store';
 
@@ -150,6 +151,48 @@ describe('autonomous run store', () => {
       error: {
         code: 'autonomous_run_interrupted',
         retryable: true,
+      },
+    });
+  });
+
+  it('sets startedAt when updateAutonomousRun moves a queued run to running', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'updated-running' });
+
+    const run = await createAutonomousRun({ goal: 'Update to running' }, 100);
+    await updateAutonomousRun(run.id, { status: 'running' }, 150);
+
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'running',
+      startedAt: 150,
+    });
+  });
+
+  it('reconciles stale malformed running rows with missing startedAt', async () => {
+    const { chromeStub, storage } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'malformed-running' });
+
+    const run = await createAutonomousRun({ goal: 'Malformed running' }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const state = storage.get(AUTONOMOUS_RUN_STORAGE_KEY) as {
+      runs: Array<Record<string, unknown>>;
+    };
+    state.runs = state.runs.map((stored) => stored.id === run.id
+      ? { ...stored, startedAt: null, updatedAt: 110 }
+      : stored);
+    storage.set(AUTONOMOUS_RUN_STORAGE_KEY, state);
+
+    await expect(reconcileInterruptedAutonomousRuns(1_000, 2_000)).resolves.toBe(1);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: {
+        code: 'autonomous_run_interrupted',
+        details: {
+          startedAt: null,
+          lastUpdatedAt: 110,
+        },
       },
     });
   });
