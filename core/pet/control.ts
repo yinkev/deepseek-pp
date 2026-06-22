@@ -11,6 +11,10 @@ import type {
   AutonomousRunCompletionReview,
 } from '../run/review';
 import type { MemoryPressure } from '../prompt';
+import type {
+  AutonomousRunCycleResult,
+  AutonomousRunCycleReviewSummary,
+} from '../run/worker';
 
 export type PetBlockerCategory =
   | 'auth'
@@ -50,6 +54,30 @@ export type PetStopLineErrorCode =
   | 'no_active_run'
   | 'action_unavailable'
   | 'transition_rejected';
+
+const PET_WORKER_CYCLE_REVIEW_ERROR_CODES = new Set([
+  'completion_review_iterate',
+  'completion_review_fail',
+  'autonomous_iteration_empty_proof_contract',
+  'run_no_progress',
+  'run_repeated_error',
+]);
+
+export interface PetWorkerCycle {
+  lastAction: AutonomousRunCycleResult['action'] | null;
+  policyDecision: AutonomousRunCycleResult['policyDecision'];
+  iterationAction: AutonomousRunCycleResult['iterationAction'];
+  finalStatus: AutonomousRunCycleResult['finalStatus'];
+  applied: boolean;
+  advanced: boolean;
+  reviewGrade: AutonomousRunCycleReviewSummary['grade'] | null;
+  reviewDecision: AutonomousRunCycleReviewSummary['completionDecision'] | null;
+  reviewScore: number | null;
+  reviewIssueCount: number;
+  reviewProofDebtCount: number;
+  acceptedEvidenceCount: number;
+  reviewErrorCode: string | null;
+}
 
 export interface PetControlSnapshot {
   schemaVersion: 1;
@@ -119,6 +147,7 @@ export interface PetControlSnapshot {
     selectedTokenEstimate: number;
     budgetTokens: number;
   };
+  workerCycle: PetWorkerCycle;
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
@@ -285,6 +314,22 @@ export function createPetControlSnapshotFromRunCockpit(
     budgetTokens: 0,
   };
 
+  const workerCycle: PetControlSnapshot['workerCycle'] = {
+    lastAction: null,
+    policyDecision: null,
+    iterationAction: null,
+    finalStatus: null,
+    applied: false,
+    advanced: false,
+    reviewGrade: null,
+    reviewDecision: null,
+    reviewScore: null,
+    reviewIssueCount: 0,
+    reviewProofDebtCount: 0,
+    acceptedEvidenceCount: 0,
+    reviewErrorCode: null,
+  };
+
   return {
     schemaVersion: 1,
     generatedAt: snapshot.generatedAt,
@@ -324,6 +369,7 @@ export function createPetControlSnapshotFromRunCockpit(
     reviewHeat: createPetReviewHeat(review),
     stopLine: createPetStopLineState(activeRun),
     memoryPressure,
+    workerCycle,
   };
 }
 
@@ -703,10 +749,23 @@ export interface PetHandoffCapsule {
   memoryAvailableCount: number;
   memorySelectedTokenEstimate: number;
   memoryBudgetTokens: number;
+  workerCycleLastAction: PetControlSnapshot['workerCycle']['lastAction'];
+  workerCyclePolicyDecision: PetControlSnapshot['workerCycle']['policyDecision'];
+  workerCycleIterationAction: PetControlSnapshot['workerCycle']['iterationAction'];
+  workerCycleFinalStatus: PetControlSnapshot['workerCycle']['finalStatus'];
+  workerCycleApplied: boolean;
+  workerCycleAdvanced: boolean;
+  workerCycleReviewGrade: PetControlSnapshot['workerCycle']['reviewGrade'];
+  workerCycleReviewDecision: PetControlSnapshot['workerCycle']['reviewDecision'];
+  workerCycleReviewScore: number | null;
+  workerCycleReviewIssueCount: number;
+  workerCycleReviewProofDebtCount: number;
+  workerCycleAcceptedEvidenceCount: number;
+  workerCycleReviewErrorCode: string | null;
 }
 
 export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
-  const { readiness, run, target, safety, review, evidence, generatedAt, memoryPressure: mp } = snapshot;
+  const { readiness, run, target, safety, review, evidence, generatedAt, memoryPressure: mp, workerCycle: wc } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
   if (target.stale) {
@@ -766,6 +825,20 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const memorySelectedTokenEstimate = mp ? mp.selectedTokenEstimate : 0;
   const memoryBudgetTokens = mp ? mp.budgetTokens : 0;
 
+  const workerCycleLastAction = wc ? wc.lastAction : null;
+  const workerCyclePolicyDecision = wc ? wc.policyDecision : null;
+  const workerCycleIterationAction = wc ? wc.iterationAction : null;
+  const workerCycleFinalStatus = wc ? wc.finalStatus : null;
+  const workerCycleApplied = wc ? wc.applied : false;
+  const workerCycleAdvanced = wc ? wc.advanced : false;
+  const workerCycleReviewGrade = wc ? wc.reviewGrade : null;
+  const workerCycleReviewDecision = wc ? wc.reviewDecision : null;
+  const workerCycleReviewScore = wc ? wc.reviewScore : null;
+  const workerCycleReviewIssueCount = wc ? wc.reviewIssueCount : 0;
+  const workerCycleReviewProofDebtCount = wc ? wc.reviewProofDebtCount : 0;
+  const workerCycleAcceptedEvidenceCount = wc ? wc.acceptedEvidenceCount : 0;
+  const workerCycleReviewErrorCode = wc ? wc.reviewErrorCode : null;
+
   return {
     schemaVersion: 1,
     generatedAt,
@@ -801,6 +874,19 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     memoryAvailableCount,
     memorySelectedTokenEstimate,
     memoryBudgetTokens,
+    workerCycleLastAction,
+    workerCyclePolicyDecision,
+    workerCycleIterationAction,
+    workerCycleFinalStatus,
+    workerCycleApplied,
+    workerCycleAdvanced,
+    workerCycleReviewGrade,
+    workerCycleReviewDecision,
+    workerCycleReviewScore,
+    workerCycleReviewIssueCount,
+    workerCycleReviewProofDebtCount,
+    workerCycleAcceptedEvidenceCount,
+    workerCycleReviewErrorCode,
   };
 }
 
@@ -823,4 +909,40 @@ export function mergePromptMemoryPressureIntoSnapshot(
       budgetTokens: pressure.budgetTokens,
     },
   };
+}
+
+export function mergeAutonomousWorkerCycleResultIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  result: AutonomousRunCycleResult | null | undefined,
+): PetControlSnapshot {
+  if (!result) {
+    return snapshot;
+  }
+  const summary = result.reviewSummary;
+  const workerCycle: PetControlSnapshot['workerCycle'] = {
+    lastAction: result.action,
+    policyDecision: result.policyDecision,
+    iterationAction: result.iterationAction,
+    finalStatus: result.finalStatus,
+    applied: result.applied,
+    advanced: result.advanced,
+    reviewGrade: summary ? summary.grade : null,
+    reviewDecision: summary ? summary.completionDecision : null,
+    reviewScore: summary ? summary.score : null,
+    reviewIssueCount: summary ? summary.issueCount : 0,
+    reviewProofDebtCount: summary ? summary.proofDebtCount : 0,
+    acceptedEvidenceCount: summary ? summary.acceptedEvidenceCount : 0,
+    reviewErrorCode: toPetWorkerCycleReviewErrorCode(summary ? summary.errorCode : null),
+  };
+  return {
+    ...snapshot,
+    workerCycle,
+  };
+}
+
+function toPetWorkerCycleReviewErrorCode(errorCode: string | null): string | null {
+  if (!errorCode) return null;
+  return PET_WORKER_CYCLE_REVIEW_ERROR_CODES.has(errorCode)
+    ? errorCode
+    : 'unknown_worker_cycle_error';
 }

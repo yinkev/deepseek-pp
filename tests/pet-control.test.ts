@@ -15,11 +15,13 @@ import {
   mergeRuntimeDoctorReportIntoSnapshot,
   mergePromptMemoryPressureIntoSnapshot,
   createPetHandoffCapsule,
+  mergeAutonomousWorkerCycleResultIntoSnapshot,
   type PetControlSnapshot,
 } from '../core/pet/control';
 import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
 import type { RuntimeDoctorReport } from '../core/chat/runtime-doctor';
 import type { AutonomousRunCompletionReview } from '../core/run/review';
+import type { AutonomousRunCycleResult } from '../core/run/worker';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -63,6 +65,7 @@ describe('pet control snapshot', () => {
     reviewHeat?: Partial<PetControlSnapshot['reviewHeat']>;
     stopLine?: Partial<PetControlSnapshot['stopLine']>;
     memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
+    workerCycle?: Partial<PetControlSnapshot['workerCycle']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -154,7 +157,58 @@ describe('pet control snapshot', () => {
         budgetTokens: 0,
         ...overrides.memoryPressure,
       },
+      workerCycle: {
+        lastAction: null,
+        policyDecision: null,
+        iterationAction: null,
+        finalStatus: null,
+        applied: false,
+        advanced: false,
+        reviewGrade: null,
+        reviewDecision: null,
+        reviewScore: null,
+        reviewIssueCount: 0,
+        reviewProofDebtCount: 0,
+        acceptedEvidenceCount: 0,
+        reviewErrorCode: null,
+        ...overrides.workerCycle,
+      },
     };
+  }
+
+  function createBaseForHandoff(overrides: Parameters<typeof createBasePetSnapshot>[0] = {}): PetControlSnapshot {
+    return createBasePetSnapshot({
+      generatedAt: 123,
+      readiness: { status: 'ready', blockers: [], preparing: false },
+      run: { active: false, label: null, phase: 'idle', nextAction: null },
+      target: {
+        locked: false,
+        label: null,
+        stale: false,
+        leaseStatus: 'none',
+        leaseAgeMs: null,
+        leaseExpiresInMs: null,
+      },
+      safety: { leakIssueCount: 0, highRiskArmed: false },
+      evidence: {
+        status: 'none',
+        count: 0,
+        freshCount: 0,
+        staleCount: 0,
+        expiredCount: 0,
+        latestCapturedAt: null,
+        latestAgeMs: null,
+      },
+      review: {
+        grade: null,
+        decision: null,
+        proofDebtCount: 0,
+        issueCount: 0,
+        acceptedEvidenceCount: 0,
+        canFinalize: false,
+      },
+      ...overrides,
+    });
   }
 
   function createRuntimeDoctorReport(overrides: {
@@ -1283,19 +1337,6 @@ describe('pet control snapshot', () => {
   });
 
   describe('createPetHandoffCapsule', () => {
-    function createBaseForHandoff(overrides: Parameters<typeof createBasePetSnapshot>[0] = {}): PetControlSnapshot {
-      return createBasePetSnapshot({
-        generatedAt: 123,
-        readiness: { status: 'ready', blockers: [], preparing: false },
-        run: { active: false, label: null, phase: 'idle', nextAction: null },
-        target: { locked: false, label: null, stale: false, leaseStatus: 'none', leaseAgeMs: null, leaseExpiresInMs: null },
-        safety: { leakIssueCount: 0, highRiskArmed: false },
-        evidence: { status: 'none', count: 0, freshCount: 0, staleCount: 0, expiredCount: 0, latestCapturedAt: null, latestAgeMs: null },
-        review: { grade: null, decision: null, proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 0, canFinalize: false },
-        ...overrides,
-      });
-    }
-
     it('idle/ready snapshot creates a safe idle capsule with defaults', () => {
       const snap = createBaseForHandoff();
       const capsule = createPetHandoffCapsule(snap);
@@ -1346,6 +1387,19 @@ describe('pet control snapshot', () => {
         memoryAvailableCount: 0,
         memorySelectedTokenEstimate: 0,
         memoryBudgetTokens: 0,
+        workerCycleLastAction: null,
+        workerCyclePolicyDecision: null,
+        workerCycleIterationAction: null,
+        workerCycleFinalStatus: null,
+        workerCycleApplied: false,
+        workerCycleAdvanced: false,
+        workerCycleReviewGrade: null,
+        workerCycleReviewDecision: null,
+        workerCycleReviewScore: null,
+        workerCycleReviewIssueCount: 0,
+        workerCycleReviewProofDebtCount: 0,
+        workerCycleAcceptedEvidenceCount: 0,
+        workerCycleReviewErrorCode: null,
         nextAction: 'idle',
       });
       const json = JSON.stringify(capsule);
@@ -1563,6 +1617,7 @@ describe('pet control snapshot', () => {
       expect(capsuleJson).toContain('"reviewState":"iterate"');
       expect(capsuleJson).toContain('"blockerCount":2');
     });
+  });
 
   describe('memory pressure consumption', () => {
     it('createPetControlSnapshotFromRunCockpit and createBase default to no prompt pressure observed', () => {
@@ -1683,5 +1738,216 @@ describe('pet control snapshot', () => {
     });
   });
 
+  describe('worker cycle review consumption', () => {
+    function createCycleResult(
+      overrides: Partial<AutonomousRunCycleResult> = {},
+    ): AutonomousRunCycleResult {
+      return {
+        action: 'advance',
+        runId: 'run-secret-source-id',
+        started: false,
+        advanced: true,
+        applied: true,
+        policyDecision: 'allow',
+        iterationAction: 'iterate',
+        reviewSummary: {
+          action: 'iterate',
+          completionDecision: 'iterate',
+          grade: 'B',
+          score: 82,
+          issueCount: 1,
+          proofDebtCount: 2,
+          acceptedEvidenceCount: 3,
+          progressReason: null,
+          errorCode: 'completion_review_iterate',
+        },
+        finalStatus: 'running',
+        errorCode: null,
+        ...overrides,
+      };
+    }
+
+    it('createPetControlSnapshotFromRunCockpit and createBase default to no worker cycle observed', () => {
+      const pet = createBasePetSnapshot();
+      expect(pet.workerCycle).toEqual({
+        lastAction: null,
+        policyDecision: null,
+        iterationAction: null,
+        finalStatus: null,
+        applied: false,
+        advanced: false,
+        reviewGrade: null,
+        reviewDecision: null,
+        reviewScore: null,
+        reviewIssueCount: 0,
+        reviewProofDebtCount: 0,
+        acceptedEvidenceCount: 0,
+        reviewErrorCode: null,
+      });
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).workerCycle).toEqual(pet.workerCycle);
+    });
+
+    it('mergeAutonomousWorkerCycleResultIntoSnapshot returns original snapshot object unchanged if result null or undefined', () => {
+      const snap = createBasePetSnapshot();
+      expect(mergeAutonomousWorkerCycleResultIntoSnapshot(snap, null)).toBe(snap);
+      expect(mergeAutonomousWorkerCycleResultIntoSnapshot(snap, undefined)).toBe(snap);
+    });
+
+    it('mergeAutonomousWorkerCycleResultIntoSnapshot projects safe review fields without changing review heat or next action inputs', () => {
+      const snap = createBasePetSnapshot({
+        run: { active: true, phase: 'working', nextAction: 'continue' },
+        reviewHeat: { level: 'none', reasons: ['no_review'] },
+      });
+      const result = createCycleResult();
+
+      const merged = mergeAutonomousWorkerCycleResultIntoSnapshot(snap, result);
+
+      expect(merged).not.toBe(snap);
+      expect(merged.workerCycle).toEqual({
+        lastAction: 'advance',
+        policyDecision: 'allow',
+        iterationAction: 'iterate',
+        finalStatus: 'running',
+        applied: true,
+        advanced: true,
+        reviewGrade: 'B',
+        reviewDecision: 'iterate',
+        reviewScore: 82,
+        reviewIssueCount: 1,
+        reviewProofDebtCount: 2,
+        acceptedEvidenceCount: 3,
+        reviewErrorCode: 'completion_review_iterate',
+      });
+      expect(merged.review).toEqual(snap.review);
+      expect(merged.reviewHeat).toEqual(snap.reviewHeat);
+      expect(merged.run.nextAction).toBe('continue');
+    });
+
+    it('null reviewSummary still records cycle action/status metadata with zero review counters', () => {
+      const snap = createBasePetSnapshot();
+      const result = createCycleResult({
+        action: 'block',
+        advanced: false,
+        applied: false,
+        policyDecision: 'deny',
+        iterationAction: null,
+        reviewSummary: null,
+        finalStatus: 'blocked',
+        errorCode: 'policy_denied',
+      });
+
+      const merged = mergeAutonomousWorkerCycleResultIntoSnapshot(snap, result);
+
+      expect(merged.workerCycle).toEqual({
+        lastAction: 'block',
+        policyDecision: 'deny',
+        iterationAction: null,
+        finalStatus: 'blocked',
+        applied: false,
+        advanced: false,
+        reviewGrade: null,
+        reviewDecision: null,
+        reviewScore: null,
+        reviewIssueCount: 0,
+        reviewProofDebtCount: 0,
+        acceptedEvidenceCount: 0,
+        reviewErrorCode: null,
+      });
+    });
+
+    it('createPetHandoffCapsule projects worker cycle fields that agree with the merged snapshot', () => {
+      const snap = createBaseForHandoff({ run: { active: true, phase: 'working' } });
+      const result = createCycleResult({
+        reviewSummary: {
+          action: 'succeed',
+          completionDecision: 'pass',
+          grade: 'A',
+          score: 99,
+          issueCount: 0,
+          proofDebtCount: 0,
+          acceptedEvidenceCount: 5,
+          progressReason: null,
+          errorCode: null,
+        },
+        iterationAction: 'succeed',
+        finalStatus: 'succeeded',
+      });
+
+      const merged = mergeAutonomousWorkerCycleResultIntoSnapshot(snap, result);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(capsule.workerCycleLastAction).toBe(merged.workerCycle.lastAction);
+      expect(capsule.workerCyclePolicyDecision).toBe(merged.workerCycle.policyDecision);
+      expect(capsule.workerCycleIterationAction).toBe(merged.workerCycle.iterationAction);
+      expect(capsule.workerCycleFinalStatus).toBe(merged.workerCycle.finalStatus);
+      expect(capsule.workerCycleApplied).toBe(merged.workerCycle.applied);
+      expect(capsule.workerCycleAdvanced).toBe(merged.workerCycle.advanced);
+      expect(capsule.workerCycleReviewGrade).toBe(merged.workerCycle.reviewGrade);
+      expect(capsule.workerCycleReviewDecision).toBe(merged.workerCycle.reviewDecision);
+      expect(capsule.workerCycleReviewScore).toBe(merged.workerCycle.reviewScore);
+      expect(capsule.workerCycleReviewIssueCount).toBe(merged.workerCycle.reviewIssueCount);
+      expect(capsule.workerCycleReviewProofDebtCount).toBe(merged.workerCycle.reviewProofDebtCount);
+      expect(capsule.workerCycleAcceptedEvidenceCount).toBe(merged.workerCycle.acceptedEvidenceCount);
+      expect(capsule.workerCycleReviewErrorCode).toBe(merged.workerCycle.reviewErrorCode);
+    });
+
+    it('worker cycle metadata does not alter nextAction priority', () => {
+      const base = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 4, canFinalize: true },
+      });
+      const baseCapsule = createPetHandoffCapsule(base);
+      const merged = mergeAutonomousWorkerCycleResultIntoSnapshot(base, createCycleResult());
+      const cycleCapsule = createPetHandoffCapsule(merged);
+
+      expect(baseCapsule.nextAction).toBe('finalize');
+      expect(cycleCapsule.nextAction).toBe(baseCapsule.nextAction);
+    });
+
+    it('privacy false-positive probe: raw result IDs and extra summary strings stay out of pet snapshot and handoff projection', () => {
+      const snap = createBaseForHandoff();
+      const resultWithSecrets = createCycleResult({
+        runId: 'run_SECRET_WORKER_ID_123',
+        errorCode: 'top_SECRET_WORKER_ERROR',
+        reviewSummary: {
+          action: 'iterate',
+          completionDecision: 'iterate',
+          grade: 'C',
+          score: 70,
+          issueCount: 2,
+          proofDebtCount: 1,
+          acceptedEvidenceCount: 1,
+          progressReason: 'no_progress',
+          errorCode: 'SECRET_WORKER_REVIEW_ERROR',
+          rawEvidenceIds: ['ev_SECRET_EVIDENCE_456'],
+          rawMessage: 'password=worker-secret',
+        } as AutonomousRunCycleResult['reviewSummary'] & Record<string, unknown>,
+        rawTranscript: 'model said TOPSECRET_WORKER_TRANSCRIPT',
+      } as Partial<AutonomousRunCycleResult> & Record<string, unknown>);
+      const sourceJson = JSON.stringify(resultWithSecrets);
+      expect(sourceJson).toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR/);
+
+      const merged = mergeAutonomousWorkerCycleResultIntoSnapshot(snap, resultWithSecrets);
+      const capsule = createPetHandoffCapsule(merged);
+      const petJson = JSON.stringify(merged);
+      const capsuleJson = JSON.stringify(capsule);
+
+      expect(merged.workerCycle.reviewGrade).toBe('C');
+      expect(merged.workerCycle.reviewIssueCount).toBe(2);
+      expect(merged.workerCycle.reviewProofDebtCount).toBe(1);
+      expect(merged.workerCycle.reviewErrorCode).toBe('unknown_worker_cycle_error');
+      expect(capsule.workerCycleReviewGrade).toBe('C');
+      expect(capsule.workerCycleReviewIssueCount).toBe(2);
+      expect(capsule.workerCycleReviewErrorCode).toBe('unknown_worker_cycle_error');
+      expect(petJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
+      expect(capsuleJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
+    });
   });
 });
