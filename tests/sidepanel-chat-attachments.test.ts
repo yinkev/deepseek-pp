@@ -3,9 +3,14 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatPage from '../entrypoints/sidepanel/pages/ChatPage';
+import type { ChatToolEvent } from '../core/types';
 
 type RuntimeMessage = {
   type: string;
+  streamId?: string;
+  text?: string;
+  reasoningText?: string;
+  toolEvents?: ChatToolEvent[];
   payload?: unknown;
   done?: boolean;
   error?: string;
@@ -22,6 +27,7 @@ type ChatSubmitMessage = {
   type: 'CHAT_SUBMIT_PROMPT';
   payload: {
     text: string;
+    streamId?: string;
     images?: SubmittedImage[];
   };
 };
@@ -156,7 +162,7 @@ describe('sidepanel chat image attachments', () => {
     });
     expect(submit.payload.images?.[0]?.dataUrl).toMatch(/^data:image\/png;base64,/);
 
-    await emitRuntimeMessage({ type: 'CHAT_STREAM_CHUNK', done: true });
+    await emitRuntimeMessage({ type: 'CHAT_STREAM_CHUNK', streamId: submit.payload.streamId, done: true });
 
     expect(revokedObjectUrls).toEqual(['blob:deepseek-pp-test-1']);
     expect(sendMessage.mock.calls).not.toEqual(
@@ -207,6 +213,147 @@ describe('sidepanel chat image attachments', () => {
       payload: { sameSessionStrategy: 'new' },
     });
     expect(container.textContent).not.toMatch(/session-[a-z0-9_-]+/i);
+  });
+
+  it('renders tool activity as a compact disclosure instead of raw tool markup', async () => {
+    await renderChatPage();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      text: 'I am checking the existing chat.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'running',
+        title: 'Read page snapshot',
+        summary: 'Running',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'success',
+        title: 'Read page snapshot',
+        summary: 'Done',
+        detail: 'Loaded the visible chat structure.',
+      }],
+    });
+
+    const toolEvent = container.querySelector('.ds-chat-tool-event');
+    expect(toolEvent).toBeTruthy();
+    expect(toolEvent?.textContent).toContain('Read page snapshot');
+    expect(toolEvent?.textContent).toContain('Loaded the visible chat structure.');
+    expect(container.textContent).toContain('I am checking the existing chat.');
+    expect(container.textContent).not.toContain('<browser_snapshot');
+    expect(container.textContent).not.toContain('</browser_snapshot>');
+  });
+
+  it('does not duplicate assistant text from the final done chunk', async () => {
+    await renderChatPage();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      text: 'I found the right chat.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      text: 'I found the right chat.',
+      done: true,
+    });
+
+    expect(container.textContent?.match(/I found the right chat\./g)).toHaveLength(1);
+  });
+
+  it('shows an assistant working placeholder immediately after sending', async () => {
+    await renderChatPage();
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+    await enterText(textarea, 'Use the current browser tab and read the visible answer.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    expect(container.textContent).toContain('Use the current browser tab and read the visible answer.');
+    expect(container.querySelector('.ds-chat-message-row-assistant .ds-chat-caret')).toBeTruthy();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      text: 'The visible answer says to keep it simple.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      done: true,
+    });
+
+    expect(container.textContent).toContain('The visible answer says to keep it simple.');
+    expect(container.querySelector('.ds-chat-message-row-assistant .ds-chat-caret')).toBeNull();
+  });
+
+  it('ignores stale stream chunks from an older chat run', async () => {
+    await renderChatPage();
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+    await enterText(textarea, 'Use my current browser tab and tell me what happened.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+    const streamId = submit.payload.streamId;
+
+    expect(streamId).toEqual(expect.any(String));
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: `${streamId}-old`,
+      text: 'This stale answer should not appear.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      text: 'This unscoped stale answer should not appear.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      error: 'This unscoped stale error should not appear.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId,
+      text: 'This is the current answer.',
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId,
+      done: true,
+    });
+
+    expect(container.textContent).not.toContain('This stale answer should not appear.');
+    expect(container.textContent).not.toContain('This unscoped stale answer should not appear.');
+    expect(container.textContent).not.toContain('This unscoped stale error should not appear.');
+    expect(container.textContent).toContain('This is the current answer.');
+  });
+
+  it('resets message auto-scroll when sending a new turn', async () => {
+    await renderChatPage();
+    const list = container.querySelector('.ds-chat-messages') as HTMLDivElement | null;
+    expect(list).toBeTruthy();
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true });
+    Object.defineProperty(list, 'clientHeight', { value: 100, configurable: true });
+    Object.defineProperty(list, 'scrollTop', { value: 0, writable: true, configurable: true });
+
+    await act(async () => {
+      list?.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+    await enterText(textarea, 'Use my current browser tab and continue from here.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    expect(list?.scrollTop).toBe(1000);
   });
 
   it('captures the current tab into a transient attachment', async () => {
@@ -301,12 +448,13 @@ describe('sidepanel chat image attachments', () => {
     });
     await enterText(textarea, 'I am checking this crop. What should I fix?');
     await clickButtonByLabel('发送');
-    await waitForSubmit();
+    const submit = await waitForSubmit();
 
     expect(container.querySelector('img[alt="retry.png"]')).toBeNull();
 
     await emitRuntimeMessage({
       type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
       error: 'DeepSeek Web Vision upload failed.',
     });
 

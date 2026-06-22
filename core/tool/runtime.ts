@@ -147,7 +147,7 @@ async function executeToolCallWithoutHistory(
   }
 
   if (isBrowserControlToolName(call.name)) {
-    return executeBrowserControlToolCall(call, locale);
+    return executeBrowserControlToolCall(call, locale, { signal: options.signal });
   }
 
   if (call.provider?.kind === 'mcp' || call.descriptorId?.startsWith('mcp:')) {

@@ -13,6 +13,9 @@ import {
   LEGACY_TOOL_CALLS_OPEN_TAG,
 } from './tool-parser';
 
+const INTERNAL_TOOL_RESULTS_OPEN_TAG = '[TOOL_RESULTS]';
+const INTERNAL_TOOL_RESULTS_CLOSE_TAG = '[/TOOL_RESULTS]';
+
 export interface StreamingToolTextAccumulator {
   append(chunk: string): string;
   flush(): string;
@@ -28,7 +31,6 @@ export function createStreamingToolTextAccumulator(
 
 class ToolTextAccumulator implements StreamingToolTextAccumulator {
   private readonly suppressionTargets: Array<{ key: string; openTag: string; closeTag: string }>;
-  private readonly targetByOpenTag = new Map<string, { key: string; openTag: string; closeTag: string }>();
   private readonly xmlTargets = new Map<string, { key: string; openTag: string; closeTag: string }>();
   private readonly xmlTargetNames: ReadonlySet<string>;
   private readonly openPrefixes: Set<string>;
@@ -51,9 +53,11 @@ class ToolTextAccumulator implements StreamingToolTextAccumulator {
       openTag: LEGACY_TOOL_CALLS_OPEN_TAG,
       closeTag: LEGACY_TOOL_CALLS_CLOSE_TAG,
     });
-    for (const target of this.suppressionTargets) {
-      this.targetByOpenTag.set(target.openTag, target);
-    }
+    this.suppressionTargets.push({
+      key: 'internal:tool-results',
+      openTag: INTERNAL_TOOL_RESULTS_OPEN_TAG,
+      closeTag: INTERNAL_TOOL_RESULTS_CLOSE_TAG,
+    });
     for (const target of this.suppressionTargets.filter((target) => target.key.startsWith('xml:'))) {
       const name = target.key.slice('xml:'.length);
       this.xmlTargets.set(name, target);
@@ -178,20 +182,19 @@ class ToolTextAccumulator implements StreamingToolTextAccumulator {
   }
 
   private findFirstExactOpenTag(text: string): { key: string; openTag: string; closeTag: string; index: number; endIndex: number } | null {
-    let searchFrom = 0;
-    while (searchFrom < text.length) {
-      const index = text.indexOf('<', searchFrom);
-      if (index === -1) return null;
-
-      const tagEnd = text.indexOf('>', index + 1);
-      if (tagEnd === -1) return null;
-      const candidate = text.slice(index, tagEnd + 1);
-      const target = this.targetByOpenTag.get(candidate);
-      if (target) return { ...target, index, endIndex: tagEnd + 1 };
-
-      searchFrom = candidate.includes('<', 1) ? index + 1 : tagEnd + 1;
+    let first: { key: string; openTag: string; closeTag: string; index: number; endIndex: number } | null = null;
+    for (const target of this.suppressionTargets) {
+      const index = text.indexOf(target.openTag);
+      if (index === -1) continue;
+      if (!first || index < first.index) {
+        first = {
+          ...target,
+          index,
+          endIndex: index + target.openTag.length,
+        };
+      }
     }
-    return null;
+    return first;
   }
 }
 

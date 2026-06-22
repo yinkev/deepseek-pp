@@ -8,6 +8,7 @@ interface Props {
   onEdit?: () => void;
   onDelete?: () => void;
   onToggleEnabled?: () => void;
+  showSourceBadge?: boolean;
 }
 
 const SOURCE_LABELS: Record<string, { labelKey: LocaleMessageKey; className: string }> = {
@@ -18,7 +19,13 @@ const SOURCE_LABELS: Record<string, { labelKey: LocaleMessageKey; className: str
   remote: { labelKey: 'sidepanel.skill.sources.remote', className: 'ds-tag' },
 };
 
-export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: Props) {
+export default function SkillCard({
+  skill,
+  onEdit,
+  onDelete,
+  onToggleEnabled,
+  showSourceBadge = true,
+}: Props) {
   const { t } = useI18n();
   const badge = skill.remote?.provider === 'local'
     ? { labelKey: 'sidepanel.skill.sources.local' as LocaleMessageKey, className: 'ds-tag' }
@@ -28,15 +35,11 @@ export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: 
   const toggleLabel = enabled
     ? t('sidepanel.skill.actions.disableSkill', { name: skill.name })
     : t('sidepanel.skill.actions.enableSkill', { name: skill.name });
-  const statusBorder = enabled
-    ? '1px solid color-mix(in srgb, var(--ds-success) 28%, var(--ds-border))'
-    : '1px solid color-mix(in srgb, var(--ds-danger) 24%, var(--ds-border))';
 
   return (
     <div
       className="ds-card rounded-xl p-3 group"
       style={{
-        border: statusBorder,
         opacity: enabled ? 1 : 0.82,
       }}
     >
@@ -45,7 +48,7 @@ export default function SkillCard({ skill, onEdit, onDelete, onToggleEnabled }: 
           <code className="ds-trigger text-[12px] font-mono font-semibold px-1.5 py-0.5 rounded">
             /{skill.name}
           </code>
-          {badge && (
+          {showSourceBadge && badge && (
             <span className={`${badge.className} inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0`}>
               {t(badge.labelKey)}
             </span>

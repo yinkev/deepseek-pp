@@ -10,7 +10,10 @@ export interface PersonalConvenienceConfig {
   sameSessionStrategy: DeepSeekWebSessionStrategy;
   visualMonitorDefault: boolean;
   reducedConfirmations: boolean;
+  descriptionDensity: DescriptionDensity;
 }
+
+export type DescriptionDensity = 'comfortable' | 'compact';
 
 export const DEFAULT_PERSONAL_CONVENIENCE_CONFIG: PersonalConvenienceConfig = {
   enabled: true,
@@ -19,6 +22,7 @@ export const DEFAULT_PERSONAL_CONVENIENCE_CONFIG: PersonalConvenienceConfig = {
   sameSessionStrategy: 'last',
   visualMonitorDefault: true,
   reducedConfirmations: true,
+  descriptionDensity: 'comfortable',
 };
 
 const STORAGE_KEY = 'deepseek_pp_personal_convenience';
@@ -54,7 +58,14 @@ export function normalizePersonalConvenienceConfig(value: unknown): PersonalConv
       : DEFAULT_PERSONAL_CONVENIENCE_CONFIG.sameSessionStrategy,
     visualMonitorDefault: record.visualMonitorDefault !== false,
     reducedConfirmations: record.reducedConfirmations !== false,
+    descriptionDensity: isDescriptionDensity(record.descriptionDensity)
+      ? record.descriptionDensity
+      : DEFAULT_PERSONAL_CONVENIENCE_CONFIG.descriptionDensity,
   };
+}
+
+function isDescriptionDensity(value: unknown): value is DescriptionDensity {
+  return value === 'comfortable' || value === 'compact';
 }
 
 function getLocalStorageArea(): LocalStorageArea | null {

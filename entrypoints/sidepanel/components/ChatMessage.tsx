@@ -1,5 +1,5 @@
 import ReactMarkdown from 'react-markdown';
-import type { ChatMessage as ChatMessageType } from '../../../core/types';
+import type { ChatMessage as ChatMessageType, ChatToolEvent } from '../../../core/types';
 import { useI18n } from '../i18n';
 
 interface ChatMessageProps {
@@ -45,8 +45,13 @@ export default function ChatMessage({ message, isStreaming }: ChatMessageProps) 
                 <div className="whitespace-pre-wrap">{message.reasoningText}</div>
               </details>
             )}
+            {message.toolEvents && message.toolEvents.length > 0 && (
+              <div className="ds-chat-tool-events">
+                <ToolEventsDisclosure events={message.toolEvents} />
+              </div>
+            )}
             {message.text && (
-              <div className="prose prose-sm max-w-none [&_pre]:overflow-x-auto [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:bg-[var(--ds-bg)] [&_code]:text-sm">
+              <div className="ds-chat-markdown">
                 <ReactMarkdown>{message.text}</ReactMarkdown>
               </div>
             )}
@@ -58,4 +63,50 @@ export default function ChatMessage({ message, isStreaming }: ChatMessageProps) 
       </div>
     </div>
   );
+}
+
+function ToolEventsDisclosure({ events }: { events: ChatToolEvent[] }) {
+  const summary = formatToolEventsSummary(events);
+  return (
+    <details className="ds-chat-tool-event">
+      <summary>
+        <span className="ds-chat-tool-icon" aria-hidden="true">&gt;_</span>
+        <span className="ds-chat-tool-title">{summary}</span>
+        <span className="ds-chat-tool-chevron" aria-hidden="true">v</span>
+      </summary>
+      <div className="ds-chat-tool-detail">
+        {events.map((event) => (
+          <div key={event.id} className={`ds-chat-tool-detail-item ds-chat-tool-detail-item-${event.status}`}>
+            <div className="ds-chat-tool-detail-head">
+              <span>{event.title}</span>
+              <span>{formatToolEventStatus(event)}</span>
+            </div>
+            {event.detail?.trim() && (
+              <div className="ds-chat-tool-detail-body">{event.detail.trim()}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function formatToolEventsSummary(events: ChatToolEvent[]): string {
+  if (events.length === 1) {
+    const event = events[0];
+    const status = formatToolEventStatus(event);
+    return status ? `${event.title} - ${status}` : event.title;
+  }
+  const runningCount = events.filter((event) => event.status === 'running').length;
+  const errorCount = events.filter((event) => event.status === 'error').length;
+  if (runningCount > 0) return `Using ${events.length} tools`;
+  if (errorCount > 0) return `Used ${events.length} tools, ${errorCount} failed`;
+  return `Used ${events.length} tools`;
+}
+
+function formatToolEventStatus(event: ChatToolEvent): string {
+  if (event.status === 'running') return event.summary || 'Running';
+  if (event.status === 'error') return event.summary || 'Failed';
+  if (event.durationMs && event.durationMs >= 1000) return `${(event.durationMs / 1000).toFixed(1)}s`;
+  return event.summary || 'Done';
 }

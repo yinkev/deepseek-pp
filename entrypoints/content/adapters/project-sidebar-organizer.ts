@@ -268,7 +268,9 @@ export function startDeepSeekProjectSidebarOrganizer(
   };
 
   void loadState();
-  const observer = new MutationObserver(schedule);
+  const observer = new MutationObserver((mutations) => {
+    if (mutations.some(mutationMayAffectProjectSidebar)) schedule();
+  });
   observer.observe(document.body, { childList: true, subtree: true });
   chrome.runtime.onMessage.addListener(messageHandler);
   document.addEventListener('click', clickCaptureHandler, true);
@@ -295,6 +297,25 @@ export function startDeepSeekProjectSidebarOrganizer(
       restoreProjectHiddenRows(document);
     },
   };
+}
+
+function mutationMayAffectProjectSidebar(mutation: MutationRecord): boolean {
+  return Array.from(mutation.addedNodes).some(nodeMayAffectProjectSidebar) ||
+    Array.from(mutation.removedNodes).some(nodeMayAffectProjectSidebar);
+}
+
+function nodeMayAffectProjectSidebar(node: Node): boolean {
+  if (!(node instanceof Element)) return false;
+  const selector = [
+    'a[href*="/chat/s/"]',
+    'a[href*="/a/chat/s/"]',
+    'a[href*="chat_session_id="]',
+    `[${NATIVE_MENU_ENHANCER_ATTR}="true"]`,
+    `#${PROJECT_SECTION_ID}`,
+    '[role="menu"]',
+    '[role="menuitem"]',
+  ].join(',');
+  return node.matches(selector) || Boolean(node.querySelector(selector));
 }
 
 export function renderProjectSidebar(

@@ -52,6 +52,40 @@ export default function GeneralSubPage({ state }: { state: SettingsState }) {
             );
           })}
         </div>
+        <div className="pt-3 border-t space-y-2" style={{ borderColor: 'var(--ds-border)' }}>
+          <div>
+            <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+              {t('sidepanel.settings.descriptionDensity')}
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
+              {t('sidepanel.settings.descriptionDensityDescription')}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t('sidepanel.settings.descriptionDensity')}>
+            {(['comfortable', 'compact'] as const).map((density) => {
+              const active = state.personalConfig.descriptionDensity === density;
+              return (
+                <button
+                  key={density}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => state.handlePersonalConveniencePatch({ descriptionDensity: density })}
+                  className="min-w-0 px-2 py-2 text-[11px] leading-tight font-medium rounded-lg border transition-all duration-150"
+                  style={{
+                    background: active ? 'var(--ds-blue-light)' : 'var(--ds-bg)',
+                    color: active ? 'var(--ds-blue)' : 'var(--ds-text-secondary)',
+                    borderColor: active ? 'var(--ds-selected-border)' : 'var(--ds-border)',
+                  }}
+                >
+                  {density === 'compact'
+                    ? t('sidepanel.settings.descriptionDensityCompact')
+                    : t('sidepanel.settings.descriptionDensityComfortable')}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </SettingsSection>
 
       <SettingsSection

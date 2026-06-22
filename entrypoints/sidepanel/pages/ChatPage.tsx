@@ -26,7 +26,7 @@ import {
   serializeDeepSeekWebVisionFile,
   type DeepSeekWebVisionSerializedImage,
 } from '../../../core/deepseek/web-vision';
-import type { ChatMessage as ChatMessageType } from '../../../core/types';
+import type { ChatMessage as ChatMessageType, ChatToolEvent } from '../../../core/types';
 import ChatMessage from '../components/ChatMessage';
 import { StatusMessage, useConfirm } from '../components/settings/primitives';
 import { consumePendingText, onPendingText } from '../pending-text';
@@ -43,8 +43,10 @@ interface ChatAuthStatus {
 
 interface ChatStreamMessage extends ChatAuthStatus {
   type: string;
+  streamId?: string;
   text?: string;
   reasoningText?: string;
+  toolEvents?: ChatToolEvent[];
   voiceSettings?: VoiceSettings;
   phase?: 'reasoning' | 'answer';
   done?: boolean;
@@ -86,6 +88,7 @@ const EFFORT_OPTIONS: Array<{ value: OfficialDeepSeekReasoningEffort; labelKey: 
   { value: 'max', labelKey: 'sidepanel.chatPage.effortMax' },
 ];
 const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
+const STREAM_BUFFER_FLUSH_MS = 32;
 
 export default function ChatPage() {
   const { t } = useI18n();
@@ -108,6 +111,10 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<ChatMessageType[]>([]);
+  const shouldAutoScrollRef = useRef(true);
+  const activeStreamIdRef = useRef<string | null>(null);
+  const streamBufferRef = useRef({ text: '', reasoningText: '' });
+  const streamFlushTimerRef = useRef<number | null>(null);
   const imageAttachmentsRef = useRef<ChatImageAttachment[]>([]);
   const pendingImageSubmissionRef = useRef<PendingImageSubmission | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -131,17 +138,53 @@ export default function ChatPage() {
     });
   }
 
+  function isEmptyAssistantMessage(message: ChatMessageType | undefined) {
+    return message?.role === 'assistant' &&
+      message.text === '' &&
+      !message.reasoningText &&
+      !message.toolEvents?.length;
+  }
+
   function appendAssistantText(text: string) {
-    updateLastAssistant((message) => ({
-      ...message,
-      text: message.text + text,
-    }));
+    streamBufferRef.current.text += text;
+    scheduleAssistantStreamFlush();
   }
 
   function appendAssistantReasoning(reasoningText: string) {
+    streamBufferRef.current.reasoningText += reasoningText;
+    scheduleAssistantStreamFlush();
+  }
+
+  function appendAssistantToolEvents(toolEvents: ChatToolEvent[]) {
+    flushAssistantStreamBuffer();
     updateLastAssistant((message) => ({
       ...message,
-      reasoningText: `${message.reasoningText ?? ''}${reasoningText}`,
+      toolEvents: mergeChatToolEvents(message.toolEvents, toolEvents),
+    }));
+  }
+
+  function scheduleAssistantStreamFlush() {
+    if (streamFlushTimerRef.current !== null) return;
+    streamFlushTimerRef.current = window.setTimeout(() => {
+      streamFlushTimerRef.current = null;
+      flushAssistantStreamBuffer();
+    }, STREAM_BUFFER_FLUSH_MS);
+  }
+
+  function flushAssistantStreamBuffer() {
+    if (streamFlushTimerRef.current !== null) {
+      window.clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
+    const { text, reasoningText } = streamBufferRef.current;
+    if (!text && !reasoningText) return;
+    streamBufferRef.current = { text: '', reasoningText: '' };
+    updateLastAssistant((message) => ({
+      ...message,
+      text: text ? message.text + text : message.text,
+      reasoningText: reasoningText
+        ? `${message.reasoningText ?? ''}${reasoningText}`
+        : message.reasoningText,
     }));
   }
 
@@ -170,6 +213,10 @@ export default function ChatPage() {
   }, [imageAttachments]);
 
   useEffect(() => () => {
+    if (streamFlushTimerRef.current !== null) {
+      window.clearTimeout(streamFlushTimerRef.current);
+      streamFlushTimerRef.current = null;
+    }
     revokeImageAttachmentPreviews(imageAttachmentsRef.current);
     revokeImageAttachmentPreviews(pendingImageSubmissionRef.current?.attachments ?? []);
     imageAttachmentsRef.current = [];
@@ -215,17 +262,35 @@ export default function ChatPage() {
       }
 
       if (msg.type !== 'CHAT_STREAM_CHUNK') return;
-
-      if (msg.error) {
-        restorePendingImageSubmission();
-        setError(msg.error);
-        setIsStreaming(false);
+      const activeStreamId = activeStreamIdRef.current;
+      if (activeStreamId) {
+        if (msg.streamId !== activeStreamId) return;
+      } else if (msg.streamId) {
         return;
       }
 
+      if (msg.error) {
+        flushAssistantStreamBuffer();
+        restorePendingImageSubmission();
+        setError(msg.error);
+        setIsStreaming(false);
+        if (!msg.streamId || msg.streamId === activeStreamIdRef.current) {
+          activeStreamIdRef.current = null;
+        }
+        return;
+      }
+
+      if (msg.toolEvents?.length) {
+        appendAssistantToolEvents(msg.toolEvents);
+      }
+
       if (msg.done) {
+        flushAssistantStreamBuffer();
         clearPendingImageSubmission();
         setIsStreaming(false);
+        if (!msg.streamId || msg.streamId === activeStreamIdRef.current) {
+          activeStreamIdRef.current = null;
+        }
         const currentVoiceSettings = voiceSettingsRef.current;
         if (currentVoiceSettings.readAloudEnabled && voiceCapabilities.speechSynthesis) {
           setTimeout(() => speakLatestAssistant(messagesRef.current, currentVoiceSettings), 0);
@@ -248,9 +313,17 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (listRef.current) {
+      if (!shouldAutoScrollRef.current) return;
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
   }, [messages]);
+
+  function handleMessageListScroll() {
+    const list = listRef.current;
+    if (!list) return;
+    const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom < 48;
+  }
 
   const saveChatConfig = async (patch: Partial<OfficialApiChatConfig>) => {
     const next = normalizeOfficialApiChatConfig({ ...chatConfig, ...patch });
@@ -273,6 +346,7 @@ export default function ChatPage() {
     const attachments = imageUploadEnabled ? imageAttachments : [];
     const visibleText = text || t('sidepanel.chatPage.imageOnlyDefaultPrompt');
     const optimisticMessageIndex = messagesRef.current.length;
+    shouldAutoScrollRef.current = true;
 
     setMessages((prev) => {
       const next = [...prev, {
@@ -283,6 +357,9 @@ export default function ChatPage() {
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
         })),
+      }, {
+        role: 'assistant' as const,
+        text: '',
       }];
       messagesRef.current = next;
       return next;
@@ -294,6 +371,8 @@ export default function ChatPage() {
       : null;
     setImageAttachments([]);
     setIsStreaming(true);
+    const streamId = crypto.randomUUID();
+    activeStreamIdRef.current = streamId;
     setError(null);
 
     try {
@@ -305,6 +384,7 @@ export default function ChatPage() {
         type: 'CHAT_SUBMIT_PROMPT',
         payload: {
           text: visibleText,
+          streamId,
           ...(images.length > 0 ? { images } : {}),
           ...(apiControlsEnabled ? { config: chatConfig } : {}),
         },
@@ -316,6 +396,9 @@ export default function ChatPage() {
       setError(err instanceof Error ? err.message : String(err));
       setMessages((prev) => {
         const next = [...prev];
+        if (isEmptyAssistantMessage(next[optimisticMessageIndex + 1])) {
+          next.splice(optimisticMessageIndex + 1, 1);
+        }
         const optimistic = next[optimisticMessageIndex];
         if (optimistic?.role === 'user' && optimistic.text === visibleText) {
           next.splice(optimisticMessageIndex, 1);
@@ -327,6 +410,9 @@ export default function ChatPage() {
       pendingImageSubmissionRef.current = null;
       setImageAttachments(attachments);
       setIsStreaming(false);
+      if (activeStreamIdRef.current === streamId) {
+        activeStreamIdRef.current = null;
+      }
     }
   };
 
@@ -342,7 +428,9 @@ export default function ChatPage() {
       if (!ok) return;
     }
     chrome.runtime.sendMessage({ type: 'CHAT_NEW_SESSION' }).catch(() => {});
+    flushAssistantStreamBuffer();
     messagesRef.current = [];
+    activeStreamIdRef.current = null;
     setMessages([]);
     setError(null);
     setIsStreaming(false);
@@ -577,6 +665,9 @@ export default function ChatPage() {
     pendingImageSubmissionRef.current = null;
     setMessages((prev) => {
       const next = [...prev];
+      if (isEmptyAssistantMessage(next[pending.optimisticMessageIndex + 1])) {
+        next.splice(pending.optimisticMessageIndex + 1, 1);
+      }
       const optimistic = next[pending.optimisticMessageIndex];
       if (optimistic?.role === 'user' && optimistic.text === pending.visibleText) {
         next.splice(pending.optimisticMessageIndex, 1);
@@ -711,7 +802,7 @@ export default function ChatPage() {
         )}
       </header>
 
-      <div ref={listRef} className="ds-chat-messages">
+      <div ref={listRef} className="ds-chat-messages" onScroll={handleMessageListScroll}>
         {confirmNode}
 
         {messages.length === 0 && !isStreaming && (
@@ -960,6 +1051,23 @@ function formatSessionStrategy(
   if (strategy === 'last') return t('sidepanel.chatPage.sessionStrategyLast');
   if (strategy === 'new') return t('sidepanel.chatPage.sessionStrategyNew');
   return t('sidepanel.chatPage.sessionStrategyCurrent');
+}
+
+function mergeChatToolEvents(
+  current: ChatToolEvent[] | undefined,
+  incoming: ChatToolEvent[],
+): ChatToolEvent[] {
+  const byId = new Map<string, ChatToolEvent>();
+  for (const event of current ?? []) {
+    byId.set(event.id, event);
+  }
+  for (const event of incoming) {
+    byId.set(event.id, {
+      ...byId.get(event.id),
+      ...event,
+    });
+  }
+  return Array.from(byId.values());
 }
 
 function getConfigLabel(

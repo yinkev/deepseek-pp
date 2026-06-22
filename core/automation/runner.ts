@@ -36,8 +36,9 @@ const AUTOMATION_MISSING_TOKEN_MESSAGE =
   'DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again, then retry the automation.';
 
 export interface AutomationRunnerOptions {
-  executeToolCall?: (call: ToolCall) => Promise<ToolResult>;
+  executeToolCall?: (call: ToolCall, signal?: AbortSignal) => Promise<ToolResult>;
   clientHeaders?: Record<string, string> | null;
+  signal?: AbortSignal;
 }
 
 export async function runDeepSeekAutomation(
@@ -53,7 +54,11 @@ export async function runDeepSeekAutomation(
     const clientHeaders = options?.clientHeaders
       ? { ...options.clientHeaders }
       : createClientHeaders({ missingTokenMessage: AUTOMATION_MISSING_TOKEN_MESSAGE });
-    chatSessionId ??= await createChatSession(clientHeaders);
+    throwIfAutomationAborted(options?.signal);
+    chatSessionId ??= options?.signal
+      ? await createChatSession(clientHeaders, options.signal)
+      : await createChatSession(clientHeaders);
+    throwIfAutomationAborted(options?.signal);
     const { augmented: prompt } = buildPromptAugmentation(request.prompt, {
       memories: request.promptContext?.memories ?? [],
       presetContent: request.promptContext?.presetContent ?? null,
@@ -68,7 +73,9 @@ export async function runDeepSeekAutomation(
       parentMessageId,
       prompt,
       clientHeaders,
+      options?.signal,
     );
+    throwIfAutomationAborted(options?.signal);
     const assistantMessageId = stream.responseMessageId;
     if (assistantMessageId === null) {
       return createAutomationRunnerFailure(
@@ -88,12 +95,18 @@ export async function runDeepSeekAutomation(
       stream.assistantText,
       clientHeaders,
       locale,
+      options?.signal,
     );
     stream = toolLoop.stream;
+    throwIfAutomationAborted(options?.signal);
 
     const completedAt = Date.now();
     const finalAssistantMessageId = stream.responseMessageId ?? assistantMessageId;
-    const history = await readHistorySnapshot(chatSessionId, finalAssistantMessageId, { clientHeaders }).catch(() => null);
+    const history = await readHistorySnapshot(
+      chatSessionId,
+      finalAssistantMessageId,
+      options?.signal ? { clientHeaders, signal: options.signal } : { clientHeaders },
+    ).catch(() => null);
     const nextParentMessageId = history?.parentMessageId ?? finalAssistantMessageId;
     const result: AutomationRunnerSuccess = {
       ok: true,
@@ -137,9 +150,14 @@ async function submitAutomationPrompt(
   parentMessageId: number | null,
   prompt: string,
   clientHeaders: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<ModelTurn> {
-  const powHeaders = await createPowHeaders(clientHeaders);
-  return submitPrompt({
+  throwIfAutomationAborted(signal);
+  const powHeaders = signal
+    ? await createPowHeaders(clientHeaders, { signal })
+    : await createPowHeaders(clientHeaders);
+  throwIfAutomationAborted(signal);
+  const input = {
     chatSessionId,
     parentMessageId,
     modelType: request.promptOptions.modelType,
@@ -149,7 +167,8 @@ async function submitAutomationPrompt(
     searchEnabled: request.promptOptions.searchEnabled,
     clientHeaders,
     powHeaders,
-  });
+  };
+  return signal ? submitPrompt(input, signal) : submitPrompt(input);
 }
 
 async function runAutomationToolLoop(
@@ -160,6 +179,7 @@ async function runAutomationToolLoop(
   assistantText: string,
   clientHeaders: Record<string, string>,
   locale: SupportedLocale,
+  signal?: AbortSignal,
 ): Promise<{ stream: ModelTurn; executions: ToolExecutionRecord[] }> {
   const initialTurn: ModelTurn = {
     assistantText,
@@ -183,6 +203,7 @@ async function runAutomationToolLoop(
       call.provider?.id === BROWSER_CONTROL_TOOL_PROVIDER_ID
     )),
     async executeToolCall(call, parentMessageId) {
+      throwIfAutomationAborted(signal);
       const result = await options.executeToolCall!({
         ...call,
         source: {
@@ -192,7 +213,8 @@ async function runAutomationToolLoop(
           chatSessionId,
           messageId: parentMessageId,
         },
-      });
+      }, signal);
+      throwIfAutomationAborted(signal);
       return createToolExecutionRecord(call, result, {
         detailMaxLength: 4000,
         outputMaxLength: 8000,
@@ -205,10 +227,18 @@ async function runAutomationToolLoop(
       parentMessageId,
       prompt,
       clientHeaders,
+      signal,
     ),
+    signal,
   });
 
   return { stream: loop.turn, executions: loop.executions };
+}
+
+function throwIfAutomationAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException('Automation run was cancelled.', 'AbortError');
+  }
 }
 
 function createAutomationContinuationRequest(

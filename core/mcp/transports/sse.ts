@@ -14,15 +14,16 @@ import {
   fetchWithTimeout,
   getMcpEndpointUrl,
   normalizeJsonRpcResponse,
+  readStreamChunkWithTimeout,
 } from './common';
 
 export function createMcpSseTransport(server: McpServerConfig): McpProtocolTransport {
   return {
     request(request, options) {
-      return sendSseMessage(server, request, options?.timeoutMs, options?.maxResponseBytes);
+      return sendSseMessage(server, request, options?.timeoutMs, options?.maxResponseBytes, options?.signal);
     },
     async notify(notification, options) {
-      await sendSseMessage(server, notification, options?.timeoutMs, options?.maxResponseBytes);
+      await sendSseMessage(server, notification, options?.timeoutMs, options?.maxResponseBytes, options?.signal);
     },
   };
 }
@@ -32,6 +33,7 @@ async function sendSseMessage<TParams extends Record<string, unknown> | undefine
   message: McpJsonRpcRequest<TParams> | McpJsonRpcNotification,
   timeoutMs: number = server.timeouts.requestMs,
   maxResponseBytes: number = server.limits.maxResultBytes,
+  signal?: AbortSignal,
 ): Promise<McpJsonRpcResponse<TResult>> {
   await ensureMcpServerOriginPermission(server);
   const sseResponse = await fetchWithTimeout(getMcpEndpointUrl(server), {
@@ -41,7 +43,7 @@ async function sendSseMessage<TParams extends Record<string, unknown> | undefine
       accept: 'text/event-stream',
       ...buildMcpRequestHeaders(server),
     },
-  }, timeoutMs);
+  }, timeoutMs, signal);
 
   if (!sseResponse.ok || !sseResponse.body) {
     throw new McpTransportError('mcp_sse_connect_failed', `MCP SSE connect failed with HTTP ${sseResponse.status}.`);
@@ -49,8 +51,8 @@ async function sendSseMessage<TParams extends Record<string, unknown> | undefine
 
   const reader = sseResponse.body.getReader();
   const decoder = new TextDecoder();
-  const postUrl = await readSseEndpoint(server, reader, decoder, timeoutMs, maxResponseBytes);
-  await postSseMessage(server, postUrl, message, timeoutMs);
+  const postUrl = await readSseEndpoint(server, reader, decoder, timeoutMs, maxResponseBytes, signal);
+  await postSseMessage(server, postUrl, message, timeoutMs, signal);
 
   if (!('id' in message)) {
     reader.cancel().catch(() => undefined);
@@ -58,7 +60,14 @@ async function sendSseMessage<TParams extends Record<string, unknown> | undefine
   }
 
   try {
-    return await readSseResponseFromReader(reader, decoder, message as McpJsonRpcRequest<TParams>, maxResponseBytes);
+    return await readSseResponseFromReader(
+      reader,
+      decoder,
+      message as McpJsonRpcRequest<TParams>,
+      maxResponseBytes,
+      timeoutMs,
+      signal,
+    );
   } finally {
     reader.cancel().catch(() => undefined);
   }
@@ -70,13 +79,14 @@ async function readSseEndpoint(
   decoder: TextDecoder,
   timeoutMs: number,
   maxResponseBytes: number,
+  signal?: AbortSignal,
 ): Promise<URL> {
   const deadline = Date.now() + timeoutMs;
   let buffer = '';
   let totalBytes = 0;
 
   while (Date.now() < deadline) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunkWithTimeout(reader, deadline - Date.now(), signal);
     if (done) break;
     totalBytes = assertWithinByteLimit(totalBytes, value.byteLength, maxResponseBytes, reader);
     buffer += decoder.decode(value, { stream: true });
@@ -96,6 +106,7 @@ async function postSseMessage(
   postUrl: URL,
   message: McpJsonRpcRequest<any> | McpJsonRpcNotification,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetchWithTimeout(postUrl, {
     method: 'POST',
@@ -105,7 +116,7 @@ async function postSseMessage(
       ...buildMcpRequestHeaders(server),
     },
     body: JSON.stringify(message),
-  }, timeoutMs);
+  }, timeoutMs, signal);
 
   if (!response.ok) {
     throw new McpTransportError('mcp_sse_post_failed', `MCP SSE POST failed with HTTP ${response.status}.`);
@@ -117,12 +128,15 @@ async function readSseResponseFromReader<TResult>(
   decoder: TextDecoder,
   expectedRequest: McpJsonRpcRequest<any>,
   maxResponseBytes: number,
+  timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<McpJsonRpcResponse<TResult>> {
   let buffer = '';
   let totalBytes = 0;
+  const deadline = Date.now() + timeoutMs;
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunkWithTimeout(reader, deadline - Date.now(), signal);
     if (done) break;
     totalBytes = assertWithinByteLimit(totalBytes, value.byteLength, maxResponseBytes, reader);
     buffer += decoder.decode(value, { stream: true });

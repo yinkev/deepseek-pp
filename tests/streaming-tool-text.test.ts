@@ -65,6 +65,16 @@ describe('createStreamingToolTextAccumulator', () => {
     expect(stream.flush()).toBe('Before  after');
   });
 
+  it('suppresses internal tool-result envelopes across chunk boundaries', () => {
+    const stream = createStreamingToolTextAccumulator(descriptors);
+
+    expect(stream.append('Before [TOOL')).toBe('Before ');
+    expect(stream.append('_RESULTS]\n<memory_save_result>{"detail":"secret page text"}</memory_save_result>')).toBe('Before ');
+    expect(stream.append('\n[/TOOL')).toBe('Before ');
+    expect(stream.append('_RESULTS] after')).toBe('Before  after');
+    expect(stream.flush()).toBe('Before  after');
+  });
+
   it('releases false-positive partial legacy tags on flush', () => {
     const stream = createStreamingToolTextAccumulator(descriptors);
 

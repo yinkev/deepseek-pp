@@ -84,7 +84,11 @@ import {
 	  type BrowserControlTargetPreparation,
 	  type BrowserScreenshotCaptureResult,
 	} from '../core/browser-control';
-import { filterSidepanelChatToolDescriptors } from '../core/tool/sidepanel';
+import {
+  filterSidepanelChatToolDescriptors,
+  formatSidepanelToolResultsForContinuation,
+  truncateSidepanelToolString,
+} from '../core/tool/sidepanel';
 import {
   addConversationToProject,
   bindPendingProjectConversation,
@@ -222,6 +226,7 @@ import {
   getAllAutomations,
   getAutomationById,
   getAutomationRuns,
+  getAutomationRunsByAutomationIds,
   setAutomationStatus,
   updateAutomation,
   updateAutomationRun,
@@ -235,6 +240,7 @@ import {
   refreshAutomationNextRunAt,
   runAutomation,
   scanDueAutomations,
+  type AutomationRunExecutionContext,
 } from '../core/automation/scheduler';
 import { validateAutomationSchedule } from '../core/automation/schedule';
 import {
@@ -279,6 +285,7 @@ import {
 import { normalizeConversationExportRequest } from '../core/export/schema';
 import { buildPromptAugmentation } from '../core/prompt';
 import { extractToolCalls } from '../core/interceptor/tool-parser';
+import { createStreamingToolTextAccumulator } from '../core/interceptor/streaming-tool-text';
 import { broadcastRuntimeUpdate } from '../core/messaging/broadcast';
 import {
   createTranslator,
@@ -292,7 +299,7 @@ import {
   watchLocalePreference,
 } from '../core/i18n/store';
 import type { WebSearchToolName } from '../core/tool/web-search';
-import type { BackgroundConfig, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, ProjectContextState, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncCounts, SystemPromptPreset, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
+import type { BackgroundConfig, ChatToolEvent, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, ProjectContextState, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncCounts, SystemPromptPreset, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
 import type { McpServerCreateInput, McpServerUpdateInput } from '../core/mcp/types';
 import type { AutomationCreateInput, AutomationFlightEvent, AutomationFlightRecorder, AutomationRunnerRequest, AutomationRunnerResult, AutomationStatus, AutomationUpdateInput } from '../core/automation/types';
 import type { ConversationExportProgress, ConversationExportResult } from '../core/export/types';
@@ -302,6 +309,12 @@ const DEEPSEEK_TAB_URL_PATTERN = '*://chat.deepseek.com/*';
 const REFRESH_AUTH_MESSAGE = { type: 'REFRESH_DEEPSEEK_AUTH' } as const;
 const CONTENT_HEALTH_MESSAGE = { type: 'DPP_CONTENT_HEALTH' } as const;
 const BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME = 'browser_capture_screenshot';
+const OFFICIAL_API_CHAT_MESSAGE_LIMIT = 80;
+const SIDEPANEL_TOOL_EVENT_DETAIL_LIMIT = 2_400;
+const SIDEPANEL_TOOL_CALLS_PER_STEP_LIMIT = 8;
+const SIDEPANEL_TOOL_CALLS_PER_TURN_LIMIT = 40;
+const SIDEPANEL_WEB_TURN_TIMEOUT_MS = 90_000;
+const SIDEPANEL_CHAT_JOB_TIMEOUT_MS = SIDEPANEL_WEB_TURN_TIMEOUT_MS + 5_000;
 let chatSessionId: string | null = null;
 let chatParentMessageId: number | null = null;
 let officialApiChatMessages: OfficialDeepSeekMessage[] = [];
@@ -1298,11 +1311,15 @@ async function handleMessage(
       return { ok: true, preference: await getDeepSeekWebSessionPreference() };
 
     case 'CHAT_SUBMIT_PROMPT': {
-      const { text, config, images } = message.payload as {
+      const { text, config, images, streamId } = message.payload as {
         text: string;
         config?: Partial<OfficialApiChatConfig>;
         images?: unknown;
+        streamId?: unknown;
       };
+      const chatStreamId = typeof streamId === 'string' && streamId.trim()
+        ? streamId.trim()
+        : crypto.randomUUID();
       if (!(await getChatEnabled())) {
         return { ok: false, error: 'chat_disabled' };
       }
@@ -1314,17 +1331,15 @@ async function handleMessage(
       }
       if (!text?.trim() && imagePayloads.length === 0) return { ok: false, error: 'empty_prompt' };
       if (sidepanelChatSubmitPromise) return { ok: false, error: 'chat_busy' };
-      // Fire and forget — the streaming response is broadcast
-      sidepanelChatSubmitPromise = handleChatSubmitPrompt(
+      // Fire and forget — the streaming response is broadcast.
+      const job = handleChatSubmitPrompt(
         text?.trim() || 'Describe the attached image.',
         config,
         sender.tab?.id,
         imagePayloads,
-      )
-        .catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          broadcastChatChunk({ text: '', done: true, error: msg }, sender.tab?.id);
-        })
+        chatStreamId,
+      );
+      sidepanelChatSubmitPromise = runSidepanelChatSubmitJob(job, sender.tab?.id, chatStreamId)
         .finally(() => {
           sidepanelChatSubmitPromise = null;
         });
@@ -1413,6 +1428,14 @@ async function handleMessage(
     case 'GET_AUTOMATION_RUNS': {
       const { automationId, limit } = message.payload as { automationId: string; limit?: number };
       return getAutomationRuns({ automationId, limit });
+    }
+
+    case 'GET_AUTOMATION_RUNS_BATCH': {
+      const { automationIds, limit } = message.payload as { automationIds?: unknown; limit?: number };
+      const ids = Array.isArray(automationIds)
+        ? automationIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      return getAutomationRunsByAutomationIds(ids, limit);
     }
 
     case 'CREATE_AUTOMATION': {
@@ -1504,8 +1527,13 @@ async function loadOrRefreshClientHeaders(preferredTabId?: number): Promise<Reco
   const cached = await loadClientHeadersFromStorage();
   if (cached) return cached;
 
-  await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
-  return loadClientHeadersFromStorage();
+  if (await refreshClientHeadersFromDeepSeekTabs(preferredTabId)) {
+    return loadClientHeadersFromStorage();
+  }
+  if (await reloadStaleDeepSeekTabsAndRefreshHeaders(preferredTabId)) {
+    return loadClientHeadersFromStorage();
+  }
+  return null;
 }
 
 function normalizeStoredClientHeaders(value: unknown): Record<string, string> | null {
@@ -1598,6 +1626,37 @@ async function reloadStaleDeepSeekTabs(preferredTabId?: number) {
     contentScripts: health,
     report: await getRuntimeDoctorReport(preferredTabId),
   };
+}
+
+async function reloadStaleDeepSeekTabsAndRefreshHeaders(preferredTabId?: number): Promise<boolean> {
+  const tabs = await getDeepSeekTabsForAuthRefresh(preferredTabId);
+  const health = await getDeepSeekContentScriptHealth(tabs);
+  if (health.staleTabIds.length === 0) return false;
+  await Promise.all(health.staleTabIds.map((tabId) => chrome.tabs.reload(tabId).catch(() => undefined)));
+  const ready = await waitForDeepSeekContentScripts(preferredTabId, health.staleTabIds, 7_500);
+  return ready && refreshClientHeadersFromDeepSeekTabs(preferredTabId);
+}
+
+async function waitForDeepSeekContentScripts(
+  preferredTabId: number | undefined,
+  staleTabIds: readonly number[],
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  const stale = new Set(staleTabIds);
+  while (Date.now() <= deadline) {
+    const tabs = await getDeepSeekTabsForAuthRefresh(preferredTabId);
+    const candidates = tabs.filter((tab) => typeof tab.id === 'number' && stale.has(tab.id));
+    if (candidates.length === 0) return false;
+    const health = await getDeepSeekContentScriptHealth(candidates);
+    if (health.healthyTabs > 0) return true;
+    await sleepMs(250);
+  }
+  return false;
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function broadcastStateUpdate(excludeTabId?: number) {
@@ -1951,8 +2010,8 @@ function createRuntimeDoctorFailureExplanations(
         return {
           blocker,
           severity,
-          cause: 'The selected target cannot be controlled or is the DeepSeek chat tab itself.',
-          action: 'Pick the actual page you want the model to inspect, not chat.deepseek.com.',
+          cause: 'The selected target cannot be controlled by Chrome debugger.',
+          action: 'Select a normal http(s) or file tab on Browser Control, then lock it as Dev++.',
         };
       case 'browser_vision_capture_disabled':
         return {
@@ -2441,27 +2500,44 @@ async function broadcastConversationExportProgress(
 async function executeBackgroundRuntimeToolCall(
   call: ToolCall,
   source: ToolExecutionTrigger,
-  options?: RuntimeToolCallOptions,
+  options?: RuntimeToolCallOptions & { signal?: AbortSignal },
 ): Promise<ToolResult> {
+  throwIfRuntimeToolAborted(options?.signal);
   if (call.name === BROWSER_CAPTURE_SCREENSHOT_TOOL_NAME) {
-    const result = await executeBrowserScreenshotVisionTool(call);
+    const result = await executeBrowserScreenshotVisionTool(call, options?.signal);
+    throwIfRuntimeToolAborted(options?.signal);
     await appendToolCallHistory(call, result, source);
     return result;
   }
   if (isBrowserControlToolName(call.name)) {
     const result = await executeBrowserControlToolCall(call, currentBackgroundLocale, {
       requireExplicitTarget: source === 'automation',
+      signal: options?.signal,
     });
-    const wrapped = await maybeAttachActVerifyCapture(call, result);
+    throwIfRuntimeToolAborted(options?.signal);
+    const wrapped = await maybeAttachActVerifyCapture(call, result, options?.signal);
+    throwIfRuntimeToolAborted(options?.signal);
     await appendToolCallHistory(call, wrapped, source);
     return wrapped;
   }
   return executeRuntimeToolCall(call, source, currentBackgroundLocale, options);
 }
 
-async function maybeAttachActVerifyCapture(call: ToolCall, result: ToolResult): Promise<ToolResult> {
+function throwIfRuntimeToolAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException('Runtime tool call was cancelled.', 'AbortError');
+  }
+}
+
+async function maybeAttachActVerifyCapture(
+  call: ToolCall,
+  result: ToolResult,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
+  throwIfRuntimeToolAborted(signal);
   if (!result.ok || !shouldVerifyAfterBrowserAction(call.name)) return result;
   const settings = await getBrowserControlSettings();
+  throwIfRuntimeToolAborted(signal);
   if (!settings.allowVisionCapture || !settings.verifyAfterActions) return result;
 
   const prompt = createBrowserActVerifyPrompt({
@@ -2470,8 +2546,11 @@ async function maybeAttachActVerifyCapture(call: ToolCall, result: ToolResult): 
   });
   const startedAt = Date.now();
   try {
+    throwIfRuntimeToolAborted(signal);
     const capture = await browserControlService.captureScreenshotForVision();
+    throwIfRuntimeToolAborted(signal);
     const uploaded = await uploadBrowserScreenshotCapture(capture);
+    throwIfRuntimeToolAborted(signal);
     const evidencePack = settings.collectEvidencePacks
       ? createDeepSeekWebVisionEvidencePack({
         kind: 'browser_act_verify',
@@ -2562,12 +2641,16 @@ async function captureBrowserControlTargetImage(): Promise<{
   };
 }
 
-async function executeBrowserScreenshotVisionTool(call: ToolCall): Promise<ToolResult> {
+async function executeBrowserScreenshotVisionTool(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
   const startedAt = Date.now();
   try {
+    throwIfRuntimeToolAborted(signal);
     const capture = await browserControlService.captureScreenshotForVision();
+    throwIfRuntimeToolAborted(signal);
     const uploaded = await uploadBrowserScreenshotCapture(capture);
+    throwIfRuntimeToolAborted(signal);
     const settings = await getBrowserControlSettings();
+    throwIfRuntimeToolAborted(signal);
     const evidencePack = settings.collectEvidencePacks
       ? createDeepSeekWebVisionEvidencePack({
         kind: 'browser_capture',
@@ -3164,7 +3247,9 @@ function assertConversationExportNotCancelled(signal: AbortSignal) {
 }
 
 async function scanDueAutomationsFromWake() {
-  const result = await scanDueAutomations(executeAutomationWithContext);
+  const result = await scanDueAutomations((request, context) =>
+    executeAutomationWithContext(request, undefined, context)
+  );
   if (result.initialized > 0 || result.started > 0 || result.failed > 0) {
     await broadcastAutomationUpdate();
   }
@@ -3183,7 +3268,7 @@ async function runAutomationNow(id: string, excludeTabId?: number) {
     automationId: id,
     trigger: 'manual',
     scheduledFor: null,
-    executor: (request) => executeAutomationWithContext(request, excludeTabId),
+    executor: (request, context) => executeAutomationWithContext(request, excludeTabId, context),
   });
 
   await broadcastAutomationUpdate(excludeTabId);
@@ -3196,6 +3281,7 @@ async function runAutomationNow(id: string, excludeTabId?: number) {
 async function executeAutomationWithContext(
   request: AutomationRunnerRequest,
   preferredTabId?: number,
+  context?: AutomationRunExecutionContext,
 ): Promise<AutomationRunnerResult> {
   const personal = await getPersonalConvenienceConfig();
   if (personal.enabled && personal.autoReadyCheckBeforeRun) {
@@ -3358,7 +3444,8 @@ async function executeAutomationWithContext(
       },
     }, {
       clientHeaders: resolvedHeaders.headers,
-      executeToolCall: (call) => executeBackgroundRuntimeToolCall(call, 'automation'),
+      executeToolCall: (call, signal) => executeBackgroundRuntimeToolCall(call, 'automation', { signal }),
+      signal: context?.signal,
     });
     recorder = finalizeAutomationFlightRecorder(recorder, result);
     await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
@@ -3859,6 +3946,7 @@ async function handleChatSubmitPrompt(
   configInput?: Partial<OfficialApiChatConfig>,
   excludeTabId?: number,
   images: DeepSeekWebVisionSerializedImage[] = [],
+  streamId?: string,
 ) {
   const [apiKey, webHeaders] = await Promise.all([
     getDeepSeekApiKey(),
@@ -3876,13 +3964,46 @@ async function handleChatSubmitPrompt(
       const config = configInput
         ? normalizeOfficialApiChatConfig(configInput)
         : await getOfficialApiChatConfig();
-      await handleOfficialApiChatSubmitPrompt(prompt, apiKey, config, excludeTabId);
+      await handleOfficialApiChatSubmitPrompt(prompt, apiKey, config, excludeTabId, streamId);
       return;
     }
 
-    await handleWebChatSubmitPrompt(prompt, excludeTabId, images, webHeaders);
+    broadcastSidepanelWebStatusEvent('Preparing DeepSeek Web session', excludeTabId, streamId);
+    await handleWebChatSubmitPrompt(prompt, excludeTabId, images, webHeaders, streamId);
   } finally {
     await markChatLoopFinished();
+  }
+}
+
+async function runSidepanelChatSubmitJob(
+  job: Promise<void>,
+  excludeTabId: number | undefined,
+  streamId: string,
+): Promise<void> {
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      broadcastChatChunk({
+        text: '',
+        done: true,
+        error: 'DeepSeek Web did not respond within 95 seconds. Refresh chat.deepseek.com and try again.',
+      }, excludeTabId, streamId);
+      resolve();
+    }, SIDEPANEL_CHAT_JOB_TIMEOUT_MS);
+  });
+  const guardedJob = job.catch((err) => {
+    if (timedOut) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId, streamId);
+  });
+  try {
+    await Promise.race([guardedJob, timeout]);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 
@@ -3891,11 +4012,12 @@ async function handleWebChatSubmitPrompt(
   excludeTabId?: number,
   images: DeepSeekWebVisionSerializedImage[] = [],
   clientHeaders?: Record<string, string> | null,
+  streamId?: string,
 ) {
   const headers = clientHeaders ?? await loadOrRefreshClientHeaders(excludeTabId);
   if (!headers) {
     await clearSidepanelChatSession();
-    broadcastChatChunk({ text: '', done: true, error: backgroundT('background.auth.missingDeepSeek') }, excludeTabId);
+    broadcastChatChunk({ text: '', done: true, error: backgroundT('background.auth.missingDeepSeek') }, excludeTabId, streamId);
     return;
   }
 
@@ -3910,6 +4032,7 @@ async function handleWebChatSubmitPrompt(
     }, () => createChatSession(headers));
     chatSessionId = sessionState.chatSessionId;
     chatParentMessageId = sessionState.parentMessageId;
+    broadcastSidepanelWebStatusEvent('Preparing prompt', excludeTabId, streamId);
 
     const { augmented, enabledDescriptors } = await buildSidepanelPrompt(prompt);
     const uploadResults = [];
@@ -3939,10 +4062,11 @@ async function handleWebChatSubmitPrompt(
       clientHeaders: headers,
     };
 
-    await runSidepanelToolLoop(initialInput, enabledDescriptors, excludeTabId);
+    broadcastSidepanelWebStatusEvent('Waiting for model', excludeTabId, streamId);
+    await runSidepanelToolLoop(initialInput, enabledDescriptors, excludeTabId, streamId);
   } catch (err) {
     const msg = formatSidepanelChatError(err, images.length > 0);
-    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId);
+    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId, streamId);
     if (shouldResetSidepanelChatSession(err, msg)) {
       await clearSidepanelWebAuthState(excludeTabId);
     }
@@ -4008,16 +4132,17 @@ async function handleOfficialApiChatSubmitPrompt(
   apiKey: string,
   config: OfficialApiChatConfig,
   excludeTabId?: number,
+  streamId?: string,
 ) {
   try {
     const promptContext = await buildSidepanelPrompt(prompt);
 
-    const initialMessages: OfficialDeepSeekMessage[] = [
+    const initialMessages = pruneOfficialApiChatMessages([
       ...officialApiChatMessages,
       { role: 'user', content: promptContext.augmented },
-    ];
+    ]);
 
-    officialApiChatMessages = await runOfficialApiToolLoop(
+    officialApiChatMessages = pruneOfficialApiChatMessages(await runOfficialApiToolLoop(
       {
         apiKey,
         config,
@@ -4025,10 +4150,11 @@ async function handleOfficialApiChatSubmitPrompt(
       },
       promptContext.enabledDescriptors,
       excludeTabId,
-    );
+      streamId,
+    ));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId);
+    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId, streamId);
   }
 }
 
@@ -4050,7 +4176,8 @@ async function buildSidepanelPrompt(prompt: string): Promise<{
   });
 
   const enabledDescriptors = filterSidepanelChatToolDescriptors(toolDescriptors);
-  const { augmented } = buildPromptAugmentation(prompt, {
+  const effectivePrompt = withBrowserControlChatGuidance(prompt, enabledDescriptors);
+  const { augmented } = buildPromptAugmentation(effectivePrompt, {
     memories: memories.filter((memory) => memory.scope !== 'project'),
     presetContent: shouldInjectPreset ? activePreset?.content ?? null : null,
     toolDescriptors: enabledDescriptors,
@@ -4064,6 +4191,24 @@ async function buildSidepanelPrompt(prompt: string): Promise<{
   return { augmented, enabledDescriptors };
 }
 
+function withBrowserControlChatGuidance(prompt: string, descriptors: readonly ToolDescriptor[]): string {
+  if (!descriptors.some((descriptor) => isBrowserControlToolName(descriptor.name))) return prompt;
+  return [
+    'Browser-control operating rule:',
+    '- You are controlling the user\'s already-open browser target. Prefer browser_list_tabs, browser_select_tab, and browser_snapshot before browser_navigate.',
+    '- If the user names an existing visible chat, session, sidebar item, project, or tab, select or click that existing item instead of opening a new chat.',
+    '- Use browser_navigate only when the requested page is not already visible or the user explicitly asks to open a URL.',
+    '- Keep tool calls silent. After tools finish, summarize the result naturally and briefly.',
+    '',
+    'User request:',
+    prompt,
+  ].join('\n');
+}
+
+function pruneOfficialApiChatMessages(messages: OfficialDeepSeekMessage[]): OfficialDeepSeekMessage[] {
+  return messages.slice(-OFFICIAL_API_CHAT_MESSAGE_LIMIT);
+}
+
 async function runOfficialApiToolLoop(
   input: {
     apiKey: string;
@@ -4072,13 +4217,18 @@ async function runOfficialApiToolLoop(
   },
   toolDescriptors: ToolDescriptor[],
   excludeTabId?: number,
+  streamId?: string,
 ): Promise<OfficialDeepSeekMessage[]> {
   const MAX_STEPS = 20;
   let currentMessages = [...input.messages];
+  let executedToolCallCount = 0;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     let accumulated = '';
     let reasoningAccumulated = '';
+    let streamedText = false;
+    const visibleText = createSidepanelVisibleTextEmitter(toolDescriptors, excludeTabId, streamId, 'answer');
+    const visibleReasoningText = createSidepanelVisibleTextEmitter(toolDescriptors, excludeTabId, streamId, 'reasoning', 'reasoningText');
     const turn = await submitOfficialDeepSeekStreaming({
       apiKey: input.apiKey,
       config: input.config,
@@ -4086,66 +4236,69 @@ async function runOfficialApiToolLoop(
     }, {
       onTextChunk(newText: string, fullText: string) {
         accumulated = fullText;
-        broadcastChatChunk({ text: newText, done: false, phase: 'answer' }, excludeTabId);
+        streamedText = true;
+        visibleText.append(newText);
       },
       onReasoningChunk(newText: string, fullText: string) {
         reasoningAccumulated = fullText;
-        broadcastChatChunk({ text: '', reasoningText: newText, done: false, phase: 'reasoning' }, excludeTabId);
+        visibleReasoningText.append(newText);
       },
     });
 
     const fullText = accumulated || turn.assistantText;
+    if (!streamedText && fullText) {
+      visibleText.append(fullText);
+    }
+    visibleText.flush();
+    visibleReasoningText.flush();
 
     if (!fullText) {
-      broadcastChatChunk({ text: '', done: true }, excludeTabId);
+      broadcastChatChunk({ text: '', done: true }, excludeTabId, streamId);
       return currentMessages;
     }
 
-    currentMessages = [
+    currentMessages = pruneOfficialApiChatMessages([
       ...currentMessages,
       {
         role: 'assistant',
         content: fullText,
         reasoningContent: reasoningAccumulated || turn.reasoningText || undefined,
       },
-    ];
+    ]);
     const toolCalls = extractToolCalls(fullText, { descriptors: toolDescriptors });
 
     if (toolCalls.length === 0) {
-      broadcastChatChunk({ text: '', done: true }, excludeTabId);
+      broadcastChatChunk({ text: '', done: true }, excludeTabId, streamId);
+      return currentMessages;
+    }
+
+    const selectedToolCalls = selectSidepanelToolCallsForStep(toolCalls, executedToolCallCount);
+    if (selectedToolCalls.skippedCount > 0) {
+      broadcastSidepanelToolLimitEvent(selectedToolCalls.skippedCount, excludeTabId, streamId);
+    }
+    if (selectedToolCalls.allowed.length === 0) {
+      broadcastChatChunk({ text: backgroundT('background.chat.toolCallLimit'), done: true }, excludeTabId, streamId);
       return currentMessages;
     }
 
     const execs: ToolExecutionRecord[] = [];
-    for (const call of toolCalls) {
-      const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat');
-      execs.push({
-        name: call.name,
-        result: {
-          ok: result.ok,
-          summary: result.summary,
-          detail: result.detail,
-          output: result.output,
-          truncated: result.truncated,
-          error: result.error,
-        },
-      });
+    for (let index = 0; index < selectedToolCalls.allowed.length; index += 1) {
+      execs.push(await executeSidepanelChatToolCall(selectedToolCalls.allowed[index], step, index, excludeTabId, streamId));
     }
+    executedToolCallCount += execs.length;
 
-    const toolResultsText = execs.map((e) =>
-      `<${e.name}_result>\n${JSON.stringify(e.result)}\n</${e.name}_result>`
-    ).join('\n');
+    const toolResultsText = formatSidepanelToolResultsForContinuation(execs);
 
-    currentMessages = [
+    currentMessages = pruneOfficialApiChatMessages([
       ...currentMessages,
       {
         role: 'user',
         content: backgroundT('background.chat.continueWithToolResults', { toolResults: toolResultsText }),
       },
-    ];
+    ]);
   }
 
-  broadcastChatChunk({ text: backgroundT('background.chat.maxToolSteps'), done: true }, excludeTabId);
+  broadcastChatChunk({ text: backgroundT('background.chat.maxToolSteps'), done: true }, excludeTabId, streamId);
   return currentMessages;
 }
 
@@ -4162,20 +4315,27 @@ async function runSidepanelToolLoop(
   },
   toolDescriptors: ToolDescriptor[],
   excludeTabId?: number,
+  streamId?: string,
 ) {
   const MAX_STEPS = 20;
-  const allExecutions: ToolExecutionRecord[] = [];
   let currentInput = input;
+  let executedToolCallCount = 0;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     let accumulated = '';
-    const turn = await submitPromptStreaming({
+    let streamedText = false;
+    const visibleText = createSidepanelVisibleTextBuffer(toolDescriptors);
+    broadcastSidepanelWebStatusEvent('Solving DeepSeek verification', excludeTabId, streamId);
+    const powHeaders = await createPowHeaders(currentInput.clientHeaders);
+    broadcastSidepanelWebStatusEvent('Waiting for model stream', excludeTabId, streamId);
+    const turn = await submitSidepanelWebTurnWithTimeout({
       ...currentInput,
-      powHeaders: await createPowHeaders(currentInput.clientHeaders),
+      powHeaders,
     }, {
       onTextChunk(newText: string, fullText: string) {
         accumulated = fullText;
-        broadcastChatChunk({ text: newText, done: false }, excludeTabId);
+        streamedText = true;
+        visibleText.append(newText);
       },
     });
 
@@ -4186,39 +4346,46 @@ async function runSidepanelToolLoop(
     chatParentMessageId = turn.responseMessageId;
     await persistSidepanelChatSession();
     const fullText = accumulated || turn.assistantText;
+    if (!streamedText && fullText) {
+      visibleText.append(fullText);
+    }
+    const visibleOutput = visibleText.flush();
 
     if (!fullText) {
-      broadcastChatChunk({ text: '', done: true }, excludeTabId);
+      broadcastSidepanelWebStatusEvent('Done', excludeTabId, streamId, 'success');
+      broadcastChatChunk({ text: '', done: true }, excludeTabId, streamId);
       return;
     }
 
     const toolCalls = extractToolCalls(fullText, { descriptors: toolDescriptors });
 
     if (toolCalls.length === 0) {
-      broadcastChatChunk({ text: fullText, done: true }, excludeTabId);
+      broadcastSidepanelWebStatusEvent('Done', excludeTabId, streamId, 'success');
+      if (visibleOutput) {
+        broadcastChatChunk({ text: visibleOutput, done: false }, excludeTabId, streamId);
+      }
+      broadcastChatChunk({ text: '', done: true }, excludeTabId, streamId);
+      return;
+    }
+
+    const selectedToolCalls = selectSidepanelToolCallsForStep(toolCalls, executedToolCallCount);
+    if (selectedToolCalls.skippedCount > 0) {
+      broadcastSidepanelToolLimitEvent(selectedToolCalls.skippedCount, excludeTabId, streamId);
+    }
+    if (selectedToolCalls.allowed.length === 0) {
+      broadcastSidepanelWebStatusEvent('Tool limit reached', excludeTabId, streamId, 'error');
+      broadcastChatChunk({ text: backgroundT('background.chat.toolCallLimit'), done: true }, excludeTabId, streamId);
       return;
     }
 
     const execs: ToolExecutionRecord[] = [];
-    for (const call of toolCalls) {
-      const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat');
-      execs.push({
-        name: call.name,
-        result: {
-          ok: result.ok,
-          summary: result.summary,
-          detail: result.detail,
-          output: result.output,
-          truncated: result.truncated,
-          error: result.error,
-        },
-      });
+    broadcastSidepanelWebStatusEvent('Using browser tools', excludeTabId, streamId);
+    for (let index = 0; index < selectedToolCalls.allowed.length; index += 1) {
+      execs.push(await executeSidepanelChatToolCall(selectedToolCalls.allowed[index], step, index, excludeTabId, streamId));
     }
-    allExecutions.push(...execs);
+    executedToolCallCount += execs.length;
 
-    const toolResultsText = execs.map((e) =>
-      `<${e.name}_result>\n${JSON.stringify(e.result)}\n</${e.name}_result>`
-    ).join('\n');
+    const toolResultsText = formatSidepanelToolResultsForContinuation(execs);
 
     const continuationPrompt = backgroundT('background.chat.continueWithToolResults', {
       toolResults: toolResultsText,
@@ -4238,20 +4405,288 @@ async function runSidepanelToolLoop(
     };
   }
 
-  broadcastChatChunk({ text: backgroundT('background.chat.maxToolSteps'), done: true }, excludeTabId);
+  broadcastSidepanelWebStatusEvent('Tool step limit reached', excludeTabId, streamId, 'error');
+  broadcastChatChunk({ text: backgroundT('background.chat.maxToolSteps'), done: true }, excludeTabId, streamId);
+}
+
+async function submitSidepanelWebTurnWithTimeout(
+  input: Parameters<typeof submitPromptStreaming>[0],
+  callbacks: Parameters<typeof submitPromptStreaming>[1],
+): Promise<Awaited<ReturnType<typeof submitPromptStreaming>>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SIDEPANEL_WEB_TURN_TIMEOUT_MS);
+  try {
+    return await submitPromptStreaming(input, callbacks, controller.signal);
+  } catch (err) {
+    if (isAbortLikeError(err)) {
+      throw new DeepSeekPayloadError(
+        'DeepSeek Web did not respond within 90 seconds. Refresh chat.deepseek.com and try again.',
+        { retryable: true },
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
+    || err instanceof Error && err.name === 'AbortError';
+}
+
+function selectSidepanelToolCallsForStep(
+  toolCalls: readonly ToolCall[],
+  executedToolCallCount: number,
+): { allowed: readonly ToolCall[]; skippedCount: number } {
+  const remainingTurnCalls = Math.max(0, SIDEPANEL_TOOL_CALLS_PER_TURN_LIMIT - executedToolCallCount);
+  const allowedCount = Math.min(toolCalls.length, SIDEPANEL_TOOL_CALLS_PER_STEP_LIMIT, remainingTurnCalls);
+  return {
+    allowed: toolCalls.slice(0, allowedCount),
+    skippedCount: Math.max(0, toolCalls.length - allowedCount),
+  };
+}
+
+function broadcastSidepanelToolLimitEvent(
+  skippedCount: number,
+  excludeTabId?: number,
+  streamId?: string,
+): void {
+  broadcastChatChunk({
+    text: '',
+    done: false,
+    toolEvents: [{
+      id: `tool-call-limit-${Date.now()}-${skippedCount}`,
+      name: 'sidepanel_tool_call_limit',
+      status: 'success',
+      title: backgroundT('background.chat.toolCallLimitTitle'),
+      summary: backgroundT('background.chat.toolCallLimitSkipped', { count: skippedCount }),
+    }],
+  }, excludeTabId, streamId);
+}
+
+function broadcastSidepanelWebStatusEvent(
+  summary: string,
+  excludeTabId?: number,
+  streamId?: string,
+  status: ChatToolEvent['status'] = 'running',
+): void {
+  broadcastChatChunk({
+    text: '',
+    done: false,
+    toolEvents: [{
+      id: 'deepseek-web-turn-status',
+      name: 'deepseek_web_turn',
+      status,
+      title: 'DeepSeek Web',
+      summary,
+    }],
+  }, excludeTabId, streamId);
+}
+
+function createSidepanelVisibleTextEmitter(
+  toolDescriptors: readonly ToolDescriptor[],
+  excludeTabId?: number,
+  streamId?: string,
+  phase?: 'reasoning' | 'answer',
+  field: 'text' | 'reasoningText' = 'text',
+) {
+  const visibleText = createStreamingToolTextAccumulator(createSidepanelDisplayToolDescriptors(toolDescriptors));
+  let sentLength = 0;
+  const emit = (text: string) => {
+    const delta = text.slice(sentLength);
+    sentLength = text.length;
+    if (!delta) return;
+    broadcastChatChunk({
+      text: field === 'text' ? delta : '',
+      reasoningText: field === 'reasoningText' ? delta : undefined,
+      done: false,
+      phase,
+    }, excludeTabId, streamId);
+  };
+  return {
+    append(chunk: string) {
+      emit(visibleText.append(chunk));
+    },
+    flush() {
+      emit(visibleText.flush());
+    },
+  };
+}
+
+function createSidepanelVisibleTextBuffer(toolDescriptors: readonly ToolDescriptor[]) {
+  const visibleText = createStreamingToolTextAccumulator(createSidepanelDisplayToolDescriptors(toolDescriptors));
+  return {
+    append(chunk: string) {
+      visibleText.append(chunk);
+    },
+    flush() {
+      return visibleText.flush();
+    },
+  };
+}
+
+function createSidepanelDisplayToolDescriptors(
+  toolDescriptors: readonly ToolDescriptor[],
+): readonly ToolDescriptor[] {
+  return [
+    ...toolDescriptors,
+    ...toolDescriptors.map((descriptor) => ({
+      ...descriptor,
+      id: `${descriptor.id}:result`,
+      name: `${descriptor.name}_result`,
+      invocationName: `${descriptor.invocationName}_result`,
+      title: `${descriptor.title} result`,
+    })),
+  ];
+}
+
+async function executeSidepanelChatToolCall(
+  call: ToolCall,
+  step: number,
+  index: number,
+  excludeTabId?: number,
+  streamId?: string,
+): Promise<ToolExecutionRecord> {
+  const eventId = `${step}-${index}-${call.id || call.name}`;
+  const startedAt = Date.now();
+  broadcastChatChunk({
+    text: '',
+    done: false,
+    toolEvents: [createSidepanelToolEvent(eventId, call, 'running')],
+  }, excludeTabId, streamId);
+
+  try {
+    const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat');
+    broadcastChatChunk({
+      text: '',
+      done: false,
+      toolEvents: [createSidepanelToolEvent(eventId, call, result.ok ? 'success' : 'error', result, startedAt)],
+    }, excludeTabId, streamId);
+    return createSidepanelToolExecutionRecord(call, result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    broadcastChatChunk({
+      text: '',
+      done: false,
+      toolEvents: [{
+        id: eventId,
+        name: call.name,
+        status: 'error',
+        title: getSidepanelToolEventTitle(call.name),
+        summary: 'Tool failed',
+        detail: truncateSidepanelToolString(redactDurableToolString(message), SIDEPANEL_TOOL_EVENT_DETAIL_LIMIT),
+        durationMs: Date.now() - startedAt,
+      }],
+    }, excludeTabId, streamId);
+    throw err;
+  }
+}
+
+function createSidepanelToolExecutionRecord(call: ToolCall, result: ToolResult): ToolExecutionRecord {
+  return {
+    callId: call.id,
+    name: call.name,
+    provider: call.provider ?? result.provider,
+    descriptorId: call.descriptorId ?? result.descriptorId,
+    result: {
+      ok: result.ok,
+      summary: result.summary,
+      detail: result.detail,
+      output: result.output,
+      truncated: result.truncated,
+      error: result.error,
+    },
+  };
+}
+
+function createSidepanelToolEvent(
+  id: string,
+  call: ToolCall,
+  status: ChatToolEvent['status'],
+  result?: ToolResult,
+  startedAt?: number,
+): ChatToolEvent {
+  const summary = status === 'running'
+    ? 'Running'
+    : truncateSidepanelToolString(redactDurableToolString(result?.summary), SIDEPANEL_TOOL_EVENT_DETAIL_LIMIT);
+  const detail = result
+    ? formatSidepanelToolEventDetail(result)
+    : undefined;
+  return {
+    id,
+    name: call.name,
+    status,
+    title: getSidepanelToolEventTitle(call.name),
+    summary,
+    detail,
+    durationMs: typeof startedAt === 'number' ? Date.now() - startedAt : result?.durationMs,
+  };
+}
+
+function getSidepanelToolEventTitle(name: string): string {
+  switch (name) {
+    case 'browser_list_tabs':
+      return 'Listed browser tabs';
+    case 'browser_select_tab':
+      return 'Selected browser tab';
+    case 'browser_snapshot':
+      return 'Read page snapshot';
+    case 'browser_capture_screenshot':
+      return 'Captured browser view';
+    case 'browser_navigate':
+      return 'Navigated browser';
+    case 'browser_click':
+      return 'Clicked page element';
+    case 'browser_fill':
+    case 'browser_fill_form':
+      return 'Filled page field';
+    case 'browser_type':
+      return 'Typed into page';
+    case 'browser_key':
+      return 'Pressed browser key';
+    case 'browser_wait_for':
+      return 'Waited for page';
+    case 'browser_evaluate_script':
+      return 'Ran browser script';
+    case 'web_search':
+      return 'Searched web';
+    case 'web_fetch':
+      return 'Fetched page';
+    case 'python_exec':
+      return 'Ran Python';
+    case 'sandbox_run':
+      return 'Ran sandbox';
+    default:
+      return `Used ${name}`;
+  }
+}
+
+function formatSidepanelToolEventDetail(result: ToolResult): string | undefined {
+  const pieces = [
+    result.error?.message,
+  ]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .map((value) => redactDurableToolString(value)?.trim())
+    .filter((value): value is string => Boolean(value));
+  if (pieces.length === 0) return undefined;
+  return truncateSidepanelToolString(Array.from(new Set(pieces)).join('\n\n'), SIDEPANEL_TOOL_EVENT_DETAIL_LIMIT);
 }
 
 function broadcastChatChunk(
   chunk: {
+    streamId?: string;
     text: string;
     done: boolean;
     error?: string;
     reasoningText?: string;
     phase?: 'reasoning' | 'answer';
+    toolEvents?: ChatToolEvent[];
   },
   excludeTabId?: number,
+  streamId?: string,
 ) {
-  chrome.runtime.sendMessage({ type: 'CHAT_STREAM_CHUNK', ...chunk }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'CHAT_STREAM_CHUNK', ...chunk, streamId: chunk.streamId ?? streamId }).catch(() => {});
 }
 
 // Called on every service-worker wake. If a chat tool loop was running when

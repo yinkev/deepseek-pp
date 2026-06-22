@@ -15,13 +15,12 @@ const STYLE_ID = 'dpp-content-ux-polish-css';
 const CODE_BUTTON_CLASS = 'dpp-code-download';
 const MESSAGE_BUTTON_CLASS = 'dpp-message-download';
 const MESSAGE_SELECTOR = '[data-message-id][data-message-role], [data-message-author-role]';
-const POLISH_MOUNT_DELAY_MS = 50;
+const POLISH_MOUNT_DELAY_MS = 500;
 
 export function startContentUxPolish(
   getLabels: () => ContentUxPolishLabels,
 ): ContentUxPolishController {
   injectStyles();
-  const unpatchNavigationEvents = patchNavigationEvents();
   const mount = () => mountPolish(document, getLabels());
   const refreshLabels = () => applyPolishLabels(document, getLabels());
   mount();
@@ -40,7 +39,6 @@ export function startContentUxPolish(
       observer.disconnect();
       candidateMountScheduler.cancel();
       window.removeEventListener('dpp:navigation', mount);
-      unpatchNavigationEvents();
       document.querySelectorAll(`.${CODE_BUTTON_CLASS}, .${MESSAGE_BUTTON_CLASS}`).forEach((button) => button.remove());
     },
   };
@@ -181,11 +179,6 @@ function collectPolishCandidateRoots(mutations: readonly MutationRecord[]): Pare
 }
 
 function getPolishCandidateRoot(node: Node): ParentNode | null {
-  if (node.nodeType === Node.TEXT_NODE) {
-    const parent = node.parentElement;
-    return parent?.closest(`pre, ${MESSAGE_SELECTOR}`) ?? null;
-  }
-
   if (!(node instanceof Element)) return null;
   if (node.matches(`pre, ${MESSAGE_SELECTOR}`)) return node;
   if (node.querySelector(`pre, ${MESSAGE_SELECTOR}`)) return node;
@@ -199,39 +192,6 @@ function queryIncludingRoot<T extends HTMLElement>(root: ParentNode, selector: s
   }
   matches.push(...Array.from(root.querySelectorAll<T>(selector)));
   return matches;
-}
-
-function patchNavigationEvents(): () => void {
-  const historyValue = window.history as History & { __dppNavigationPatched?: boolean };
-  if (historyValue.__dppNavigationPatched) return () => undefined;
-  const originalPushState = historyValue.pushState;
-  const originalReplaceState = historyValue.replaceState;
-  const patchedPushState: History['pushState'] = function patchedPushState(
-    this: History,
-    ...args: Parameters<History['pushState']>
-  ) {
-    const result = originalPushState.apply(this, args);
-    window.dispatchEvent(new Event('dpp:navigation'));
-    return result;
-  };
-  const patchedReplaceState: History['replaceState'] = function patchedReplaceState(
-    this: History,
-    ...args: Parameters<History['replaceState']>
-  ) {
-    const result = originalReplaceState.apply(this, args);
-    window.dispatchEvent(new Event('dpp:navigation'));
-    return result;
-  };
-
-  historyValue.__dppNavigationPatched = true;
-  historyValue.pushState = patchedPushState;
-  historyValue.replaceState = patchedReplaceState;
-
-  return () => {
-    if (historyValue.pushState === patchedPushState) historyValue.pushState = originalPushState;
-    if (historyValue.replaceState === patchedReplaceState) historyValue.replaceState = originalReplaceState;
-    delete historyValue.__dppNavigationPatched;
-  };
 }
 
 function downloadText(filename: string, content: string, mimeType: string): void {

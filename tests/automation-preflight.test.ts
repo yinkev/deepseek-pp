@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAutomationById, getAutomationRunById, createAutomation } from '../core/automation/store';
-import { runAutomation } from '../core/automation/scheduler';
+import {
+  AUTOMATION_RUN_TIMEOUT_MS,
+  runAutomation,
+  type AutomationRunExecutionContext,
+} from '../core/automation/scheduler';
 import type { AutomationRunnerRequest, AutomationRunnerResult } from '../core/automation/types';
 
 function createChromeStub() {
@@ -161,5 +165,57 @@ describe('automation runtime preflight', () => {
     const updatedAutomation = await getAutomationById(automation.id);
     expect(updatedAutomation?.promptOptions.searchEnabled).toBe(false);
     expect(updatedAutomation?.promptOptions.thinkingEnabled).toBe(false);
+  });
+
+  it('aborts a still-running executor when the automation times out', async () => {
+    vi.useFakeTimers();
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    stubRuntime();
+
+    const automation = await createAutomation({
+      name: 'Long run',
+      prompt: 'Write one sentence and stop.',
+      schedule: { kind: 'manual', expression: null, timezone: 'UTC', enabled: false, minimumIntervalMinutes: 15 },
+      promptOptions: { modelType: null, searchEnabled: false, thinkingEnabled: false, refFileIds: [] },
+    });
+    const aborts = vi.fn();
+    const executor = vi.fn((
+      request: AutomationRunnerRequest,
+      context: AutomationRunExecutionContext,
+    ): Promise<AutomationRunnerResult> => new Promise((resolve) => {
+      context.signal.addEventListener('abort', () => {
+        aborts();
+        resolve({
+          ok: false,
+          chatSessionId: request.chatSessionId,
+          parentMessageId: request.parentMessageId,
+          completedAt: Date.now(),
+          error: {
+            code: 'executor_aborted',
+            message: 'Executor stopped.',
+            phase: 'runner',
+            retryable: false,
+            at: Date.now(),
+          },
+        });
+      }, { once: true });
+    }));
+
+    const runPromise = runAutomation({
+      automationId: automation.id,
+      trigger: 'manual',
+      scheduledFor: null,
+      now: 1,
+      executor,
+    });
+
+    await vi.advanceTimersByTimeAsync(AUTOMATION_RUN_TIMEOUT_MS + 1);
+    const run = await runPromise;
+
+    expect(run?.status).toBe('timeout');
+    expect(run?.error?.code).toBe('automation_run_timeout');
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(aborts).toHaveBeenCalledTimes(1);
   });
 });

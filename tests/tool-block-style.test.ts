@@ -13,6 +13,16 @@ describe('content tool block styles', () => {
     expect(rule).toContain('overscroll-behavior: contain;');
   });
 
+  it('keeps sidepanel chat tool disclosures scroll-contained', () => {
+    const path = join(process.cwd(), 'entrypoints/sidepanel/style.css');
+    const source = readFileSync(path, 'utf8');
+    const rule = source.match(/\.ds-chat-tool-detail \{([\s\S]*?)\n\}/)?.[1] ?? '';
+
+    expect(rule).toContain('max-height:');
+    expect(rule).toContain('overflow: auto;');
+    expect(rule).toContain('overscroll-behavior: contain;');
+  });
+
   it('renders artifact results outside the collapsible executed-tools block', () => {
     const path = join(process.cwd(), 'entrypoints/content.ts');
     const source = readFileSync(path, 'utf8');
@@ -33,6 +43,41 @@ describe('content tool block styles', () => {
     expect(source).toContain('CLEANUP_MESSAGE_SCAN_LIMIT');
     expect(source).toContain('hasLikelyToolMarkerPrefix');
     expect(source).toContain('if (i < minIndex) break;');
+  });
+
+  it('bounds restored tool and inline-agent state kept in content-script memory', () => {
+    const path = join(process.cwd(), 'entrypoints/content.ts');
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain('TOOL_RESTORE_RECORD_LIMIT = 100');
+    expect(source).toContain('ACTIVE_TOOL_BLOCK_SESSION_LIMIT = 20');
+    expect(source).toContain('function pruneRestoredToolRecords(');
+    expect(source).toContain('function pruneRestoredInlineAgentTraces(');
+    expect(source).toContain('function pruneActiveToolBlockSessions(');
+    expect(source).toContain('pruneActiveToolBlockSessions();');
+    expect(source).toContain('pruneRestoredToolRecords();');
+    expect(source).toContain('pruneRestoredInlineAgentTraces();');
+  });
+
+  it('caps queued main-world messages if bridge startup misses', () => {
+    const path = join(process.cwd(), 'entrypoints/content.ts');
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain('MAIN_WORLD_PENDING_MESSAGE_LIMIT = 100');
+    expect(source).toContain('pendingMainWorldMessages.length >= MAIN_WORLD_PENDING_MESSAGE_LIMIT');
+    expect(source).toContain('pendingMainWorldMessages.shift();');
+  });
+
+  it('does not poll route changes on an interval', () => {
+    const path = join(process.cwd(), 'entrypoints/content.ts');
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain("window.addEventListener('dpp:navigation', handleTokenSpeedRouteChange);");
+    expect(source).toContain("window.addEventListener('dpp:navigation', handleToolBlockRouteChange);");
+    expect(source).not.toContain('setInterval(handleTokenSpeedRouteChange');
+    expect(source).not.toContain('setInterval(handleToolBlockRouteChange');
+    expect(source).not.toContain('TOKEN_SPEED_ROUTE_CHECK_MS');
+    expect(source).not.toContain('TOOL_BLOCK_ROUTE_CHECK_MS');
   });
 
   it('uses the shared injected theme variables for readable tool block text', () => {
@@ -84,5 +129,14 @@ describe('content tool block styles', () => {
     expect(rule).toContain('color: var(--dpp-ui-text);');
     expect(source).not.toContain('var(--ds-text');
     expect(source).not.toContain('var(--ds-text-secondary');
+  });
+
+  it('keeps grouped Skill source labels on the group header only', () => {
+    const skillPage = readFileSync(join(process.cwd(), 'entrypoints/sidepanel/pages/SkillPage.tsx'), 'utf8');
+    const skillCard = readFileSync(join(process.cwd(), 'entrypoints/sidepanel/components/SkillCard.tsx'), 'utf8');
+
+    expect(skillPage).toContain('showSourceBadge={false}');
+    expect(skillCard).toContain('showSourceBadge = true');
+    expect(skillCard).toContain('showSourceBadge && badge');
   });
 });

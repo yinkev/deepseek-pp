@@ -76,6 +76,7 @@ export async function ensureMcpServerDiscovery(
 export interface McpToolExecutionOptions {
   timeoutMs?: number;
   maxResultBytes?: number;
+  signal?: AbortSignal;
 }
 
 export async function executeMcpToolCall(
@@ -172,6 +173,7 @@ export async function executeMcpToolCall(
     descriptor,
     timeoutMs: options.timeoutMs ?? descriptor?.execution.timeoutMs ?? server.timeouts.requestMs,
     maxResultBytes: options.maxResultBytes ?? descriptor?.execution.maxResultBytes ?? server.limits.maxResultBytes,
+    signal: options.signal,
   });
 }
 

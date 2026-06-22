@@ -121,6 +121,26 @@ describe('DeepSeek web adapter streaming', () => {
     });
   });
 
+  it('cancels stalled streaming reads when the request is aborted', async () => {
+    const read = vi.fn(() => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}));
+    const cancel = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({ read, cancel }),
+      },
+    } as unknown as Response)));
+
+    const controller = new AbortController();
+    const pending = submitPromptStreaming(createSubmitInput(), {}, controller.signal);
+
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancel).toHaveBeenCalled();
+  });
+
   it('builds absolute DeepSeek chat session URLs outside the page origin', () => {
     expect(buildDeepSeekSessionUrl('session-1')).toBe('https://chat.deepseek.com/a/chat/s/session-1');
   });

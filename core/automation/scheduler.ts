@@ -33,7 +33,14 @@ export const AUTOMATION_RUN_TIMEOUT_MS = 180_000;
 export const AUTOMATION_MAX_ATTEMPTS = 2;
 export const AUTOMATION_RETRY_DELAY_MS = 10_000;
 
-type AutomationRunExecutor = (request: AutomationRunnerRequest) => Promise<AutomationRunnerResult>;
+export interface AutomationRunExecutionContext {
+  signal: AbortSignal;
+}
+
+type AutomationRunExecutor = (
+  request: AutomationRunnerRequest,
+  context: AutomationRunExecutionContext,
+) => Promise<AutomationRunnerResult>;
 
 interface RunAutomationOptions {
   automationId: AutomationId;
@@ -255,7 +262,11 @@ async function executeWithRetry(
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return createRunTimeoutFailure(request, AUTOMATION_RUN_TIMEOUT_MS, false);
 
-    const result = await withRunTimeout(executor(request), request, remainingMs);
+    const result = await withRunTimeout(
+      (signal) => executor(request, { signal }),
+      request,
+      remainingMs,
+    );
     lastResult = result;
 
     if (result.ok || !result.error.retryable || attempt === AUTOMATION_MAX_ATTEMPTS) {
@@ -273,18 +284,30 @@ async function executeWithRetry(
 }
 
 function withRunTimeout(
-  task: Promise<AutomationRunnerResult>,
+  runTask: (signal: AbortSignal) => Promise<AutomationRunnerResult>,
   request: AutomationRunnerRequest,
   timeoutMs: number,
 ): Promise<AutomationRunnerResult> {
+  const controller = new AbortController();
+  let settled = false;
+
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      controller.abort();
       resolve(createRunTimeoutFailure(request, timeoutMs, false));
     }, timeoutMs);
 
-    task
-      .then(resolve)
+    runTask(controller.signal)
+      .then((result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      })
       .catch((err) => {
+        if (settled) return;
+        settled = true;
         resolve({
           ok: false,
           chatSessionId: request.chatSessionId,

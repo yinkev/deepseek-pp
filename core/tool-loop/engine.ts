@@ -32,6 +32,7 @@ export interface ToolContinuationLoopInput<TTurn> {
     parentMessageId: number,
     executions: ToolExecutionRecord[],
   ) => Promise<TTurn>;
+  signal?: AbortSignal;
 }
 
 export async function runToolContinuationLoop<TTurn>(
@@ -42,6 +43,7 @@ export async function runToolContinuationLoop<TTurn>(
   const executions: ToolExecutionRecord[] = [];
 
   for (let depth = 0; depth < input.maxDepth; depth++) {
+    if (input.signal?.aborted) break;
     if (parentMessageId === null) break;
 
     const calls = input.extractToolCalls(input.getAssistantText(turn));
@@ -49,10 +51,12 @@ export async function runToolContinuationLoop<TTurn>(
 
     const stepExecutions: ToolExecutionRecord[] = [];
     for (const call of calls) {
+      if (input.signal?.aborted) break;
       const execution = await input.executeToolCall(call, parentMessageId);
       stepExecutions.push(execution);
       executions.push(execution);
     }
+    if (input.signal?.aborted || stepExecutions.length === 0) break;
 
     turn = await input.submitContinuation(
       input.buildContinuationPrompt(stepExecutions),

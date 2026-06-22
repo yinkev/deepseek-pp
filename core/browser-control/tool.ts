@@ -222,8 +222,8 @@ function schemaForTool(name: BrowserControlToolName): ToolDescriptor['inputSchem
         url: { type: 'string', description: 'Absolute http(s) or file URL.' },
         newTab: {
           type: 'boolean',
-          default: true,
-          description: 'Open in a new tab by default. Set false only when intentionally replacing the current controlled tab.',
+          default: false,
+          description: 'Use true only when the user explicitly wants a new tab. For existing visible chats or sessions, list/select/snapshot/click first.',
         },
       }, ['url']);
     case 'browser_select_tab':

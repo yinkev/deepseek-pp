@@ -26,6 +26,7 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  cleanup?: () => void;
 }
 
 interface NativePortState {
@@ -59,6 +60,7 @@ function getPortState(nativeHost: string): NativePortState {
       const pending = state.pendingRequests.get(rpcId)!;
       state.pendingRequests.delete(rpcId);
       clearTimeout(pending.timer);
+      pending.cleanup?.();
       pending.resolve(response);
     }
   });
@@ -71,6 +73,7 @@ function getPortState(nativeHost: string): NativePortState {
     );
     for (const pending of state.pendingRequests.values()) {
       clearTimeout(pending.timer);
+      pending.cleanup?.();
       pending.reject(err);
     }
     state.pendingRequests.clear();
@@ -83,10 +86,10 @@ function getPortState(nativeHost: string): NativePortState {
 export function createMcpNativeMessagingTransport(server: McpServerConfig): McpProtocolTransport {
   return {
     request(request, options) {
-      return sendNativeMessage(server, request, options?.timeoutMs);
+      return sendNativeMessage(server, request, options?.timeoutMs, options?.signal);
     },
     async notify(notification, options) {
-      await sendNativeMessage(server, notification, options?.timeoutMs);
+      await sendNativeMessage(server, notification, options?.timeoutMs, options?.signal);
     },
   };
 }
@@ -95,7 +98,9 @@ async function sendNativeMessage<TParams extends Record<string, unknown> | undef
   server: McpServerConfig,
   message: McpJsonRpcRequest<TParams> | McpJsonRpcNotification,
   timeoutMs: number = server.timeouts.requestMs,
+  signal?: AbortSignal,
 ): Promise<McpJsonRpcResponse<TResult>> {
+  throwIfNativeRequestAborted(signal);
   const nativeHost = server.transport.nativeHost;
   if (!nativeHost) {
     throw new McpTransportError('mcp_native_host_missing', 'Native messaging host is not configured.', {
@@ -105,12 +110,15 @@ async function sendNativeMessage<TParams extends Record<string, unknown> | undef
 
   const expectedRequest = 'id' in message ? message as McpJsonRpcRequest<TParams> : undefined;
   const envelope = await createNativeEnvelope(server, message);
+  throwIfNativeRequestAborted(signal);
 
   let response: unknown;
   if (expectedRequest) {
-    response = await sendAndWait(nativeHost, envelope, expectedRequest.id, timeoutMs);
+    response = await sendAndWait(nativeHost, envelope, expectedRequest.id, timeoutMs, signal);
   } else {
+    throwIfNativeRequestAborted(signal);
     const state = getPortState(nativeHost);
+    throwIfNativeRequestAborted(signal);
     state.port.postMessage(envelope);
     return undefined as any;
   }
@@ -123,8 +131,14 @@ function sendAndWait(
   envelope: McpNativeEnvelope,
   requestId: number | string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new McpTransportError('mcp_transport_aborted', 'MCP request was cancelled.', { retryable: false }));
+      return;
+    }
+
     let state: NativePortState;
     try {
       state = getPortState(nativeHost);
@@ -133,20 +147,40 @@ function sendAndWait(
       return;
     }
 
+    let abortHandler: () => void;
     const timer = setTimeout(() => {
       state.pendingRequests.delete(requestId);
+      signal?.removeEventListener('abort', abortHandler);
       reject(new McpTransportError('mcp_native_timeout', `Native MCP request exceeded ${timeoutMs} ms.`));
     }, timeoutMs);
+    abortHandler = () => {
+      clearTimeout(timer);
+      state.pendingRequests.delete(requestId);
+      signal?.removeEventListener('abort', abortHandler);
+      reject(new McpTransportError('mcp_transport_aborted', 'MCP request was cancelled.', { retryable: false }));
+    };
+    const cleanup = () => signal?.removeEventListener('abort', abortHandler);
+    signal?.addEventListener('abort', abortHandler, { once: true });
 
-    state.pendingRequests.set(requestId, { resolve, reject, timer });
+    state.pendingRequests.set(requestId, { resolve, reject, timer, cleanup });
+    if (signal?.aborted) {
+      abortHandler();
+      return;
+    }
     try {
       state.port.postMessage(envelope);
     } catch (err) {
       clearTimeout(timer);
       state.pendingRequests.delete(requestId);
+      cleanup();
       reject(err);
     }
   });
+}
+
+function throwIfNativeRequestAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new McpTransportError('mcp_transport_aborted', 'MCP request was cancelled.', { retryable: false });
 }
 
 async function createNativeEnvelope(

@@ -145,7 +145,7 @@ describe('Phase 5 product surface helpers', () => {
       host.appendChild(pre);
 
       await Promise.resolve();
-      vi.advanceTimersByTime(60);
+      vi.advanceTimersByTime(510);
       expect(pre.querySelector('.dpp-code-download')).not.toBeNull();
 
       Object.defineProperty(pre, 'textContent', {
@@ -157,7 +157,7 @@ describe('Phase 5 product surface helpers', () => {
       code.appendChild(document.createTextNode('<!doctype html>' + '<canvas></canvas>'.repeat(5000)));
 
       await Promise.resolve();
-      vi.advanceTimersByTime(60);
+      vi.advanceTimersByTime(510);
       expect(pre.querySelectorAll('.dpp-code-download')).toHaveLength(1);
     } finally {
       polish.stop();

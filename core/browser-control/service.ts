@@ -39,6 +39,7 @@ export type ElementPoint = {
 
 export interface BrowserControlExecuteOptions {
   requireExplicitTarget?: boolean;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
@@ -142,7 +143,7 @@ export class BrowserControlService {
     const settings = await getBrowserControlSettings();
     const tabId = await this.requireSelectedTargetTabId(settings);
     const target = await this.getTargetOrThrow(tabId);
-    if (!target.controllable || isDeepSeekChatTarget(target.url)) {
+    if (!target.controllable) {
       throw new BrowserControlError(
         'browser_target_not_controllable',
         target.reason ?? 'The selected tab cannot be used as the personal browser target.',
@@ -179,7 +180,7 @@ export class BrowserControlService {
       if (typeof settings.targetLock.targetTabId === 'number') {
         try {
           const target = await this.getTargetOrThrow(settings.targetLock.targetTabId);
-          if (matchesTargetLock(target, settings.targetLock) && target.controllable && !isDeepSeekChatTarget(target.url)) {
+          if (matchesTargetLock(target, settings.targetLock)) {
             if (settings.targetTabId !== target.id) {
               await saveBrowserControlSettings({
                 targetTabId: target.id,
@@ -206,7 +207,7 @@ export class BrowserControlService {
         });
         return { target: locked, status: 'reacquired' };
       }
-      if (locked.controllable && !isDeepSeekChatTarget(locked.url)) {
+      if (locked.controllable) {
         await saveBrowserControlSettings({ lastTargetHint: createTargetHint(locked, this.now()) });
         return { target: locked, status: 'ready' };
       }
@@ -216,7 +217,7 @@ export class BrowserControlService {
     if (typeof settings.targetTabId === 'number') {
       try {
         const target = await this.getTargetOrThrow(settings.targetTabId);
-        if (target.controllable && !isDeepSeekChatTarget(target.url)) {
+        if (target.controllable) {
           await saveBrowserControlSettings({ lastTargetHint: createTargetHint(target, this.now()) });
           return { target, status: 'ready' };
         }
@@ -297,7 +298,9 @@ export class BrowserControlService {
   ): Promise<BrowserActionResult> {
     const started = this.now();
     try {
+      assertBrowserControlNotAborted(options.signal);
       const settings = await getBrowserControlSettings();
+      assertBrowserControlNotAborted(options.signal);
       if (!settings.enabled && name !== 'browser_list_tabs') {
         throw new BrowserControlError(
           'browser_control_disabled',
@@ -306,7 +309,9 @@ export class BrowserControlService {
       }
 
       const executionSettings = await this.prepareExecutionSettings(name, payload, settings, options);
-      const result = await this.executeEnabled(name, payload, executionSettings);
+      assertBrowserControlNotAborted(options.signal);
+      const result = await this.executeEnabled(name, payload, executionSettings, options.signal);
+      assertBrowserControlNotAborted(options.signal);
       this.lastError = null;
       return {
         ...result,
@@ -336,7 +341,9 @@ export class BrowserControlService {
     name: BrowserControlToolName,
     payload: Record<string, unknown>,
     settings: BrowserControlSettings,
+    signal?: AbortSignal,
   ): Promise<BrowserActionResult> {
+    assertBrowserControlNotAborted(signal);
     switch (name) {
       case 'browser_navigate':
         return this.navigate(payload, settings);
@@ -369,7 +376,7 @@ export class BrowserControlService {
       case 'browser_attach_file':
         return this.attachFile(payload, settings);
       case 'browser_wait_for':
-        return this.waitFor(payload, settings);
+        return this.waitFor(payload, settings, signal);
       case 'browser_handle_dialog':
         return this.handleDialog(payload);
       case 'browser_evaluate_script':
@@ -400,7 +407,7 @@ export class BrowserControlService {
     settings: BrowserControlSettings,
   ): Promise<BrowserActionResult> {
     const url = normalizeUrl(requireString(payload, 'url'));
-    const newTab = readOptionalBoolean(payload, 'newTab', true);
+    const newTab = readOptionalBoolean(payload, 'newTab', false);
     let tabId: number;
     if (newTab) {
       const tab = await this.requireChromeApi().tabs.create({ url, active: true });
@@ -414,6 +421,7 @@ export class BrowserControlService {
       await saveBrowserControlSettings({ targetTabId: tabId, lastTargetHint: createTabHint(tab, this.now()) });
     } else {
       tabId = await this.ensureTargetTabId(settings, { createIfMissing: true, navigateUrl: url });
+      await this.rejectDeepSeekProviderTargetAction(tabId, 'navigate away from it');
       await this.ensureAttached(tabId);
       await this.connection!.sendCommand('Page.navigate', { url });
     }
@@ -434,6 +442,7 @@ export class BrowserControlService {
     settings: BrowserControlSettings,
   ): Promise<BrowserActionResult> {
     const tabId = await this.ensureTargetTabId(settings);
+    await this.rejectDeepSeekProviderTargetAction(tabId, `go ${direction}`);
     await this.ensureAttached(tabId);
     const history = await this.connection!.sendCommand<{
       currentIndex?: number;
@@ -501,6 +510,7 @@ export class BrowserControlService {
     const tabId = typeof payload.tabId === 'number'
       ? requireInteger(payload, 'tabId')
       : await this.ensureTargetTabId(settings);
+    await this.rejectDeepSeekProviderTargetAction(tabId, 'close it');
     if (this.connection?.tabId === tabId) await this.connection.detach();
     await this.requireChromeApi().tabs.remove(tabId);
     if (settings.targetTabId === tabId) {
@@ -694,6 +704,7 @@ export class BrowserControlService {
   private async waitFor(
     payload: Record<string, unknown>,
     settings: BrowserControlSettings,
+    signal?: AbortSignal,
   ): Promise<BrowserActionResult> {
     const tabId = await this.ensureTargetTabId(settings);
     await this.ensureAttached(tabId);
@@ -702,7 +713,9 @@ export class BrowserControlService {
     const expression = waitExpression(payload);
 
     while (this.now() - started <= timeoutMs) {
+      assertBrowserControlNotAborted(signal);
       const matched = await this.evaluateBoolean(expression);
+      assertBrowserControlNotAborted(signal);
       if (matched) {
         return this.withOptionalSnapshot({
           ok: true,
@@ -711,7 +724,7 @@ export class BrowserControlService {
           output: { tabId, waitedMs: this.now() - started },
         }, settings);
       }
-      await delay(250);
+      await delay(250, signal);
     }
 
     throw new BrowserControlError('browser_wait_timeout', `Condition did not match within ${timeoutMs}ms.`, {
@@ -755,6 +768,7 @@ export class BrowserControlService {
     settings: BrowserControlSettings,
   ): Promise<BrowserActionResult> {
     const tabId = await this.ensureTargetTabId(settings);
+    await this.rejectDeepSeekProviderTargetAction(tabId, 'run arbitrary script on it');
     await this.ensureAttached(tabId);
     const expression = typeof payload.expression === 'string'
       ? payload.expression
@@ -778,8 +792,8 @@ export class BrowserControlService {
     }
 
     const targets = await this.listTargets();
-    const active = targets.find((target) => target.currentWindow && target.controllable)
-      ?? targets.find((target) => target.controllable);
+    const active = targets.find((target) => target.currentWindow && target.controllable && !isDeepSeekChatTarget(target.url))
+      ?? targets.find((target) => target.controllable && !isDeepSeekChatTarget(target.url));
     if (active) {
       await saveBrowserControlSettings({ targetTabId: active.id, lastTargetHint: createTargetHint(active, this.now()) });
       return active.id;
@@ -813,11 +827,21 @@ export class BrowserControlService {
     if (!target.controllable) {
       throw new BrowserControlError(
         'browser_target_not_controllable',
-        target.reason ?? 'The selected Browser Control target cannot be captured.',
+        target.reason ?? 'The selected Browser Control target cannot be used. Select the page you want me to operate on.',
         { retryable: true },
       );
     }
     return settings.targetTabId;
+  }
+
+  private async rejectDeepSeekProviderTargetAction(tabId: number, action: string): Promise<void> {
+    const target = await this.getTargetOrThrow(tabId);
+    if (!isDeepSeekChatTarget(target.url)) return;
+    throw new BrowserControlError(
+      'browser_provider_target_action_blocked',
+      `DeepSeek chat is the selected browser target. Use snapshot, click, fill, type, key, wait, or screenshot on it; do not ${action}.`,
+      { retryable: false },
+    );
   }
 
   private async ensureAttached(tabId: number): Promise<void> {
@@ -1142,7 +1166,7 @@ function requiresSelectedTarget(
     case 'browser_select_tab':
       return false;
     case 'browser_navigate':
-      return readOptionalBoolean(payload, 'newTab', true) === false;
+      return readOptionalBoolean(payload, 'newTab', false) === false;
     case 'browser_close_tab':
       return !Object.prototype.hasOwnProperty.call(payload, 'tabId');
     default:
@@ -1407,7 +1431,6 @@ function matchesTargetLock(
   lock: NonNullable<BrowserControlSettings['targetLock']>,
 ): boolean {
   return target.controllable &&
-    !isDeepSeekChatTarget(target.url) &&
     safeUrlOrigin(target.url) === lock.origin;
 }
 
@@ -1439,6 +1462,13 @@ function normalizeError(error: unknown): BrowserControlError {
   return new BrowserControlError('browser_control_failed', message, { retryable: true });
 }
 
+function assertBrowserControlNotAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new BrowserControlError('browser_control_aborted', 'Browser control action was cancelled.', {
+    retryable: false,
+  });
+}
+
 function base64ByteLength(value: string): number {
   const normalized = value.replace(/\s+/g, '');
   const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
@@ -1455,6 +1485,30 @@ function toJsonSafe(value: unknown): unknown {
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  assertBrowserControlNotAborted(signal);
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const abortHandler = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', abortHandler);
+      reject(new BrowserControlError('browser_control_aborted', 'Browser control action was cancelled.', {
+        retryable: false,
+      }));
+    };
+    signal?.addEventListener('abort', abortHandler, { once: true });
+    if (signal?.aborted) {
+      abortHandler();
+      return;
+    }
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abortHandler);
+      resolve();
+    }, ms);
+  });
 }

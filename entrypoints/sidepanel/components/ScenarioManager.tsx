@@ -74,7 +74,7 @@ export default function ScenarioManager() {
         <p className="ds-section-desc mt-1">{t('sidepanel.scenario.description')}</p>
       </div>
 
-      <div className="ds-surface-panel divide-y" style={{ borderColor: 'var(--ds-border)' }}>
+      <div className="ds-surface-panel ds-divided-list">
         {builtIn.map((scenario) => {
           const display = localizeScenario(scenario, locale);
           const editing = editingId === scenario.id;
@@ -137,7 +137,7 @@ export default function ScenarioManager() {
         </span>
 
         {custom.length > 0 && (
-          <div className="ds-surface-panel divide-y" style={{ borderColor: 'var(--ds-border)' }}>
+          <div className="ds-surface-panel ds-divided-list">
             {custom.map((scenario) => (
               <div key={scenario.id} className="ds-list-row">
                 <ToggleSwitch

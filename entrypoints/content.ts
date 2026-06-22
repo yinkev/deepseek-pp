@@ -139,9 +139,13 @@ const TOKEN_SPEED_BOOTSTRAP_RETRY_MS = 250;
 const TOKEN_SPEED_BOOTSTRAP_RETRY_LIMIT = 40;
 const TOKEN_SPEED_MOUNT_DEBOUNCE_MS = 500;
 const MULTIMODAL_MEDIA_MOUNT_DEBOUNCE_MS = 250;
-const TOKEN_SPEED_ROUTE_CHECK_MS = 500;
-const TOOL_BLOCK_ROUTE_CHECK_MS = 500;
+const BACKGROUND_PATCH_DEBOUNCE_MS = 250;
+const MAIN_WORLD_PENDING_MESSAGE_LIMIT = 100;
 const TOOL_RESTORE_STORAGE_KEY = 'dpp_tool_execution_blocks';
+const TOOL_RESTORE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
+const TOOL_RESTORE_RECORD_LIMIT = 100;
+const ACTIVE_TOOL_BLOCK_SESSION_TTL_MS = 1000 * 60 * 30;
+const ACTIVE_TOOL_BLOCK_SESSION_LIMIT = 20;
 const INLINE_AGENT_TRACE_STORAGE_KEY = 'dpp_inline_agent_traces';
 const INLINE_AGENT_TRACE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const INLINE_AGENT_TRACE_LIMIT = 100;
@@ -248,7 +252,6 @@ let tokenSpeedMountObserver: MutationObserver | null = null;
 let tokenSpeedMountTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTokenSpeedProgress: ResponseTokenSpeedPayload = createIdleTokenSpeedProgress();
 let tokenSpeedRouteKey = '';
-let tokenSpeedRouteTimer: ReturnType<typeof setInterval> | null = null;
 const recordedUsageProgressSignatures = new Map<string, string>();
 let multimodalMediaObserver: MutationObserver | null = null;
 let multimodalMediaMountTimer: ReturnType<typeof setTimeout> | null = null;
@@ -260,7 +263,6 @@ let multimodalMediaBusy = false;
 let multimodalMediaInputEnabled = false;
 const pendingMultimodalMedia = new Map<string, PendingMultimodalMedia>();
 let toolBlockRouteKey = '';
-let toolBlockRouteTimer: ReturnType<typeof setInterval> | null = null;
 let exportActionObserver: MutationObserver | null = null;
 let exportActionMountTimer: ReturnType<typeof setTimeout> | null = null;
 let exportActionRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -278,6 +280,7 @@ let restoredRenderTimer: ReturnType<typeof setTimeout> | null = null;
 let restoredRenderAttempts = 0;
 const pendingToolExecutionTasks = new Set<Promise<ToolCardResult>>();
 let backgroundPatchObserver: MutationObserver | null = null;
+let backgroundPatchTimer: ReturnType<typeof setTimeout> | null = null;
 let themeObserver: MutationObserver | null = null;
 let themeTreeObserver: MutationObserver | null = null;
 let themeMediaQuery: MediaQueryList | null = null;
@@ -312,6 +315,7 @@ let restoredInlineAgentRenderAttempts = 0;
 let currentMemories: Memory[] = [];
 let currentSkills: Skill[] = [];
 let currentActivePreset: SystemPromptPreset | null = null;
+let navigationEventUnpatch: (() => void) | null = null;
 let currentModelType: ModelType = null;
 let currentPromptSettings: PromptInjectionSettings = DEFAULT_PROMPT_INJECTION_SETTINGS;
 let currentContentLocale: SupportedLocale = DEFAULT_LOCALE;
@@ -523,6 +527,7 @@ export default defineContentScript({
       else document.addEventListener('DOMContentLoaded', () => r(undefined), { once: true });
     });
 
+    installNavigationEventBridge();
     startDeepSeekThemeSync();
     startTokenSpeedIndicatorBootstrap();
     startTokenSpeedIndicatorMountObserver();
@@ -766,6 +771,9 @@ async function resolveProjectContextForRequestBody(bodyStr: string): Promise<Res
 
 function postToMainWorld(message: Record<string, unknown>): void {
   if (!mainWorldPort || !mainWorldBridgeReady) {
+    if (pendingMainWorldMessages.length >= MAIN_WORLD_PENDING_MESSAGE_LIMIT) {
+      pendingMainWorldMessages.shift();
+    }
     pendingMainWorldMessages.push(message);
     return;
   }
@@ -778,6 +786,75 @@ function flushMainWorldMessages(): void {
     const message = pendingMainWorldMessages.shift()!;
     mainWorldPort.postMessage({ source: CONTENT_SOURCE, ...message });
   }
+}
+
+function mutationsContainElement(
+  mutations: readonly MutationRecord[],
+  selector: string,
+  options: { includeRemoved?: boolean; maxNodes?: number } = {},
+): boolean {
+  const maxNodes = options.maxNodes ?? 50;
+  let visited = 0;
+
+  for (const mutation of mutations) {
+    for (const node of mutation.addedNodes) {
+      if (++visited > maxNodes) return true;
+      if (nodeMatchesOrContains(node, selector)) return true;
+    }
+    if (!options.includeRemoved) continue;
+    for (const node of mutation.removedNodes) {
+      if (++visited > maxNodes) return true;
+      if (nodeMatchesOrContains(node, selector)) return true;
+    }
+  }
+  return false;
+}
+
+function nodeMatchesOrContains(node: Node, selector: string): boolean {
+  if (!(node instanceof Element)) return false;
+  return node.matches(selector) || Boolean(node.querySelector(selector));
+}
+
+function installNavigationEventBridge(): void {
+  const historyValue = window.history as History & { __dppNavigationPatched?: boolean };
+  if (navigationEventUnpatch || historyValue.__dppNavigationPatched) return;
+
+  const originalPushState = historyValue.pushState;
+  const originalReplaceState = historyValue.replaceState;
+  let installed = true;
+  const dispatchNavigation = () => window.dispatchEvent(new Event('dpp:navigation'));
+
+  const patchedPushState: History['pushState'] = function patchedPushState(
+    this: History,
+    ...args: Parameters<History['pushState']>
+  ) {
+    const result = originalPushState.apply(this, args);
+    if (installed) dispatchNavigation();
+    return result;
+  };
+  const patchedReplaceState: History['replaceState'] = function patchedReplaceState(
+    this: History,
+    ...args: Parameters<History['replaceState']>
+  ) {
+    const result = originalReplaceState.apply(this, args);
+    if (installed) dispatchNavigation();
+    return result;
+  };
+  historyValue.pushState = patchedPushState;
+  historyValue.replaceState = patchedReplaceState;
+  historyValue.__dppNavigationPatched = true;
+  navigationEventUnpatch = () => {
+    installed = false;
+    if (historyValue.pushState === patchedPushState) historyValue.pushState = originalPushState;
+    if (historyValue.replaceState === patchedReplaceState) historyValue.replaceState = originalReplaceState;
+    delete historyValue.__dppNavigationPatched;
+    navigationEventUnpatch = null;
+  };
+}
+
+function stopNavigationEventBridge(): void {
+  navigationEventUnpatch?.();
+  navigationEventUnpatch = null;
 }
 
 async function loadAndSyncRuntimeState() {
@@ -844,8 +921,7 @@ function isExtensionInvalidatedError(error: unknown): boolean {
 function invalidateExtensionContext() {
   if (!extensionContextValid) return;
   extensionContextValid = false;
-  backgroundPatchObserver?.disconnect();
-  backgroundPatchObserver = null;
+  stopBackgroundPatchObserver();
   removePet();
   stopDeepSeekThemeSync();
   if (restoredRenderTimer) {
@@ -874,6 +950,7 @@ function invalidateExtensionContext() {
   projectSidebarOrganizerController = null;
   contentUxPolishController?.stop();
   contentUxPolishController = null;
+  stopNavigationEventBridge();
 }
 
 /** Isolated world writes captured DeepSeek request headers to chrome.storage. */
@@ -904,7 +981,11 @@ function startConversationExportActionInjector() {
   mountConversationExportActions();
 
   exportActionObserver?.disconnect();
-  exportActionObserver = new MutationObserver(() => scheduleConversationExportActionMount());
+  exportActionObserver = new MutationObserver((mutations) => {
+    if (mutationsContainElement(mutations, `${ASSISTANT_RESPONSE_CONTENT_SELECTOR}, ${DEEPSEEK_ACTION_CONTROL_SELECTOR}`)) {
+      scheduleConversationExportActionMount();
+    }
+  });
   exportActionObserver.observe(document.body, { childList: true, subtree: true });
   armConversationExportActionRetry();
 }
@@ -1435,7 +1516,11 @@ function startMultimodalMediaInput() {
   mountMultimodalMediaControls();
 
   multimodalMediaObserver?.disconnect();
-  multimodalMediaObserver = new MutationObserver(() => scheduleMultimodalMediaMount());
+  multimodalMediaObserver = new MutationObserver((mutations) => {
+    if (mutationsContainElement(mutations, 'textarea, input, button, [role="textbox"], [contenteditable="true"]')) {
+      scheduleMultimodalMediaMount();
+    }
+  });
   multimodalMediaObserver.observe(document.body, { childList: true, subtree: true });
   document.removeEventListener('paste', handleMultimodalMediaPaste, true);
   document.addEventListener('paste', handleMultimodalMediaPaste, true);
@@ -3221,6 +3306,7 @@ function runToolExecution(call: ToolCall): Promise<ToolCardResult> {
       removePendingToolExecution(session, call);
       const execution = { callId: call.id, name: call.name, result, provider: call.provider, descriptorId: call.descriptorId };
       session.executions.push(execution);
+      session.updatedAt = Date.now();
       activeToolBlockSessionId = session.id;
       toolExecutions = session.executions;
       renderToolBlock(session);
@@ -3506,16 +3592,13 @@ function startTokenSpeedRouteWatcher() {
   tokenSpeedRouteKey = getTokenSpeedRouteKey();
   window.addEventListener('popstate', handleTokenSpeedRouteChange);
   window.addEventListener('hashchange', handleTokenSpeedRouteChange);
-  tokenSpeedRouteTimer = setInterval(handleTokenSpeedRouteChange, TOKEN_SPEED_ROUTE_CHECK_MS);
+  window.addEventListener('dpp:navigation', handleTokenSpeedRouteChange);
 }
 
 function stopTokenSpeedRouteWatcher() {
   window.removeEventListener('popstate', handleTokenSpeedRouteChange);
   window.removeEventListener('hashchange', handleTokenSpeedRouteChange);
-  if (tokenSpeedRouteTimer) {
-    clearInterval(tokenSpeedRouteTimer);
-    tokenSpeedRouteTimer = null;
-  }
+  window.removeEventListener('dpp:navigation', handleTokenSpeedRouteChange);
 }
 
 function handleTokenSpeedRouteChange() {
@@ -3542,22 +3625,22 @@ function startToolBlockRouteWatcher() {
   toolBlockRouteKey = getTokenSpeedRouteKey();
   window.addEventListener('popstate', handleToolBlockRouteChange);
   window.addEventListener('hashchange', handleToolBlockRouteChange);
-  toolBlockRouteTimer = setInterval(handleToolBlockRouteChange, TOOL_BLOCK_ROUTE_CHECK_MS);
+  window.addEventListener('dpp:navigation', handleToolBlockRouteChange);
 }
 
 function stopToolBlockRouteWatcher() {
   window.removeEventListener('popstate', handleToolBlockRouteChange);
   window.removeEventListener('hashchange', handleToolBlockRouteChange);
-  if (toolBlockRouteTimer) {
-    clearInterval(toolBlockRouteTimer);
-    toolBlockRouteTimer = null;
-  }
+  window.removeEventListener('dpp:navigation', handleToolBlockRouteChange);
 }
 
 function handleToolBlockRouteChange() {
   const nextRouteKey = getTokenSpeedRouteKey();
   if (nextRouteKey === toolBlockRouteKey) return;
   toolBlockRouteKey = nextRouteKey;
+  pruneActiveToolBlockSessions();
+  pruneRestoredToolRecords();
+  pruneRestoredInlineAgentTraces();
 
   const activeSession = getActiveToolBlockSession();
   if (activeSession && !isToolBlockSessionOnCurrentRoute(activeSession)) {
@@ -3870,6 +3953,7 @@ async function writeInlineAgentTrace(trace: InlineAgentTraceRecord): Promise<voi
 
   await setLocalStorageValue(INLINE_AGENT_TRACE_STORAGE_KEY, next);
   restoredInlineAgentTraces.set(stored.id, stored);
+  pruneRestoredInlineAgentTraces(now);
 }
 
 async function getPersistedInlineAgentTraces(): Promise<InlineAgentTraceRecord[]> {
@@ -3935,6 +4019,7 @@ async function restorePersistedInlineAgentTraces(): Promise<void> {
     changed = true;
   }
 
+  pruneRestoredInlineAgentTraces();
   if (changed) scheduleRenderRestoredInlineAgentTraces();
 }
 
@@ -3966,7 +4051,28 @@ async function getPersistedToolBlocks(): Promise<PersistedToolBlock[]> {
   return Array.isArray(blocks) ? blocks : [];
 }
 
+function pruneRestoredInlineAgentTraces(now: number = Date.now()): void {
+  for (const [id, trace] of restoredInlineAgentTraces) {
+    if (now - trace.createdAt >= INLINE_AGENT_TRACE_TTL_MS) {
+      restoredInlineAgentTraces.delete(id);
+    }
+  }
+
+  if (restoredInlineAgentTraces.size <= INLINE_AGENT_TRACE_LIMIT) return;
+  const sorted = [...restoredInlineAgentTraces.entries()]
+    .sort((a, b) => getInlineAgentTraceSortTime(a[1]) - getInlineAgentTraceSortTime(b[1]));
+  for (const [id] of sorted) {
+    if (restoredInlineAgentTraces.size <= INLINE_AGENT_TRACE_LIMIT) break;
+    restoredInlineAgentTraces.delete(id);
+  }
+}
+
+function getInlineAgentTraceSortTime(trace: InlineAgentTraceRecord): number {
+  return typeof trace.updatedAt === 'number' ? trace.updatedAt : trace.createdAt;
+}
+
 function getOrCreateActiveToolBlockSession(call: ToolCall): ActiveToolBlockSession {
+  pruneActiveToolBlockSessions();
   const chatSessionId = call.source?.chatSessionId ?? null;
   const parentMessageId = call.source?.parentMessageId ?? null;
   const requestId = call.source?.requestId ?? null;
@@ -4002,7 +4108,26 @@ function getOrCreateActiveToolBlockSession(call: ToolCall): ActiveToolBlockSessi
     updatedAt: now,
   };
   activeToolBlockSessions.set(id, session);
+  pruneActiveToolBlockSessions(now);
   return session;
+}
+
+function pruneActiveToolBlockSessions(now: number = Date.now()): void {
+  for (const [id, session] of activeToolBlockSessions) {
+    if (id === activeToolBlockSessionId) continue;
+    if (now - session.updatedAt >= ACTIVE_TOOL_BLOCK_SESSION_TTL_MS) {
+      activeToolBlockSessions.delete(id);
+    }
+  }
+
+  if (activeToolBlockSessions.size <= ACTIVE_TOOL_BLOCK_SESSION_LIMIT) return;
+  const sorted = [...activeToolBlockSessions.entries()]
+    .sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+  for (const [id] of sorted) {
+    if (activeToolBlockSessions.size <= ACTIVE_TOOL_BLOCK_SESSION_LIMIT) break;
+    if (id === activeToolBlockSessionId) continue;
+    activeToolBlockSessions.delete(id);
+  }
 }
 
 function getActiveToolBlockSessionForComplete(complete: ResponseCompletePayload): ActiveToolBlockSession | null {
@@ -4021,6 +4146,7 @@ function getActiveToolBlockSessionForComplete(complete: ResponseCompletePayload)
 }
 
 function getCurrentRouteActiveToolBlockSession(): ActiveToolBlockSession | null {
+  pruneActiveToolBlockSessions();
   for (const session of activeToolBlockSessions.values()) {
     if (isToolBlockSessionOnCurrentRoute(session)) return session;
   }
@@ -4061,11 +4187,12 @@ async function persistToolBlockSession(session: ActiveToolBlockSession, fullText
     ...existing.filter((item) => item.id !== block.id),
     block,
   ]
-    .filter((item) => Date.now() - item.createdAt < 1000 * 60 * 60 * 24 * 30)
-    .slice(-100);
+    .filter((item) => Date.now() - item.createdAt < TOOL_RESTORE_TTL_MS)
+    .slice(-TOOL_RESTORE_RECORD_LIMIT);
 
   await setLocalStorageValue(TOOL_RESTORE_STORAGE_KEY, next);
   restoredToolRecords.set(block.id, block);
+  pruneRestoredToolRecords();
   scheduleRenderRestoredToolBlocks();
 }
 
@@ -4151,10 +4278,38 @@ function rememberRestoredToolRecords(records: ToolCallRestoreRecord[] | undefine
     changed = true;
   }
 
+  pruneRestoredToolRecords();
   if (changed) {
     scheduleRenderRestoredToolBlocks();
     scheduleRenderRestoredInlineAgentTraces();
   }
+}
+
+function pruneRestoredToolRecords(now: number = Date.now()): void {
+  for (const [id, record] of restoredToolRecords) {
+    const createdAt = getToolRecordCreatedAt(record);
+    if (createdAt !== null && now - createdAt >= TOOL_RESTORE_TTL_MS) {
+      restoredToolRecords.delete(id);
+    }
+  }
+
+  if (restoredToolRecords.size <= TOOL_RESTORE_RECORD_LIMIT) return;
+  const sorted = [...restoredToolRecords.entries()]
+    .sort((a, b) => getToolRecordSortTime(a[1]) - getToolRecordSortTime(b[1]));
+  for (const [id] of sorted) {
+    if (restoredToolRecords.size <= TOOL_RESTORE_RECORD_LIMIT) break;
+    restoredToolRecords.delete(id);
+  }
+}
+
+function getToolRecordCreatedAt(record: ToolCallRestoreRecord): number | null {
+  return typeof record.createdAt === 'number' ? record.createdAt : null;
+}
+
+function getToolRecordSortTime(record: ToolCallRestoreRecord): number {
+  const updatedAt = record.metadata?.updatedAt;
+  if (typeof updatedAt === 'number') return updatedAt;
+  return getToolRecordCreatedAt(record) ?? 0;
 }
 
 function findCompatibleRestoredToolRecordId(record: ToolCallRestoreRecord): string | null {
@@ -4962,6 +5117,7 @@ function scheduleRenderRestoredToolBlocks() {
 
 function renderRestoredToolBlocks(): number {
   injectToolBlockStyles();
+  pruneRestoredToolRecords();
 
   const messages = getAssistantMessages();
   if (messages.length === 0) return restoredToolRecords.size;
@@ -5009,6 +5165,7 @@ function scheduleRenderRestoredInlineAgentTraces() {
 
 function renderRestoredInlineAgentTraces(): number {
   injectInlineAgentStyles();
+  pruneRestoredInlineAgentTraces();
 
   const messages = getAssistantMessages();
   if (messages.length === 0) return restoredInlineAgentTraces.size;
@@ -5781,9 +5938,25 @@ function patchContainerBackgrounds() {
   }
 }
 
-function removeBackground() {
+function scheduleBackgroundContainerPatch() {
+  if (backgroundPatchTimer) return;
+  backgroundPatchTimer = setTimeout(() => {
+    backgroundPatchTimer = null;
+    patchContainerBackgrounds();
+  }, BACKGROUND_PATCH_DEBOUNCE_MS);
+}
+
+function stopBackgroundPatchObserver() {
   backgroundPatchObserver?.disconnect();
   backgroundPatchObserver = null;
+  if (backgroundPatchTimer) {
+    clearTimeout(backgroundPatchTimer);
+    backgroundPatchTimer = null;
+  }
+}
+
+function removeBackground() {
+  stopBackgroundPatchObserver();
   document.getElementById('dpp-bg')?.remove();
   document.getElementById('dpp-bg-style')?.remove();
   document.body.classList.remove('dpp-bg-active');
@@ -6493,7 +6666,7 @@ function applyBackground(config: BackgroundConfig | null) {
   backgroundPatchObserver?.disconnect();
   backgroundPatchObserver = new MutationObserver(() => {
     if (document.body.classList.contains('dpp-bg-active')) {
-      patchContainerBackgrounds();
+      scheduleBackgroundContainerPatch();
     }
   });
   backgroundPatchObserver.observe(document.body, { childList: true, subtree: true });

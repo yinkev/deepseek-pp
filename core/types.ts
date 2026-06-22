@@ -552,6 +552,7 @@ export type MessageAction =
   | { type: 'REMOVE_CONVERSATION_FROM_PROJECT'; payload: { conversationId: string } }
   | { type: 'SET_PENDING_PROJECT_CONTEXT'; payload: { projectId: string | null } }
   | { type: 'GET_CURRENT_DEEPSEEK_CONVERSATION' }
+  | { type: 'GET_AUTOMATION_RUNS_BATCH'; payload: { automationIds: string[]; limit?: number } }
   | { type: 'GET_PROJECT_CONTEXT_FOR_CONVERSATION'; payload: { conversation: ProjectConversationInput; bindPendingProject?: boolean } }
   | { type: 'GET_ARTIFACT'; payload: { id: string } }
   | { type: 'GET_CONFIG' }
@@ -601,6 +602,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   reasoningText?: string;
+  toolEvents?: ChatToolEvent[];
   attachments?: Array<{
     name: string;
     mimeType: string;
@@ -608,9 +610,23 @@ export interface ChatMessage {
   }>;
 }
 
+export type ChatToolEventStatus = 'running' | 'success' | 'error';
+
+export interface ChatToolEvent {
+  id: string;
+  name: string;
+  status: ChatToolEventStatus;
+  title: string;
+  summary?: string;
+  detail?: string;
+  durationMs?: number;
+}
+
 export interface ChatStreamChunk {
+  streamId?: string;
   text: string;
   done: boolean;
   reasoningText?: string;
   phase?: 'reasoning' | 'answer';
+  toolEvents?: ChatToolEvent[];
 }

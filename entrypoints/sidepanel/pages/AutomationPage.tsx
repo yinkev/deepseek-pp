@@ -62,6 +62,8 @@ const DEFAULT_PROMPT_OPTIONS: AutomationPromptOptions = {
 };
 
 const FLIGHT_RECORDER_VISIBLE_EVENTS = 6;
+const AUTOMATION_RELOAD_DEBOUNCE_MS = 350;
+const AUTOMATION_FOCUS_RELOAD_MIN_INTERVAL_MS = 3000;
 const TEMPLATE_CATEGORY_FILTERS: Array<'all' | AutomationWorkflowTemplateCategory> = [
   'all',
   'readiness',
@@ -136,9 +138,19 @@ export default function AutomationPage() {
   const [automationListFilter, setAutomationListFilter] = useState<AutomationListFilter>('all');
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const loadSeqRef = useRef(0);
+  const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLoadAtRef = useRef(0);
   const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
 
+  const readinessById = useMemo(() => {
+    const map = new Map<string, AutomationReadinessReport>();
+    for (const automation of automations) {
+      map.set(automation.id, evaluateAutomationReadiness(automation));
+    }
+    return map;
+  }, [automations]);
   const automationListCounts = useMemo(() => {
     const counts: Record<AutomationListFilter, number> = {
       all: automations.length,
@@ -149,10 +161,10 @@ export default function AutomationPage() {
     for (const automation of automations) {
       if (automation.status === 'active') counts.active += 1;
       if (automation.status === 'paused') counts.paused += 1;
-      if (evaluateAutomationReadiness(automation).status === 'blocked') counts.blocked += 1;
+      if (readinessById.get(automation.id)?.status === 'blocked') counts.blocked += 1;
     }
     return counts;
-  }, [automations]);
+  }, [automations, readinessById]);
   const commandCenterCounts = useMemo<AutomationCommandCenterCounts>(() => {
     const counts: AutomationCommandCenterCounts = {
       ready: 0,
@@ -161,41 +173,51 @@ export default function AutomationPage() {
       running: runningIds.size,
     };
     for (const automation of automations) {
-      const report = evaluateAutomationReadiness(automation);
+      const report = readinessById.get(automation.id);
+      if (!report) continue;
       if (report.status === 'ready') counts.ready += 1;
       if (report.status === 'needs_attention') counts.needsAttention += 1;
       if (report.status === 'blocked') counts.blocked += 1;
     }
     return counts;
-  }, [automations, runningIds]);
+  }, [automations, readinessById, runningIds]);
   const filteredAutomations = useMemo(() => {
     const query = automationQuery.trim().toLowerCase();
     return automations.filter((automation) => {
       if (automationListFilter === 'active' && automation.status !== 'active') return false;
       if (automationListFilter === 'paused' && automation.status !== 'paused') return false;
-      if (automationListFilter === 'blocked' && evaluateAutomationReadiness(automation).status !== 'blocked') return false;
+      if (automationListFilter === 'blocked' && readinessById.get(automation.id)?.status !== 'blocked') return false;
       if (!query) return true;
       return automation.name.toLowerCase().includes(query) ||
         automation.prompt.toLowerCase().includes(query);
     });
-  }, [automations, automationListFilter, automationQuery]);
+  }, [automations, automationListFilter, automationQuery, readinessById]);
   const automationFiltersActive = automationQuery.trim().length > 0 || automationListFilter !== 'all';
 
   const load = async () => {
+    if (loadTimerRef.current) {
+      clearTimeout(loadTimerRef.current);
+      loadTimerRef.current = null;
+    }
+    const seq = ++loadSeqRef.current;
     const list: Automation[] = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATIONS' });
+    if (seq !== loadSeqRef.current) return;
     const items = list ?? [];
     setAutomations(items);
-    const runEntries = await Promise.all(
-      items.map(async (automation) => {
-        const recent: AutomationRun[] = await chrome.runtime.sendMessage({
-          type: 'GET_AUTOMATION_RUNS',
-          payload: { automationId: automation.id, limit: 5 },
-        });
-        return [automation.id, recent ?? []] as const;
-      }),
-    );
+    const runEntries = await loadRecentRunsForAutomations(items);
+    if (seq !== loadSeqRef.current) return;
     setRuns(Object.fromEntries(runEntries));
+    lastLoadAtRef.current = Date.now();
     setLoading(false);
+  };
+
+  const scheduleLoad = (delayMs = AUTOMATION_RELOAD_DEBOUNCE_MS) => {
+    if (Date.now() - lastLoadAtRef.current < AUTOMATION_RELOAD_DEBOUNCE_MS) return;
+    if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
+    loadTimerRef.current = setTimeout(() => {
+      loadTimerRef.current = null;
+      void load();
+    }, delayMs);
   };
 
   useEffect(() => {
@@ -205,15 +227,17 @@ export default function AutomationPage() {
       .catch(() => setPersonalConfig(DEFAULT_PERSONAL_CONVENIENCE_CONFIG));
 
     const handleUpdate = (msg: { type?: string; automations?: Automation[] }) => {
-      if (msg.type === 'AUTOMATIONS_UPDATED' || msg.type === 'AUTOMATION_RUNS_UPDATED') {
-        void load();
-      }
       if (msg.type === 'AUTOMATIONS_UPDATED' && Array.isArray(msg.automations)) {
         setAutomations(msg.automations);
       }
+      if (msg.type === 'AUTOMATIONS_UPDATED' || msg.type === 'AUTOMATION_RUNS_UPDATED') {
+        scheduleLoad();
+      }
     };
     const refreshWhenVisible = () => {
-      if (!document.hidden) void load();
+      if (!document.hidden && Date.now() - lastLoadAtRef.current > AUTOMATION_FOCUS_RELOAD_MIN_INTERVAL_MS) {
+        scheduleLoad(0);
+      }
     };
 
     chrome.runtime.onMessage.addListener(handleUpdate);
@@ -224,6 +248,7 @@ export default function AutomationPage() {
       chrome.runtime.onMessage.removeListener(handleUpdate);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.removeEventListener('focus', refreshWhenVisible);
+      if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
     };
   }, []);
 
@@ -381,7 +406,7 @@ export default function AutomationPage() {
       type: 'SET_AUTOMATION_STATUS',
       payload: { id: automation.id, status: automation.status === 'active' ? 'paused' : 'active' },
     });
-    await load();
+    scheduleLoad(0);
   };
 
   const remove = async (automation: Automation) => {
@@ -393,7 +418,7 @@ export default function AutomationPage() {
     });
     if (!ok) return;
     await chrome.runtime.sendMessage({ type: 'DELETE_AUTOMATION', payload: { id: automation.id } });
-    await load();
+    scheduleLoad(0);
   };
 
   const cycleSessionStrategy = async () => {
@@ -436,7 +461,7 @@ export default function AutomationPage() {
       return;
     }
     banner.show('success', t('sidepanel.automationPage.readiness.noIssues'));
-    await load();
+    scheduleLoad(0);
   };
 
   const prepareAllAutomations = async () => {
@@ -470,7 +495,7 @@ export default function AutomationPage() {
     banner.show('success', prepared > 0
       ? t('sidepanel.automationPage.readiness.preparedAll', { count: prepared })
       : t('sidepanel.automationPage.readiness.noPreparedAll'));
-    await load();
+    scheduleLoad(0);
   };
 
   const openSession = async (url: string | null) => {
@@ -485,12 +510,12 @@ export default function AutomationPage() {
         description={t('sidepanel.automationPage.description')}
         meta={t('sidepanel.automationPage.summary', { total: automations.length, active: automationListCounts.active })}
         actions={(
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {automations.length > 0 && (
             <button
               type="button"
               onClick={() => void prepareAllAutomations()}
-              className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
+              className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg"
             >
               {t('sidepanel.automationPage.readiness.prepareAll')}
             </button>
@@ -498,7 +523,7 @@ export default function AutomationPage() {
           <button
             type="button"
             onClick={() => void cycleSessionStrategy()}
-            className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
+            className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg"
             title={t('sidepanel.automationPage.changeSessionStrategy')}
             aria-label={t('sidepanel.automationPage.changeSessionStrategy')}
           >
@@ -615,6 +640,7 @@ export default function AutomationPage() {
               automation={automation}
               runs={runs[automation.id] ?? []}
               running={runningIds.has(automation.id)}
+              readiness={readinessById.get(automation.id) ?? evaluateAutomationReadiness(automation)}
               sessionStrategy={personalConfig.sameSessionStrategy}
               onRun={() => runNow(automation.id)}
               onToggleStatus={() => toggleStatus(automation)}
@@ -639,6 +665,34 @@ function AutomationCommandCenterSummary({ counts }: { counts: AutomationCommandC
       <MetaChip label={t('sidepanel.automationPage.commandCenter.blocked')} value={String(counts.blocked)} />
       <MetaChip label={t('sidepanel.automationPage.commandCenter.running')} value={String(counts.running)} />
     </div>
+  );
+}
+
+async function loadRecentRunsForAutomations(
+  automations: Automation[],
+): Promise<Array<readonly [string, AutomationRun[]]>> {
+  if (automations.length === 0) return [];
+  const ids = automations.map((automation) => automation.id);
+  try {
+    const batch = await chrome.runtime.sendMessage({
+      type: 'GET_AUTOMATION_RUNS_BATCH',
+      payload: { automationIds: ids, limit: 5 },
+    }) as Record<string, AutomationRun[]> | null;
+    if (batch && typeof batch === 'object') {
+      return ids.map((id) => [id, Array.isArray(batch[id]) ? batch[id] : []] as const);
+    }
+  } catch {
+    // Older test doubles and stale extension builds may not know the batch endpoint yet.
+  }
+
+  return Promise.all(
+    automations.map(async (automation) => {
+      const recent: AutomationRun[] = await chrome.runtime.sendMessage({
+        type: 'GET_AUTOMATION_RUNS',
+        payload: { automationId: automation.id, limit: 5 },
+      });
+      return [automation.id, recent ?? []] as const;
+    }),
   );
 }
 
@@ -1035,6 +1089,7 @@ function AutomationCard({
   automation,
   runs,
   running,
+  readiness,
   sessionStrategy,
   onRun,
   onToggleStatus,
@@ -1046,6 +1101,7 @@ function AutomationCard({
   automation: Automation;
   runs: AutomationRun[];
   running: boolean;
+  readiness: AutomationReadinessReport;
   sessionStrategy: PersonalConvenienceConfig['sameSessionStrategy'];
   onRun: () => void;
   onToggleStatus: () => void;
@@ -1056,7 +1112,6 @@ function AutomationCard({
 }) {
   const { t, locale } = useI18n();
   const latestRun = runs[0];
-  const readiness = useMemo(() => evaluateAutomationReadiness(automation), [automation]);
   const canPrepare = readiness.status !== 'blocked' && (
     getSafeAutomationReadinessFixes(readiness).length > 0 ||
     getPromptAutomationReadinessFixes(readiness).length > 0

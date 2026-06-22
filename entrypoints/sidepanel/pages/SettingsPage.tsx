@@ -44,14 +44,6 @@ export default function SettingsPage() {
 
   return (
     <div className="ds-settings-shell">
-      <div className="px-4 pt-4 pb-2">
-        <PageIntro
-          title={t('sidepanel.settings.title')}
-          description={t(SUB_DESCRIPTION_KEY[sub])}
-          meta={state.version ? `v${state.version}` : undefined}
-        />
-      </div>
-
       <SubTabs
         tabs={SUB_TABS.map((tab) => ({ key: tab.key, label: t(tab.labelKey) }))}
         value={sub}
@@ -60,6 +52,11 @@ export default function SettingsPage() {
       />
 
       <div className="ds-settings-content">
+        <PageIntro
+          title={t('sidepanel.settings.title')}
+          description={t(SUB_DESCRIPTION_KEY[sub])}
+          meta={state.version ? `v${state.version}` : undefined}
+        />
         {state.loading ? (
           <SkeletonList rows={3} />
         ) : (

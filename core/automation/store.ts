@@ -166,7 +166,7 @@ export async function updateAutomationRun(
   });
 
   if (!updatedRun) return null;
-  await writeState({ ...state, runs });
+  await writeState({ ...state, runs: pruneRunHistory(runs) });
   return updatedRun;
 }
 
@@ -179,6 +179,26 @@ export async function getAutomationRuns(
     .filter((run) => run.automationId === options.automationId)
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, limit);
+}
+
+export async function getAutomationRunsByAutomationIds(
+  automationIds: AutomationId[],
+  limit = DEFAULT_RUN_HISTORY_LIMIT,
+): Promise<Record<AutomationId, AutomationRun[]>> {
+  const ids = new Set(automationIds);
+  const result: Record<AutomationId, AutomationRun[]> = {};
+  for (const id of ids) result[id] = [];
+  if (ids.size === 0) return result;
+
+  const state = await readState();
+  const sortedRuns = [...state.runs]
+    .filter((run) => ids.has(run.automationId))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  for (const run of sortedRuns) {
+    const runs = result[run.automationId];
+    if (runs && runs.length < limit) runs.push(run);
+  }
+  return result;
 }
 
 export async function getAutomationRunById(id: AutomationRunId): Promise<AutomationRun | null> {
@@ -225,7 +245,7 @@ export async function reconcileStaleRuns(
   });
 
   if (changed) {
-    await writeState({ ...state, runs });
+    await writeState({ ...state, runs: pruneRunHistory(runs) });
   }
   return reconciled;
 }

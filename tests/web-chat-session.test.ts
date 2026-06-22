@@ -214,17 +214,20 @@ describe('sidepanel DeepSeek Web chat session state', () => {
       sameSessionStrategy: 'last',
       visualMonitorDefault: true,
       reducedConfirmations: true,
+      descriptionDensity: 'comfortable',
     });
 
     await savePersonalConvenienceConfig({
       autoReadyCheckBeforeRun: false,
       sameSessionStrategy: 'current',
+      descriptionDensity: 'compact',
     });
 
     expect(local.data.deepseek_pp_personal_convenience).toMatchObject({
       enabled: true,
       autoReadyCheckBeforeRun: false,
       sameSessionStrategy: 'current',
+      descriptionDensity: 'compact',
     });
   });
 });

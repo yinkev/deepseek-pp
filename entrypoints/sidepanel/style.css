@@ -51,11 +51,11 @@
   --ds-switch-thumb: oklch(0.998 0.002 264);
   --ds-logo-gradient-end: oklch(0.72 0.13 264);
 
-  /* Shape language — mixed radii build hierarchy instead of uniform softness */
-  --radius-card: 0px;            /* editorial: cards are flat planes */
-  --radius-ctrl: 6px;            /* buttons / inputs get a crisp micro-radius */
-  --radius-pill: 999px;          /* tags / badges stay capsules */
-  --ds-radius-panel: 12px;
+  /* Shape language — one compact radius for surfaces and controls; pills only for tags and switches. */
+  --radius-card: 8px;
+  --radius-ctrl: 8px;
+  --radius-pill: 999px;
+  --ds-radius-panel: 8px;
   --ds-space-1: 4px;
   --ds-space-2: 8px;
   --ds-space-3: 12px;
@@ -320,7 +320,7 @@ input[type='range'] {
   margin: 0 auto;
   padding: 14px;
   border: 1px solid var(--ds-selected-border);
-  border-radius: 12px;
+  border-radius: var(--ds-radius-panel);
   background: color-mix(in srgb, var(--ds-card) 94%, var(--ds-blue-light));
   box-shadow: var(--ds-shadow-lg);
 }
@@ -338,7 +338,7 @@ input[type='range'] {
   min-height: 20px;
   padding: 0 7px;
   border: 1px solid var(--ds-selected-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--ds-blue);
   background: var(--ds-blue-light);
   font-size: 10px;
@@ -384,7 +384,7 @@ input[type='range'] {
   width: 5px;
   height: 5px;
   margin-top: 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--ds-blue);
   box-shadow: 0 0 0 3px var(--ds-blue-glow);
 }
@@ -394,7 +394,7 @@ input[type='range'] {
   min-height: 34px;
   margin-top: 13px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-ctrl);
   color: var(--ds-text-on-primary);
   background: var(--ds-blue);
   box-shadow: var(--ds-shadow-sm);
@@ -770,6 +770,10 @@ input[type='range'] {
   border: 1px solid var(--ds-selected-border);
 }
 
+.ds-divided-list > * + * {
+  border-top: 1px solid var(--ds-border);
+}
+
 /* Page intro — editorial masthead: generous breathing room + bottom rule */
 .ds-page-intro {
   display: flex;
@@ -798,6 +802,16 @@ input[type='range'] {
   line-height: 1.6;
 }
 
+:root[data-description-density='compact'] .ds-settings-content .ds-page-intro-description,
+:root[data-description-density='compact'] .ds-settings-section-description,
+:root[data-description-density='compact'] .ds-toggle-row-description {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .ds-page-intro-meta {
   flex: 0 0 auto;
   color: var(--ds-text-tertiary);
@@ -808,8 +822,11 @@ input[type='range'] {
 .ds-page-intro-actions {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 6px;
+  max-width: min(100%, 360px);
 }
 
 .ds-empty-state {
@@ -1127,7 +1144,7 @@ button.ds-chat-provider-badge:disabled {
 
 .ds-chat-message-user {
   max-width: min(86%, 420px);
-  border-radius: 2px 14px 14px 14px;
+  border-radius: var(--radius-ctrl);
   background: var(--ds-surface);
   color: var(--ds-text);
   padding: 8px 12px;
@@ -1139,6 +1156,7 @@ button.ds-chat-provider-badge:disabled {
   width: 100%;
   max-width: 100%;
   color: var(--ds-text);
+  padding-left: 2px;
 }
 
 .ds-chat-thinking {
@@ -1176,6 +1194,202 @@ button.ds-chat-provider-badge:disabled {
 
 .ds-chat-thinking div {
   margin-top: 6px;
+}
+
+.ds-chat-tool-events {
+  margin: 4px 0 8px;
+}
+
+.ds-chat-tool-event {
+  color: var(--ds-text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ds-chat-tool-event summary {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 26px;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  border-radius: var(--radius-ctrl);
+  color: var(--ds-text-secondary);
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+}
+
+.ds-chat-tool-event summary::-webkit-details-marker,
+.ds-chat-tool-event summary::marker {
+  display: none;
+  content: '';
+}
+
+.ds-chat-tool-icon {
+  flex: 0 0 auto;
+  color: var(--ds-text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.ds-chat-tool-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-chat-tool-chevron {
+  flex: 0 0 auto;
+  color: var(--ds-text-tertiary);
+  font-size: 10px;
+  transform-origin: 50% 45%;
+  transition: transform 0.15s ease;
+}
+
+.ds-chat-tool-event[open] .ds-chat-tool-chevron {
+  transform: rotate(180deg);
+}
+
+.ds-chat-tool-detail {
+  max-width: 100%;
+  max-height: 180px;
+  margin: 3px 0 8px 22px;
+  border-radius: var(--radius-ctrl);
+  background: var(--ds-surface-2);
+  color: var(--ds-text-secondary);
+  padding: 7px 9px;
+  white-space: pre-wrap;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ds-border) 70%, transparent);
+}
+
+.ds-chat-tool-detail-item + .ds-chat-tool-detail-item {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ds-border);
+}
+
+.ds-chat-tool-detail-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ds-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ds-chat-tool-detail-head span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-chat-tool-detail-head span:last-child {
+  flex: 0 0 auto;
+  color: var(--ds-text-tertiary);
+  font-weight: 500;
+}
+
+.ds-chat-tool-detail-item-error .ds-chat-tool-detail-head span:last-child {
+  color: var(--ds-danger);
+}
+
+.ds-chat-tool-detail-body {
+  margin-top: 4px;
+  color: var(--ds-text-tertiary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.ds-chat-markdown {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ds-chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.ds-chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.ds-chat-markdown p,
+.ds-chat-markdown ul,
+.ds-chat-markdown ol,
+.ds-chat-markdown blockquote,
+.ds-chat-markdown pre,
+.ds-chat-markdown table {
+  margin: 0 0 9px;
+}
+
+.ds-chat-markdown ul,
+.ds-chat-markdown ol {
+  padding-left: 18px;
+}
+
+.ds-chat-markdown li + li {
+  margin-top: 3px;
+}
+
+.ds-chat-markdown a {
+  color: var(--ds-blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ds-chat-markdown code {
+  border-radius: 4px;
+  background: var(--ds-surface-2);
+  color: var(--ds-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.92em;
+  padding: 1px 4px;
+}
+
+.ds-chat-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-ctrl);
+  background: var(--ds-surface-2);
+  color: var(--ds-text);
+  padding: 9px;
+}
+
+.ds-chat-markdown pre code {
+  display: block;
+  min-width: max-content;
+  background: transparent;
+  padding: 0;
+}
+
+.ds-chat-markdown blockquote {
+  border-left: 2px solid var(--ds-border);
+  color: var(--ds-text-secondary);
+  padding-left: 10px;
+}
+
+.ds-chat-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ds-chat-markdown th,
+.ds-chat-markdown td {
+  border: 1px solid var(--ds-border);
+  padding: 4px 6px;
 }
 
 .ds-chat-caret {
@@ -1237,7 +1451,7 @@ button.ds-chat-provider-badge:disabled {
   font-size: 13px;
   line-height: 1.55;
   outline: none;
-  padding: 4px 4px 2px;
+  padding: 7px 8px 5px;
 }
 
 .ds-chat-input:focus {

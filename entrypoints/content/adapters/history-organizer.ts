@@ -174,7 +174,9 @@ export function startDeepSeekHistoryOrganizer(
       refresh();
     });
 
-  const observer = new MutationObserver(schedule);
+  const observer = new MutationObserver((mutations) => {
+    if (mutations.some(mutationMayAffectHistoryOrganizer)) schedule();
+  });
   observer.observe(document.body, { childList: true, subtree: true });
   window.addEventListener('popstate', schedule);
   window.addEventListener('hashchange', schedule);
@@ -202,6 +204,17 @@ export function startDeepSeekHistoryOrganizer(
       }
     },
   };
+}
+
+function mutationMayAffectHistoryOrganizer(mutation: MutationRecord): boolean {
+  return Array.from(mutation.addedNodes).some(nodeMayAffectHistoryOrganizer) ||
+    Array.from(mutation.removedNodes).some(nodeMayAffectHistoryOrganizer);
+}
+
+function nodeMayAffectHistoryOrganizer(node: Node): boolean {
+  if (!(node instanceof Element)) return false;
+  return node.matches(`${HISTORY_LINK_SELECTOR}, [role="dialog"], [role="listbox"], ${OFFICIAL_SEARCH_OPTION_SELECTOR}`) ||
+    Boolean(node.querySelector(`${HISTORY_LINK_SELECTOR}, [role="dialog"], [role="listbox"], ${OFFICIAL_SEARCH_OPTION_SELECTOR}`));
 }
 
 export function findOfficialSearchDialog(root: ParentNode): HTMLElement | null {

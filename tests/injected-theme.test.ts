@@ -22,6 +22,17 @@ describe('injected UI theme styles', () => {
     expect(css).toMatch(/--dpp-ui-surface:\s+oklch\(0\.22 0\.014 264\)/);
   });
 
+  it('does not add global outlines to injected website UI', () => {
+    injectInjectedThemeStyles();
+
+    const css = document.getElementById('dpp-injected-theme-css')?.textContent ?? '';
+
+    expect(css).not.toContain('--dpp-ui-extension-outline');
+    expect(css).not.toContain('--dpp-ui-extension-mark');
+    expect(css).not.toContain('outline: 1px solid var(--dpp-ui-extension-outline);');
+    expect(css).not.toContain('border-left-color: var(--dpp-ui-extension-mark);');
+  });
+
   it('injects the shared theme stylesheet once', () => {
     injectInjectedThemeStyles();
     injectInjectedThemeStyles();

@@ -994,6 +994,37 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).toContain('Blocked vision');
   });
 
+  it('loads recent automation runs with one batch request', async () => {
+    const automations = [
+      createAutomationForPage({ id: 'automation-one', name: 'One' }),
+      createAutomationForPage({ id: 'automation-two', name: 'Two' }),
+      createAutomationForPage({ id: 'automation-three', name: 'Three' }),
+    ];
+    const sendMessage = vi.fn(async (message: { type: string; payload?: { automationIds?: string[] } }) => {
+      if (message.type === 'GET_AUTOMATIONS') return automations;
+      if (message.type === 'GET_AUTOMATION_RUNS_BATCH') {
+        expect(message.payload?.automationIds).toEqual(['automation-one', 'automation-two', 'automation-three']);
+        return {
+          'automation-one': [createAutomationRunForPage({ id: 'run-one', automationId: 'automation-one' })],
+          'automation-two': [],
+          'automation-three': [],
+        };
+      }
+      if (message.type === 'GET_AUTOMATION_RUNS') return [];
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+
+    expect(container.textContent).toContain('One');
+    expect(container.textContent).toContain('Two');
+    expect(container.textContent).toContain('Three');
+    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'GET_AUTOMATION_RUNS_BATCH')).toHaveLength(1);
+    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'GET_AUTOMATION_RUNS')).toHaveLength(0);
+  });
+
   it('prepares an existing automation from its card', async () => {
     let automation = createAutomationForPage({
       id: 'automation-needs-prep',

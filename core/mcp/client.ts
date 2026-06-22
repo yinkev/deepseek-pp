@@ -130,6 +130,7 @@ export async function callMcpTool(
       {
         timeoutMs: options.timeoutMs ?? server.timeouts.requestMs,
         maxResponseBytes: options.maxResultBytes ?? server.limits.maxResultBytes,
+        signal: options.signal,
       },
     );
     const result = unwrapMcpResponse(response, 'mcp_tool_call_failed') as McpCallToolResult;

@@ -455,6 +455,7 @@ function SkillGroupsPanel({
                   <SkillCard
                     key={skill.name}
                     skill={skill}
+                    showSourceBadge={false}
                     onEdit={onEdit && skill.source === 'custom' ? () => onEdit(skill) : undefined}
                     onDelete={
                       onDelete && (skill.source === 'custom' || skill.source === 'remote')

@@ -168,13 +168,17 @@ function PythonToolCard({
             disabled={!canToggle}
             aria-pressed={enabled}
             aria-label={t('sidepanel.toolsPage.pythonTitle')}
-            className="ds-switch relative shrink-0 w-10 h-[22px] rounded-full transition-colors duration-200 disabled:opacity-50"
-            style={{ background: enabled ? 'var(--ds-blue)' : 'var(--ds-border)' }}
+            className="relative shrink-0 w-10 h-8 rounded-lg transition-colors duration-200 disabled:opacity-50"
           >
             <span
-              className="ds-switch-thumb absolute top-[3px] left-[3px] w-4 h-4 rounded-full transition-transform duration-200"
-              style={{ transform: enabled ? 'translateX(18px)' : 'translateX(0)' }}
-            />
+              className="absolute left-1 top-1/2 h-[18px] w-8 -translate-y-1/2 rounded-full transition-colors duration-200"
+              style={{ background: enabled ? 'var(--ds-blue)' : 'var(--ds-border)' }}
+            >
+              <span
+                className="ds-switch-thumb absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full transition-transform duration-200"
+                style={{ transform: enabled ? 'translateX(14px)' : 'translateX(0)' }}
+              />
+            </span>
           </button>
         </div>
 

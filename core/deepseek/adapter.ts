@@ -75,6 +75,7 @@ export interface StreamCallbacks {
 export interface CreatePowHeadersOptions {
   wasmUrl?: string;
   targetPath?: string;
+  signal?: AbortSignal;
 }
 
 export class DeepSeekAuthError extends Error {
@@ -108,10 +109,11 @@ export class DeepSeekPayloadError extends Error {
   }
 }
 
-export async function createChatSession(clientHeaders: Record<string, string>): Promise<string> {
+export async function createChatSession(clientHeaders: Record<string, string>, signal?: AbortSignal): Promise<string> {
   const response = await fetch(new URL(CHAT_SESSION_CREATE_PATH, DEEPSEEK_API_URL).href, {
     method: 'POST',
     credentials: 'include',
+    signal,
     headers: { 'content-type': 'application/json', ...clientHeaders },
     body: JSON.stringify({}),
   });
@@ -136,8 +138,9 @@ export async function createPowHeaders(
 ): Promise<Record<string, string>> {
   const targetPath = options.targetPath ?? COMPLETION_PATH;
   try {
-    const challenge = await createPowChallenge(clientHeaders, targetPath);
+    const challenge = await createPowChallenge(clientHeaders, targetPath, options.signal);
     const answer = await solvePowChallenge(challenge, options.wasmUrl);
+    if (options.signal?.aborted) throw new DOMException('DeepSeek PoW challenge was cancelled.', 'AbortError');
     return {
       'X-DS-PoW-Response': base64EncodeUtf8(JSON.stringify({
         algorithm: answer.algorithm,
@@ -256,7 +259,7 @@ export async function submitPrompt(input: SubmitPromptInput, signal?: AbortSigna
     throw new DeepSeekPayloadError('DeepSeek completion response did not include a stream body.', { retryable: true });
   }
 
-  return readCompletionStream(response);
+  return readCompletionStream(response, signal);
 }
 
 export async function submitPromptStreaming(
@@ -308,7 +311,7 @@ export async function submitPromptStreaming(
     }
     : callbacks;
 
-  return readCompletionStreamWithCallbacks(response, decoratedCallbacks);
+  return readCompletionStreamWithCallbacks(response, decoratedCallbacks, signal);
 }
 
 export function getDeepSeekWebOrigin(): string {
@@ -322,6 +325,7 @@ export function getDeepSeekWebOrigin(): string {
 export interface ReadHistorySnapshotOptions {
   clientHeaders?: Record<string, string>;
   baseUrl?: string;
+  signal?: AbortSignal;
 }
 
 export async function readHistorySnapshot(
@@ -336,6 +340,7 @@ export async function readHistorySnapshot(
   const response = await fetch(url.href, {
     method: 'GET',
     credentials: 'include',
+    signal: options?.signal,
     headers: {
       accept: 'application/json',
       ...clientHeaders,
@@ -378,14 +383,14 @@ export function buildDeepSeekSessionUrl(chatSessionId: string): string {
   return `${getDeepSeekWebOrigin()}/a/chat/s/${chatSessionId}`;
 }
 
-async function readCompletionStream(response: Response): Promise<ModelTurn> {
+async function readCompletionStream(response: Response, signal?: AbortSignal): Promise<ModelTurn> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   const summary: ModelTurn = { assistantText: '', responseMessageId: null, requestMessageId: null, finished: false };
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunk(reader, signal);
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
@@ -403,6 +408,7 @@ async function readCompletionStream(response: Response): Promise<ModelTurn> {
 async function readCompletionStreamWithCallbacks(
   response: Response,
   callbacks: StreamCallbacks,
+  signal?: AbortSignal,
 ): Promise<ModelTurn> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
@@ -426,7 +432,7 @@ async function readCompletionStreamWithCallbacks(
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readStreamChunk(reader, signal);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -454,6 +460,43 @@ async function readCompletionStreamWithCallbacks(
 
   callbacks.onFinished?.();
   return summary;
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+): ReturnType<ReadableStreamDefaultReader<Uint8Array>['read']> {
+  if (!signal) return reader.read();
+  if (signal.aborted) {
+    cancelStreamReader(reader);
+    throw createAbortError();
+  }
+
+  let cleanup: (() => void) | undefined;
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = () => {
+      cancelStreamReader(reader);
+      reject(createAbortError());
+    };
+    cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([reader.read(), abort]);
+  } finally {
+    cleanup?.();
+  }
+}
+
+function cancelStreamReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    Promise.resolve(reader.cancel()).catch(() => undefined);
+  } catch {}
+}
+
+function createAbortError(): DOMException {
+  return new DOMException('DeepSeek completion stream was cancelled.', 'AbortError');
 }
 
 function consumeSSEText(
@@ -594,10 +637,15 @@ function normalizeModelType(modelType: string | null): string {
   return DEFAULT_MODEL_TYPE;
 }
 
-async function createPowChallenge(clientHeaders: Record<string, string>, targetPath: string): Promise<PowChallenge> {
+async function createPowChallenge(
+  clientHeaders: Record<string, string>,
+  targetPath: string,
+  signal?: AbortSignal,
+): Promise<PowChallenge> {
   const response = await fetch(new URL(POW_CHALLENGE_PATH, DEEPSEEK_API_URL).href, {
     method: 'POST',
     credentials: 'include',
+    signal,
     headers: { 'content-type': 'application/json', ...clientHeaders },
     body: JSON.stringify({ target_path: targetPath }),
   });

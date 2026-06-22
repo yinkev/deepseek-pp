@@ -16,10 +16,10 @@ import {
 export function createMcpHttpTransport(server: McpServerConfig): McpProtocolTransport {
   return {
     request(request, options) {
-      return sendHttpMessage(server, request, options?.timeoutMs, options?.maxResponseBytes);
+      return sendHttpMessage(server, request, options?.timeoutMs, options?.maxResponseBytes, options?.signal);
     },
     async notify(notification, options) {
-      await sendHttpMessage(server, notification, options?.timeoutMs, options?.maxResponseBytes);
+      await sendHttpMessage(server, notification, options?.timeoutMs, options?.maxResponseBytes, options?.signal);
     },
   };
 }
@@ -33,6 +33,7 @@ async function sendHttpMessage<TParams extends Record<string, unknown> | undefin
   message: McpJsonRpcRequest<TParams> | McpJsonRpcNotification,
   timeoutMs: number = server.timeouts.requestMs,
   maxResponseBytes: number = server.limits.maxResultBytes,
+  signal?: AbortSignal,
 ): Promise<McpJsonRpcResponse<TResult>> {
   await ensureMcpServerOriginPermission(server);
   const url = getMcpEndpointUrl(server);
@@ -45,11 +46,11 @@ async function sendHttpMessage<TParams extends Record<string, unknown> | undefin
       ...buildMcpRequestHeaders(server),
     },
     body: JSON.stringify(message),
-  }, timeoutMs);
+  }, timeoutMs, signal);
 
   return readJsonRpcResponse<TResult>(
     response,
     'id' in message ? message as McpJsonRpcRequest<TParams> : undefined,
-    { maxBytes: maxResponseBytes },
+    { maxBytes: maxResponseBytes, timeoutMs, signal },
   );
 }

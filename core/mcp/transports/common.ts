@@ -57,9 +57,14 @@ export async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<Response> {
+  throwIfMcpTransportAborted(signal);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortHandler = () => controller.abort();
+  signal?.addEventListener('abort', abortHandler, { once: true });
+  if (signal?.aborted) controller.abort();
   try {
     return await fetch(input, {
       ...init,
@@ -67,6 +72,9 @@ export async function fetchWithTimeout(
     });
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
+      if (signal?.aborted) {
+        throw new McpTransportError('mcp_transport_aborted', 'MCP request was cancelled.', { retryable: false });
+      }
       throw new McpTransportError('mcp_transport_timeout', `MCP request exceeded ${timeoutMs} ms.`);
     }
     if (err instanceof TypeError) {
@@ -79,14 +87,16 @@ export async function fetchWithTimeout(
     throw err;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortHandler);
   }
 }
 
 export async function readJsonRpcResponse<TResult>(
   response: Response,
   expectedRequest?: McpJsonRpcRequest<any>,
-  options: { maxBytes?: number } = {},
+  options: { maxBytes?: number; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<McpJsonRpcResponse<TResult>> {
+  throwIfMcpTransportAborted(options.signal);
   if (!response.ok) {
     throw new McpTransportError(
       'mcp_http_error',
@@ -100,7 +110,7 @@ export async function readJsonRpcResponse<TResult>(
     return readSseJsonRpcResponse(response, expectedRequest, options);
   }
 
-  const raw = await readResponseTextWithLimit(response, options.maxBytes);
+  const raw = await readResponseTextWithLimit(response, options.maxBytes, options.timeoutMs, options.signal);
   if (!raw.trim()) {
     return {
       jsonrpc: '2.0',
@@ -114,8 +124,9 @@ export async function readJsonRpcResponse<TResult>(
 export async function readSseJsonRpcResponse<TResult>(
   response: Response,
   expectedRequest?: McpJsonRpcRequest<any>,
-  options: { maxBytes?: number } = {},
+  options: { maxBytes?: number; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<McpJsonRpcResponse<TResult>> {
+  throwIfMcpTransportAborted(options.signal);
   if (!response.body) {
     throw new McpTransportError('mcp_sse_empty_body', 'MCP SSE response did not include a body.');
   }
@@ -124,9 +135,14 @@ export async function readSseJsonRpcResponse<TResult>(
   const decoder = new TextDecoder();
   let buffer = '';
   let totalBytes = 0;
+  const deadlineAt = createReadDeadline(options.timeoutMs);
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunkWithTimeout(
+      reader,
+      getRemainingReadTimeout(deadlineAt),
+      options.signal,
+    );
     if (done) break;
     totalBytes = assertWithinByteLimit(totalBytes, value.byteLength, options.maxBytes, reader);
     buffer += decoder.decode(value, { stream: true });
@@ -145,16 +161,31 @@ export async function readSseJsonRpcResponse<TResult>(
   throw new McpTransportError('mcp_sse_response_missing', 'MCP SSE stream ended without a matching response.');
 }
 
-export async function readResponseTextWithLimit(response: Response, maxBytes?: number): Promise<string> {
-  if (!response.body) return response.text();
+export async function readResponseTextWithLimit(
+  response: Response,
+  maxBytes?: number,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfMcpTransportAborted(signal);
+  if (!response.body) {
+    const text = await response.text();
+    throwIfMcpTransportAborted(signal);
+    return text;
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let totalBytes = 0;
   let raw = '';
+  const deadlineAt = createReadDeadline(timeoutMs);
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readStreamChunkWithTimeout(
+      reader,
+      getRemainingReadTimeout(deadlineAt),
+      signal,
+    );
     if (done) break;
     totalBytes = assertWithinByteLimit(totalBytes, value.byteLength, maxBytes, reader);
     raw += decoder.decode(value, { stream: true });
@@ -163,6 +194,76 @@ export async function readResponseTextWithLimit(response: Response, maxBytes?: n
   raw += decoder.decode();
   return raw;
 }
+
+function createReadDeadline(timeoutMs: number | undefined): number | undefined {
+  return timeoutMs === undefined ? undefined : Date.now() + timeoutMs;
+}
+
+function getRemainingReadTimeout(deadlineAt: number | undefined): number | undefined {
+  return deadlineAt === undefined ? undefined : deadlineAt - Date.now();
+}
+
+function throwIfMcpTransportAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new McpTransportError('mcp_transport_aborted', 'MCP request was cancelled.', { retryable: false });
+}
+
+export async function readStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number | undefined,
+  signal?: AbortSignal,
+): Promise<StreamChunkReadResult> {
+  throwIfMcpTransportAborted(signal);
+  if (timeoutMs === undefined && !signal) return reader.read();
+  if (timeoutMs !== undefined && timeoutMs <= 0) {
+    reader.cancel().catch(() => undefined);
+    throw new McpTransportError('mcp_transport_timeout', 'MCP response body timed out.');
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  let abortHandler: (() => void) | null = null;
+  try {
+    return await new Promise<StreamChunkReadResult>((resolve, reject) => {
+      let settled = false;
+      const settle = <T>(handler: (value: T) => void, value: T) => {
+        if (settled) return;
+        settled = true;
+        handler(value);
+      };
+
+      abortHandler = () => {
+        reader.cancel().catch(() => undefined);
+        settle(reject, new McpTransportError('mcp_transport_aborted', 'MCP request was cancelled.', {
+          retryable: false,
+        }));
+      };
+      signal?.addEventListener('abort', abortHandler, { once: true });
+      if (signal?.aborted) {
+        abortHandler();
+        return;
+      }
+
+      if (timeoutMs !== undefined) {
+        timeout = setTimeout(() => {
+          reader.cancel().catch(() => undefined);
+          settle(reject, new McpTransportError('mcp_transport_timeout', `MCP response body exceeded ${timeoutMs} ms.`));
+        }, timeoutMs);
+      }
+
+      reader.read().then(
+        (chunk) => settle(resolve, chunk),
+        (err) => settle(reject, err),
+      );
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    if (abortHandler) signal?.removeEventListener('abort', abortHandler);
+  }
+}
+
+type StreamChunkReadResult =
+  | ReadableStreamDefaultReadValueResult<Uint8Array>
+  | ReadableStreamDefaultReadDoneResult;
 
 export function assertWithinByteLimit(
   currentBytes: number,
