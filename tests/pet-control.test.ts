@@ -10,11 +10,13 @@ import {
 import {
   createPetControlSnapshotFromRunCockpit,
   getPetControlSnapshot,
+  mergeAutonomousCompletionReviewIntoSnapshot,
   mergeRuntimeDoctorReportIntoSnapshot,
   type PetControlSnapshot,
 } from '../core/pet/control';
 import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
 import type { RuntimeDoctorReport } from '../core/chat/runtime-doctor';
+import type { AutonomousRunCompletionReview } from '../core/run/review';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -52,6 +54,7 @@ describe('pet control snapshot', () => {
     run?: Partial<PetControlSnapshot['run']>;
     target?: Partial<PetControlSnapshot['target']>;
     safety?: Partial<PetControlSnapshot['safety']>;
+    review?: Partial<PetControlSnapshot['review']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -79,6 +82,15 @@ describe('pet control snapshot', () => {
         leakIssueCount: 0,
         highRiskArmed: false,
         ...overrides.safety,
+      },
+      review: {
+        grade: null,
+        decision: null,
+        proofDebtCount: 0,
+        issueCount: 0,
+        acceptedEvidenceCount: 0,
+        canFinalize: false,
+        ...overrides.review,
       },
     };
   }
@@ -224,6 +236,14 @@ describe('pet control snapshot', () => {
       run: { active: false, phase: 'idle', nextAction: null },
       target: { locked: false, label: null, stale: false },
       safety: { leakIssueCount: 0, highRiskArmed: false },
+      review: {
+        grade: null,
+        decision: null,
+        proofDebtCount: 0,
+        issueCount: 0,
+        acceptedEvidenceCount: 0,
+        canFinalize: false,
+      },
     });
     expect(pet.run.label).toBeNull();
     expect(pet.target.label).toBeNull();
@@ -653,6 +673,14 @@ describe('pet control snapshot', () => {
       readiness: { status: 'blocked', blockers: ['storage_leak'], preparing: false },
       target: { locked: true, label: 'Target stale', stale: true },
       safety: { leakIssueCount: 2, highRiskArmed: false },
+      review: {
+        grade: null,
+        decision: null,
+        proofDebtCount: 0,
+        issueCount: 0,
+        acceptedEvidenceCount: 0,
+        canFinalize: false,
+      },
     });
     expect(pet.run).toBe(base.run);
     expect(petJson).not.toContain('TARGET_SECRET_123');
@@ -662,6 +690,153 @@ describe('pet control snapshot', () => {
     expect(petJson).not.toContain(automationSecret);
     expect(petJson).not.toContain(sampleSecret);
     expect(petJson).toContain('Allowed base run label');
+  });
+
+  it('base pet snapshots include review defaults', () => {
+    const pet = createBasePetSnapshot();
+    expect(pet.review).toEqual({
+      grade: null,
+      decision: null,
+      proofDebtCount: 0,
+      issueCount: 0,
+      acceptedEvidenceCount: 0,
+      canFinalize: false,
+    });
+    const idleCockpit = {
+      schemaVersion: 1 as const,
+      generatedAt: 123,
+      status: 'idle' as const,
+      totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+      activeRun: null,
+    };
+    const fromCockpit = createPetControlSnapshotFromRunCockpit(idleCockpit);
+    expect(fromCockpit.review.grade).toBeNull();
+    expect(fromCockpit.review.decision).toBeNull();
+    expect(fromCockpit.review.proofDebtCount).toBe(0);
+    expect(fromCockpit.review.canFinalize).toBe(false);
+  });
+
+  it('Runtime Doctor merge preserves review values already present in the base snapshot', () => {
+    const base = createBasePetSnapshot({
+      review: {
+        grade: 'B',
+        decision: 'pass',
+        proofDebtCount: 0,
+        issueCount: 1,
+        acceptedEvidenceCount: 3,
+        canFinalize: true,
+      },
+    });
+    const report = createRuntimeDoctorReport();
+    const pet = mergeRuntimeDoctorReportIntoSnapshot(base, report);
+    expect(pet.review).toEqual(base.review);
+    expect(pet.review.grade).toBe('B');
+    expect(pet.review.canFinalize).toBe(true);
+  });
+
+  it('completion review pass produces grade A/B, decision pass, proofDebtCount 0, issueCount 0, acceptedEvidenceCount > 0, canFinalize true', () => {
+    const passReview: AutonomousRunCompletionReview = {
+      decision: 'pass',
+      grade: 'A',
+      score: 95,
+      issueCodes: [],
+      requiredEvidenceMissing: [],
+      doneCriteriaMissing: [],
+      acceptedEvidenceIds: ['e1', 'e2'],
+      error: null,
+    };
+    const base = createBasePetSnapshot();
+    const pet = mergeAutonomousCompletionReviewIntoSnapshot(base, passReview);
+    expect(pet.review.grade).toBe('A');
+    expect(pet.review.decision).toBe('pass');
+    expect(pet.review.proofDebtCount).toBe(0);
+    expect(pet.review.issueCount).toBe(0);
+    expect(pet.review.acceptedEvidenceCount).toBe(2);
+    expect(pet.review.canFinalize).toBe(true);
+
+    // B grade pass
+    const passB: AutonomousRunCompletionReview = { ...passReview, grade: 'B' };
+    const petB = mergeAutonomousCompletionReviewIntoSnapshot(base, passB);
+    expect(petB.review.grade).toBe('B');
+    expect(petB.review.canFinalize).toBe(true);
+  });
+
+  it('iterate/fail review produces correct counts and canFinalize false', () => {
+    const iterateReview: AutonomousRunCompletionReview = {
+      decision: 'iterate',
+      grade: 'C',
+      score: 65,
+      issueCodes: ['done_criteria_missing', 'failed_steps_present'],
+      requiredEvidenceMissing: ['req1'],
+      doneCriteriaMissing: ['crit1'],
+      acceptedEvidenceIds: ['e1'],
+      error: { code: 'x', message: 'y', phase: 'review', retryable: true, at: 1, details: {} },
+    };
+    const base = createBasePetSnapshot();
+    const pet = mergeAutonomousCompletionReviewIntoSnapshot(base, iterateReview);
+    expect(pet.review.decision).toBe('iterate');
+    expect(pet.review.grade).toBe('C');
+    expect(pet.review.proofDebtCount).toBe(2); // 1+1
+    expect(pet.review.issueCount).toBe(2);
+    expect(pet.review.acceptedEvidenceCount).toBe(1);
+    expect(pet.review.canFinalize).toBe(false);
+
+    const failReview: AutonomousRunCompletionReview = {
+      ...iterateReview,
+      decision: 'fail',
+      grade: 'F',
+      issueCodes: ['required_evidence_missing'],
+      requiredEvidenceMissing: ['r1', 'r2'],
+      doneCriteriaMissing: [],
+      acceptedEvidenceIds: [],
+    };
+    const petF = mergeAutonomousCompletionReviewIntoSnapshot(base, failReview);
+    expect(petF.review.decision).toBe('fail');
+    expect(petF.review.proofDebtCount).toBe(2);
+    expect(petF.review.issueCount).toBe(1);
+    expect(petF.review.acceptedEvidenceCount).toBe(0);
+    expect(petF.review.canFinalize).toBe(false);
+  });
+
+  it('if review is null/undefined, return the original snapshot object unchanged', () => {
+    const base = createBasePetSnapshot();
+    expect(mergeAutonomousCompletionReviewIntoSnapshot(base, null)).toBe(base);
+    expect(mergeAutonomousCompletionReviewIntoSnapshot(base, undefined)).toBe(base);
+  });
+
+  it('privacy false-positive probe: source review contains secret-looking strings in issueCodes, requiredEvidenceMissing, doneCriteriaMissing, acceptedEvidenceIds, and error details/message; merged pet snapshot JSON omits all of them while still reflecting safe counts/grade/decision', () => {
+    const secretReview: AutonomousRunCompletionReview = {
+      decision: 'iterate',
+      grade: 'D',
+      score: 50,
+      issueCodes: ['done_criteria_missing', 'issue_with_SECRET_TOKEN_999'],
+      requiredEvidenceMissing: ['evidence_SECRET_PASS_abc'],
+      doneCriteriaMissing: ['crit_with_ultra_secret'],
+      acceptedEvidenceIds: ['ev-id-SECRET_123'],
+      error: {
+        code: 'completion_review_iterate',
+        message: 'iterate needed due to SECRET data',
+        phase: 'review' as const,
+        retryable: true,
+        at: 200,
+        details: { grade: 'D', issueCodes: ['secret'] },
+      },
+    };
+    const reviewJson = JSON.stringify(secretReview);
+    expect(reviewJson).toMatch(/SECRET_TOKEN|SECRET_PASS|ultra_secret|SECRET_123|SECRET data/);
+
+    const base = createBasePetSnapshot();
+    const pet = mergeAutonomousCompletionReviewIntoSnapshot(base, secretReview);
+    const petJson = JSON.stringify(pet);
+    expect(pet.review.grade).toBe('D');
+    expect(pet.review.decision).toBe('iterate');
+    expect(pet.review.proofDebtCount).toBe(2);
+    expect(pet.review.issueCount).toBe(2);
+    expect(pet.review.acceptedEvidenceCount).toBe(1);
+    expect(pet.review.canFinalize).toBe(false);
+    // prove no leak of raw
+    expect(petJson).not.toMatch(/SECRET_TOKEN|SECRET_PASS|ultra_secret|SECRET_123|SECRET data/);
+    expect(petJson).toContain('D'); // grade
   });
 
   it('returns the original pet snapshot when Runtime Doctor report is unavailable', () => {

@@ -3,6 +3,11 @@ import {
   getAutonomousRunCockpitSnapshot,
 } from '../run/orchestrator';
 import type { RuntimeDoctorReport } from '../chat/runtime-doctor';
+import type {
+  AutonomousRunCompletionDecision,
+  AutonomousRunCompletionGrade,
+  AutonomousRunCompletionReview,
+} from '../run/review';
 
 export interface PetControlSnapshot {
   schemaVersion: 1;
@@ -26,6 +31,14 @@ export interface PetControlSnapshot {
   safety: {
     leakIssueCount: number;
     highRiskArmed: boolean;
+  };
+  review: {
+    grade: AutonomousRunCompletionGrade | null;
+    decision: AutonomousRunCompletionDecision | null;
+    proofDebtCount: number;
+    issueCount: number;
+    acceptedEvidenceCount: number;
+    canFinalize: boolean;
   };
 }
 
@@ -160,6 +173,14 @@ export function createPetControlSnapshotFromRunCockpit(
       leakIssueCount,
       highRiskArmed,
     },
+    review: {
+      grade: null,
+      decision: null,
+      proofDebtCount: 0,
+      issueCount: 0,
+      acceptedEvidenceCount: 0,
+      canFinalize: false,
+    },
   };
 }
 
@@ -204,6 +225,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
       ),
       highRiskArmed: false,
     },
+    review: snapshot.review,
   };
 }
 
@@ -224,4 +246,30 @@ function getRuntimeDoctorTargetLabel(
   if (stale) return 'Target stale';
   if (locked) return 'Target locked';
   return null;
+}
+
+export function mergeAutonomousCompletionReviewIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  review: AutonomousRunCompletionReview | null | undefined,
+): PetControlSnapshot {
+  if (!review) {
+    return snapshot;
+  }
+
+  const proofDebtCount = review.doneCriteriaMissing.length + review.requiredEvidenceMissing.length;
+  const issueCount = review.issueCodes.length;
+  const acceptedEvidenceCount = review.acceptedEvidenceIds.length;
+  const canFinalize = review.decision === 'pass';
+
+  return {
+    ...snapshot,
+    review: {
+      grade: review.grade,
+      decision: review.decision,
+      proofDebtCount,
+      issueCount,
+      acceptedEvidenceCount,
+      canFinalize,
+    },
+  };
 }
