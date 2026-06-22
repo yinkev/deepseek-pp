@@ -244,6 +244,34 @@ describe('autonomous contract coverage table', () => {
     expect(json).not.toMatch(/SECRET_STEP_ID|SECRET_EVIDENCE_ID/);
   });
 
+  it('privacy probe: requirement sanitizer redacts generic URLs and common non-sk tokens', () => {
+    const run = createRun({
+      proofContract: {
+        doneCriteria: [
+          'check https://private.example.com/path?case=123 and ghp_abcdefghijklmnopqrstuvwxyz1234567890 plus github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ_1234567890abcdef',
+        ],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    });
+    const table = createAutonomousContractCoverageTable({
+      run,
+      steps: [],
+      evidence: [],
+      acceptedEvidenceIds: [],
+    });
+
+    expect(table.rows).toEqual([
+      {
+        kind: 'done_criterion',
+        requirement: 'check [REDACTED_URL] and gh[REDACTED] plus github_pat_[REDACTED]',
+        status: 'gap',
+        matchedBy: [],
+      },
+    ]);
+    expect(JSON.stringify(table)).not.toMatch(/private\.example|case=123|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ/);
+  });
+
   it('false-positive success probe: coverage gaps agree with completion review missing lists', () => {
     const run = createRun();
     const steps = [createStep({ proofDelta: ['compile passes'] })];

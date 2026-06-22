@@ -12,7 +12,7 @@ Create a pure coverage table for each autonomous run proof contract so workers, 
 | Empty and duplicate requirements are ignored deterministically. | `deduplicates blank and repeated requirements and can mark explicit not-testable rows` |
 | Explicit not-testable requirements are represented as `not_testable` rows. | `deduplicates blank and repeated requirements and can mark explicit not-testable rows` |
 | Table summary counts covered, gap, conflict, and not-testable rows and sets `complete` only when no gaps or conflicts remain. | Covered across all focused tests, especially the gap/conflict/not-testable cases. |
-| Coverage output sanitizes exported requirement text and exposes table-local opaque handles only, not raw durable IDs, evidence summaries, refs, URLs, credentials, or media. | `privacy probe: coverage rows expose only step/evidence handles, not raw evidence summaries or refs`; `privacy probe: matchedBy handles never expose durable step or evidence ids` |
+| Coverage output sanitizes exported requirement text and exposes table-local opaque handles only, not raw durable IDs, evidence summaries, refs, URLs, credentials, or media. | `privacy probe: coverage rows expose only step/evidence handles, not raw evidence summaries or refs`; `privacy probe: matchedBy handles never expose durable step or evidence ids`; `privacy probe: requirement sanitizer redacts generic URLs and common non-sk tokens` |
 | False-positive success probe proves table gaps agree with completion-review missing durable state. | `false-positive success probe: coverage gaps agree with completion review missing lists` |
 
 ## Mechanism
@@ -30,7 +30,7 @@ The module is pure. It does not read storage, call Chrome, run commands, or muta
 
 ## Privacy
 
-Rows use table-local handles such as `step-1`, `evidence-1:kind`, `evidence-1:summary`, and `evidence-1:ref`. Exported requirement text is sanitized before it leaves the module. Rows do not copy raw durable IDs, proof text, evidence summaries, evidence refs, URLs, credentials, target metadata, or command output into the table.
+Rows use table-local handles such as `step-1`, `evidence-1:kind`, `evidence-1:summary`, and `evidence-1:ref`. Exported requirement text is sanitized before it leaves the module, including bearer/cookie/API-key shapes, signed query parameters, common GitHub token shapes, inline media, and generic HTTP(S) URLs. Rows do not copy raw durable IDs, proof text, evidence summaries, evidence refs, URLs, credentials, target metadata, or command output into the table.
 
 This keeps the table useful for pet/telemetry surfaces without turning it into a transcript leak.
 
