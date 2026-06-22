@@ -15,6 +15,12 @@ import {
 import type {
   AutonomousEvidenceCreateInput,
   AutonomousEvidenceRecord,
+  AutonomousQualityGateCommitSummary,
+  AutonomousQualityGateCreateInput,
+  AutonomousQualityGateGrade,
+  AutonomousQualityGateIndependentReviewSummary,
+  AutonomousQualityGateRecord,
+  AutonomousQualityGateVerificationCommandSummary,
   AutonomousRun,
   AutonomousRunBudgets,
   AutonomousRunCheckpoint,
@@ -38,6 +44,8 @@ const MAX_RUNS = 100;
 const MAX_STEPS = 1_000;
 const MAX_TARGET_LEASES = 200;
 const MAX_EVIDENCE_RECORDS = 500;
+const MAX_QUALITY_GATE_RECORDS = 300;
+const MAX_QUALITY_GATE_COMMANDS = 16;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_LIST_ITEMS = 32;
 const MAX_DETAILS_DEPTH = 3;
@@ -95,6 +103,7 @@ const EMPTY_STATE: AutonomousRunStorageState = {
   steps: [],
   targetLeases: [],
   evidence: [],
+  qualityGates: [],
 };
 
 let storageMutationQueue: Promise<unknown> = Promise.resolve();
@@ -128,6 +137,7 @@ export async function createAutonomousRun(
       steps: state.steps.filter((step) => step.runId !== run.id),
       targetLeases: state.targetLeases.filter((lease) => lease.runId !== run.id),
       evidence: state.evidence.filter((record) => record.runId !== run.id),
+      qualityGates: state.qualityGates.filter((record) => record.runId !== run.id),
     },
     result: run,
   }));
@@ -438,6 +448,46 @@ export async function getAutonomousRunEvidence(runId: AutonomousRunId): Promise<
     .sort((a, b) => b.capturedAt - a.capturedAt);
 }
 
+export async function appendAutonomousQualityGateRecord(
+  runId: AutonomousRunId,
+  input: AutonomousQualityGateCreateInput,
+  now = Date.now(),
+): Promise<AutonomousQualityGateRecord | null> {
+  return mutateAutonomousRunState((state) => {
+    const run = state.runs.find((item) => item.id === runId);
+    if (!run || isTerminalRunStatus(run.status)) return { state, result: null, write: false };
+    const gate = normalizeQualityGateRecord({
+      id: createId('gate'),
+      runId,
+      seq: nextQualityGateSeq(state.qualityGates, runId),
+      createdAt: now,
+      status: input.status,
+      contractCoverage: input.contractCoverage,
+      resultStateConsistency: input.resultStateConsistency,
+      selfReview: input.selfReview,
+      verification: input.verification,
+      commit: input.commit ?? null,
+      independentReview: input.independentReview,
+    });
+    if (!gate) return { state, result: null, write: false };
+    return {
+      state: {
+        ...state,
+        runs: pruneRuns(state.runs.map((item) => item.id === runId ? { ...item, updatedAt: now } : item)),
+        qualityGates: pruneQualityGateRecords([gate, ...state.qualityGates.filter((stored) => stored.id !== gate.id)]),
+      },
+      result: gate,
+    };
+  });
+}
+
+export async function getAutonomousRunQualityGates(runId: AutonomousRunId): Promise<AutonomousQualityGateRecord[]> {
+  const state = await readAutonomousRunState();
+  return state.qualityGates
+    .filter((record) => record.runId === runId)
+    .sort((a, b) => a.seq - b.seq);
+}
+
 export async function applyAutonomousRunIterationReview(
   input: AutonomousRunIterationApplyInput,
   now = Date.now(),
@@ -597,6 +647,7 @@ async function writeAutonomousRunState(state: AutonomousRunStorageState): Promis
       steps: pruneSteps(state.steps),
       targetLeases: pruneTargetLeases(state.targetLeases),
       evidence: pruneEvidenceRecords(state.evidence),
+      qualityGates: pruneQualityGateRecords(state.qualityGates),
     },
   });
 }
@@ -663,6 +714,9 @@ function normalizeState(raw: unknown): AutonomousRunStorageState {
       : [],
     evidence: Array.isArray(value.evidence)
       ? value.evidence.map(normalizeEvidenceRecord).filter((item): item is AutonomousEvidenceRecord => item !== null)
+      : [],
+    qualityGates: Array.isArray(value.qualityGates)
+      ? value.qualityGates.map(normalizeQualityGateRecord).filter((item): item is AutonomousQualityGateRecord => item !== null)
       : [],
   };
 }
@@ -769,6 +823,155 @@ function normalizeEvidenceRecord(raw: unknown): AutonomousEvidenceRecord | null 
     source: normalizeEvidenceSource(record.source),
     metadata: normalizeDetails(record.metadata) ?? null,
   };
+}
+
+function normalizeQualityGateRecord(raw: unknown): AutonomousQualityGateRecord | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Partial<AutonomousQualityGateRecord>;
+  const id = normalizeId(record.id);
+  const runId = normalizeId(record.runId);
+  const createdAt = normalizeTimestamp(record.createdAt);
+  if (!id || !runId || createdAt === null) return null;
+  return {
+    id,
+    runId,
+    seq: normalizePositiveInteger(record.seq) ?? 1,
+    createdAt,
+    status: normalizeQualityGateStatus(record.status),
+    contractCoverage: normalizeQualityGateContractCoverage(record.contractCoverage),
+    resultStateConsistency: normalizeQualityGateResultStateConsistency(record.resultStateConsistency),
+    selfReview: normalizeQualityGateSelfReview(record.selfReview),
+    verification: normalizeQualityGateVerification(record.verification),
+    commit: normalizeQualityGateCommit(record.commit),
+    independentReview: normalizeQualityGateIndependentReview(record.independentReview),
+  };
+}
+
+function normalizeQualityGateContractCoverage(value: unknown): AutonomousQualityGateRecord['contractCoverage'] {
+  const summary = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<AutonomousQualityGateRecord['contractCoverage']>
+    : {};
+  return {
+    complete: summary.complete === true,
+    coveredCount: normalizeNonNegativeInteger(summary.coveredCount) ?? 0,
+    gapCount: normalizeNonNegativeInteger(summary.gapCount) ?? 0,
+    conflictCount: normalizeNonNegativeInteger(summary.conflictCount) ?? 0,
+    notTestableCount: normalizeNonNegativeInteger(summary.notTestableCount) ?? 0,
+  };
+}
+
+function normalizeQualityGateResultStateConsistency(value: unknown): AutonomousQualityGateRecord['resultStateConsistency'] {
+  const summary = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<AutonomousQualityGateRecord['resultStateConsistency']>
+    : {};
+  return {
+    status: normalizeQualityGateConsistencyStatus(summary.status),
+    ok: summary.ok === true,
+    issueCount: normalizeNonNegativeInteger(summary.issueCount) ?? 0,
+    blockingIssueCount: normalizeNonNegativeInteger(summary.blockingIssueCount) ?? 0,
+  };
+}
+
+function normalizeQualityGateSelfReview(value: unknown): AutonomousQualityGateRecord['selfReview'] {
+  const summary = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<AutonomousQualityGateRecord['selfReview']>
+    : {};
+  return { grade: normalizeQualityGateGrade(summary.grade) };
+}
+
+function normalizeQualityGateVerification(value: unknown): AutonomousQualityGateRecord['verification'] {
+  const summary = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<AutonomousQualityGateRecord['verification']>
+    : {};
+  return {
+    commands: Array.isArray(summary.commands)
+      ? summary.commands.map(normalizeQualityGateVerificationCommand)
+        .filter((item): item is AutonomousQualityGateVerificationCommandSummary => item !== null)
+        .slice(0, MAX_QUALITY_GATE_COMMANDS)
+      : [],
+  };
+}
+
+function normalizeQualityGateVerificationCommand(value: unknown): AutonomousQualityGateVerificationCommandSummary | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const command = value as Partial<AutonomousQualityGateVerificationCommandSummary>;
+  return {
+    name: normalizeQualityGateText(command.name, 120) ?? 'unnamed verification',
+    result: normalizeQualityGateVerificationResult(command.result),
+    summary: normalizeQualityGateText(command.summary, 256) ?? '',
+  };
+}
+
+function normalizeQualityGateCommit(value: unknown): AutonomousQualityGateCommitSummary | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const commit = value as Partial<AutonomousQualityGateCommitSummary>;
+  const hash = typeof commit.hash === 'string' && /^[a-f0-9]{7,40}$/i.test(commit.hash.trim())
+    ? commit.hash.trim().slice(0, 40)
+    : null;
+  return {
+    hash,
+    message: normalizeQualityGateText(commit.message, 160),
+  };
+}
+
+function normalizeQualityGateIndependentReview(value: unknown): AutonomousQualityGateIndependentReviewSummary {
+  const summary = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<AutonomousQualityGateIndependentReviewSummary>
+    : {};
+  return {
+    status: normalizeQualityGateIndependentReviewStatus(summary.status),
+    grade: normalizeQualityGateGrade(summary.grade),
+    blockingIssueCount: normalizeNonNegativeInteger(summary.blockingIssueCount) ?? 0,
+  };
+}
+
+function nextQualityGateSeq(records: readonly AutonomousQualityGateRecord[], runId: AutonomousRunId): number {
+  return records
+    .filter((record) => record.runId === runId)
+    .reduce((max, record) => Math.max(max, record.seq), 0) + 1;
+}
+
+function normalizeQualityGateStatus(value: unknown): AutonomousQualityGateRecord['status'] {
+  if (value === 'failed' || value === 'blocked' || value === 'warning') return value;
+  return 'passed';
+}
+
+function normalizeQualityGateConsistencyStatus(value: unknown): AutonomousQualityGateRecord['resultStateConsistency']['status'] {
+  if (value === 'inconsistent' || value === 'not_applicable') return value;
+  return 'consistent';
+}
+
+function normalizeQualityGateVerificationResult(value: unknown): AutonomousQualityGateVerificationCommandSummary['result'] {
+  if (value === 'failed' || value === 'known_preexisting_failure') return value;
+  return 'passed';
+}
+
+function normalizeQualityGateIndependentReviewStatus(value: unknown): AutonomousQualityGateIndependentReviewSummary['status'] {
+  if (value === 'passed' || value === 'failed' || value === 'blocked') return value;
+  return 'not_run';
+}
+
+function normalizeQualityGateGrade(value: unknown): AutonomousQualityGateGrade | null {
+  return value === 'A' || value === 'B' || value === 'C' || value === 'D' || value === 'F' ? value : null;
+}
+
+function normalizeQualityGateText(value: unknown, maxLength: number): string | null {
+  const text = normalizeText(value, maxLength);
+  if (!text) return null;
+  return redactQualityGateOpaqueTokens(redactQualityGateLooseSecrets(text))
+    .replace(/\b(?:rawOutput|rawTranscript|transcriptText|reviewProse)\b/gi, '[redacted:raw]');
+}
+
+function redactQualityGateLooseSecrets(value: string): string {
+  return value.replace(/\b[A-Z0-9_]*SECRET[A-Z0-9_]*\b/gi, (match, offset: number, full: string) => {
+    return full.slice(Math.max(0, offset - '[redacted:'.length), offset) === '[redacted:'
+      ? match
+      : '[redacted:secret]';
+  });
+}
+
+function redactQualityGateOpaqueTokens(value: string): string {
+  return value.replace(/\b(?=[A-Za-z0-9_-]{16,}\b)(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/g, '[redacted:secret]');
 }
 
 function normalizeBudgets(value: Partial<AutonomousRunBudgets> | undefined): AutonomousRunBudgets {
@@ -1080,6 +1283,12 @@ function pruneEvidenceRecords(records: AutonomousEvidenceRecord[]): AutonomousEv
   return [...records]
     .sort((a, b) => b.capturedAt - a.capturedAt)
     .slice(0, MAX_EVIDENCE_RECORDS);
+}
+
+function pruneQualityGateRecords(records: AutonomousQualityGateRecord[]): AutonomousQualityGateRecord[] {
+  return [...records]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, MAX_QUALITY_GATE_RECORDS);
 }
 
 function createId(prefix: string): string {

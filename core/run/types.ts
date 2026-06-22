@@ -1,5 +1,6 @@
 export type AutonomousRunId = string;
 export type AutonomousRunStepId = string;
+export type AutonomousQualityGateId = string;
 
 export type AutonomousRunMode = 'interactive' | 'unattended';
 
@@ -156,6 +157,66 @@ export interface AutonomousRunStep {
   endedAt: number | null;
 }
 
+export type AutonomousQualityGateStatus = 'passed' | 'failed' | 'blocked' | 'warning';
+export type AutonomousQualityGateGrade = 'A' | 'B' | 'C' | 'D' | 'F';
+export type AutonomousQualityGateVerificationResult = 'passed' | 'failed' | 'known_preexisting_failure';
+export type AutonomousQualityGateIndependentReviewStatus = 'not_run' | 'passed' | 'failed' | 'blocked';
+export type AutonomousQualityGateConsistencyStatus = 'consistent' | 'inconsistent' | 'not_applicable';
+
+export interface AutonomousQualityGateContractCoverageSummary {
+  complete: boolean;
+  coveredCount: number;
+  gapCount: number;
+  conflictCount: number;
+  notTestableCount: number;
+}
+
+export interface AutonomousQualityGateResultStateConsistencySummary {
+  status: AutonomousQualityGateConsistencyStatus;
+  ok: boolean;
+  issueCount: number;
+  blockingIssueCount: number;
+}
+
+export interface AutonomousQualityGateSelfReviewSummary {
+  grade: AutonomousQualityGateGrade | null;
+}
+
+export interface AutonomousQualityGateVerificationCommandSummary {
+  name: string;
+  result: AutonomousQualityGateVerificationResult;
+  summary: string;
+}
+
+export interface AutonomousQualityGateVerificationSummary {
+  commands: AutonomousQualityGateVerificationCommandSummary[];
+}
+
+export interface AutonomousQualityGateCommitSummary {
+  hash: string | null;
+  message: string | null;
+}
+
+export interface AutonomousQualityGateIndependentReviewSummary {
+  status: AutonomousQualityGateIndependentReviewStatus;
+  grade: AutonomousQualityGateGrade | null;
+  blockingIssueCount: number;
+}
+
+export interface AutonomousQualityGateRecord {
+  id: AutonomousQualityGateId;
+  runId: AutonomousRunId;
+  seq: number;
+  createdAt: number;
+  status: AutonomousQualityGateStatus;
+  contractCoverage: AutonomousQualityGateContractCoverageSummary;
+  resultStateConsistency: AutonomousQualityGateResultStateConsistencySummary;
+  selfReview: AutonomousQualityGateSelfReviewSummary;
+  verification: AutonomousQualityGateVerificationSummary;
+  commit: AutonomousQualityGateCommitSummary | null;
+  independentReview: AutonomousQualityGateIndependentReviewSummary;
+}
+
 export interface AutonomousRunCreateInput {
   id?: AutonomousRunId;
   goal: string;
@@ -219,10 +280,21 @@ export interface AutonomousRunStepCreateInput {
   endedAt?: number | null;
 }
 
+export interface AutonomousQualityGateCreateInput {
+  status: AutonomousQualityGateStatus;
+  contractCoverage: Partial<AutonomousQualityGateContractCoverageSummary>;
+  resultStateConsistency: Partial<AutonomousQualityGateResultStateConsistencySummary>;
+  selfReview?: Partial<AutonomousQualityGateSelfReviewSummary>;
+  verification?: Partial<AutonomousQualityGateVerificationSummary>;
+  commit?: Partial<AutonomousQualityGateCommitSummary> | null;
+  independentReview?: Partial<AutonomousQualityGateIndependentReviewSummary>;
+}
+
 export interface AutonomousRunStorageState {
   version: 1;
   runs: AutonomousRun[];
   steps: AutonomousRunStep[];
   targetLeases: AutonomousTargetLease[];
   evidence: AutonomousEvidenceRecord[];
+  qualityGates: AutonomousQualityGateRecord[];
 }

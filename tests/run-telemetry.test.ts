@@ -400,6 +400,7 @@ function createState(overrides: {
         },
       },
     ],
+    qualityGates: [],
   };
 }
 
