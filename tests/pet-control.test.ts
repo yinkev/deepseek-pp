@@ -8,6 +8,7 @@ import {
   upsertAutonomousTargetLease,
 } from '../core/run/store';
 import {
+  applyPetStopLine,
   createPetControlSnapshotFromRunCockpit,
   getPetControlSnapshot,
   mergeAutonomousCompletionReviewIntoSnapshot,
@@ -59,6 +60,7 @@ describe('pet control snapshot', () => {
     evidence?: Partial<PetControlSnapshot['evidence']>;
     review?: Partial<PetControlSnapshot['review']>;
     reviewHeat?: Partial<PetControlSnapshot['reviewHeat']>;
+    stopLine?: Partial<PetControlSnapshot['stopLine']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -132,6 +134,13 @@ describe('pet control snapshot', () => {
         level: 'none',
         reasons: ['no_review'],
         ...overrides.reviewHeat,
+      },
+      stopLine: {
+        available: false,
+        action: 'none',
+        reason: 'no_run',
+        runStatus: null,
+        ...overrides.stopLine,
       },
     };
   }
@@ -313,6 +322,7 @@ describe('pet control snapshot', () => {
         canFinalize: false,
       },
       reviewHeat: { level: 'none', reasons: ['no_review'] },
+      stopLine: { available: false, action: 'none', reason: 'no_run', runStatus: null },
     });
     expect(pet.run.label).toBeNull();
     expect(pet.target.label).toBeNull();
@@ -334,6 +344,7 @@ describe('pet control snapshot', () => {
     expect(pet.run.label).toBe('Queued goal');
     expect(pet.target).toMatchObject({ locked: false, stale: false, leaseStatus: 'none' });
     expect(pet.safety).toMatchObject({ leakIssueCount: 0, highRiskArmed: false });
+    expect(pet.stopLine).toEqual({ available: true, action: 'pause', reason: 'can_pause', runStatus: 'queued' });
   });
 
   it('maps running with latest step review to reviewing phase', async () => {
@@ -350,6 +361,7 @@ describe('pet control snapshot', () => {
     expect(pet.readiness.status).toBe('ready');
     expect(pet.run).toMatchObject({ active: true, phase: 'reviewing', nextAction: 'Continue autonomous cycle' });
     expect(pet.run.label).toBe('Review run');
+    expect(pet.stopLine).toEqual({ available: true, action: 'pause', reason: 'can_pause', runStatus: 'running' });
   });
 
   it('maps running with working phases (model_turn etc) to working', async () => {
@@ -401,6 +413,7 @@ describe('pet control snapshot', () => {
     expect(pet.readiness).toMatchObject({ status: 'blocked' });
     expect(pet.readiness.blockers).toContain('policy_deny');
     expect(pet.run).toMatchObject({ active: true, phase: 'blocked', nextAction: 'Review blocker to resume' });
+    expect(pet.stopLine).toEqual({ available: true, action: 'cancel', reason: 'can_cancel', runStatus: 'blocked' });
   });
 
   it('maps blocked without errorCode uses generic run_blocked', async () => {
@@ -434,6 +447,7 @@ describe('pet control snapshot', () => {
 
     expect(pet.readiness).toMatchObject({ status: 'needs_attention', blockers: ['run_paused'] });
     expect(pet.run).toMatchObject({ active: true, phase: 'blocked', nextAction: 'Resume or inspect run' });
+    expect(pet.stopLine).toEqual({ available: true, action: 'cancel', reason: 'can_cancel', runStatus: 'paused' });
   });
 
   it('maps complete/terminal to ready/done, nextAction review result when active terminal run', async () => {
@@ -449,6 +463,83 @@ describe('pet control snapshot', () => {
 
     expect(pet.readiness.status).toBe('ready');
     expect(pet.run).toMatchObject({ active: true, phase: 'done', nextAction: 'Review result' });
+    expect(pet.stopLine).toEqual({ available: false, action: 'none', reason: 'terminal', runStatus: 'succeeded' });
+  });
+
+  it('applyPetStopLine pauses the selected queued/running run and result agrees with durable state', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'stop-running' });
+
+    const run = await createAutonomousRun({
+      goal: 'Stop running without leaking SECRET_STOP_GOAL',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    const result = await applyPetStopLine(130);
+    const stored = await getAutonomousRunLedgerSnapshot();
+    const storedRun = stored.runs.find((item) => item.id === run.id);
+
+    expect(result).toEqual({
+      applied: true,
+      action: 'pause',
+      beforeStatus: 'running',
+      afterStatus: 'paused',
+      errorCode: null,
+    });
+    expect(storedRun).toMatchObject({ status: 'paused', updatedAt: 130 });
+    expect(JSON.stringify(result)).not.toMatch(/SECRET_STOP_GOAL|Stop running/);
+  });
+
+  it('applyPetStopLine cancels paused or blocked runs with a safe stop-line error', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'stop-paused' });
+
+    const run = await createAutonomousRun({
+      goal: 'Cancel paused without leaking SECRET_CANCEL_GOAL',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await transitionAutonomousRun(run.id, 'paused', null, 120);
+
+    const result = await applyPetStopLine(140);
+    const stored = await getAutonomousRunLedgerSnapshot();
+    const storedRun = stored.runs.find((item) => item.id === run.id);
+
+    expect(result).toEqual({
+      applied: true,
+      action: 'cancel',
+      beforeStatus: 'paused',
+      afterStatus: 'cancelled',
+      errorCode: null,
+    });
+    expect(storedRun).toMatchObject({
+      status: 'cancelled',
+      error: {
+        code: 'autonomous_run_cancelled_by_pet_stop_line',
+        phase: 'policy',
+        retryable: false,
+      },
+      completedAt: 140,
+    });
+    expect(JSON.stringify(result)).not.toMatch(/SECRET_CANCEL_GOAL|Cancel paused/);
+    expect(JSON.stringify(storedRun?.error)).not.toMatch(/SECRET_CANCEL_GOAL|Cancel paused/);
+  });
+
+  it('applyPetStopLine is a safe noop with no active stoppable run', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'stop-none' });
+
+    await expect(applyPetStopLine(100)).resolves.toEqual({
+      applied: false,
+      action: 'none',
+      beforeStatus: null,
+      afterStatus: null,
+      errorCode: 'no_active_run',
+    });
   });
 
   it('target metadata is locked/generic label/stale=false; no raw URL/title/origin exposed', async () => {
@@ -1007,6 +1098,7 @@ describe('pet control snapshot', () => {
       canFinalize: false,
     });
     expect(pet.reviewHeat).toEqual({ level: 'none', reasons: ['no_review'] });
+    expect(pet.stopLine).toEqual({ available: false, action: 'none', reason: 'no_run', runStatus: null });
     const idleCockpit = {
       schemaVersion: 1 as const,
       generatedAt: 123,
@@ -1020,6 +1112,7 @@ describe('pet control snapshot', () => {
     expect(fromCockpit.review.proofDebtCount).toBe(0);
     expect(fromCockpit.review.canFinalize).toBe(false);
     expect(fromCockpit.reviewHeat).toEqual({ level: 'none', reasons: ['no_review'] });
+    expect(fromCockpit.stopLine).toEqual({ available: false, action: 'none', reason: 'no_run', runStatus: null });
   });
 
   it('Runtime Doctor merge preserves review values already present in the base snapshot', () => {
@@ -1226,6 +1319,9 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         reviewHeatLevel: 'none',
         reviewHeatReasons: ['no_review'],
+        stopLineAvailable: false,
+        stopLineAction: 'none',
+        stopLineReason: 'no_run',
         evidenceStatus: 'none',
         evidenceCount: 0,
         latestEvidenceAgeMs: null,
@@ -1402,6 +1498,12 @@ describe('pet control snapshot', () => {
           level: 'hot',
           reasons: ['proof_debt', 'review_issues', 'needs_iteration', 'low_grade'],
         },
+        stopLine: {
+          available: true,
+          action: 'cancel',
+          reason: 'can_cancel',
+          runStatus: 'blocked',
+        },
         evidence: {
           status: 'stale',
           count: 3,
@@ -1429,6 +1531,9 @@ describe('pet control snapshot', () => {
       expect(capsule.proofDebtCount).toBe(2);
       expect(capsule.reviewHeatLevel).toBe('hot');
       expect(capsule.reviewHeatReasons).toEqual(['proof_debt', 'review_issues', 'needs_iteration', 'low_grade']);
+      expect(capsule.stopLineAvailable).toBe(true);
+      expect(capsule.stopLineAction).toBe('cancel');
+      expect(capsule.stopLineReason).toBe('can_cancel');
       expect(capsule.evidenceStatus).toBe('stale');
       expect(capsule.evidenceCount).toBe(3);
       expect(capsule.latestEvidenceAgeMs).toBe(12);

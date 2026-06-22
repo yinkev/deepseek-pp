@@ -1,7 +1,9 @@
 import {
+  type AutonomousRunCockpitRun,
   type AutonomousRunCockpitSnapshot,
   getAutonomousRunCockpitSnapshot,
 } from '../run/orchestrator';
+import { transitionAutonomousRun } from '../run/store';
 import type { RuntimeDoctorReport } from '../chat/runtime-doctor';
 import type {
   AutonomousRunCompletionDecision,
@@ -34,6 +36,19 @@ export type PetReviewHeatReason =
   | 'proof_debt'
   | 'review_issues'
   | 'review_failed';
+
+export type PetStopLineAction = 'none' | 'pause' | 'cancel';
+
+export type PetStopLineReason =
+  | 'no_run'
+  | 'can_pause'
+  | 'can_cancel'
+  | 'terminal';
+
+export type PetStopLineErrorCode =
+  | 'no_active_run'
+  | 'action_unavailable'
+  | 'transition_rejected';
 
 export interface PetControlSnapshot {
   schemaVersion: 1;
@@ -88,11 +103,26 @@ export interface PetControlSnapshot {
     level: PetReviewHeatLevel;
     reasons: PetReviewHeatReason[];
   };
+  stopLine: {
+    available: boolean;
+    action: PetStopLineAction;
+    reason: PetStopLineReason;
+    runStatus: AutonomousRunCockpitRun['status'] | null;
+  };
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
 type PetBlockerLens = PetControlSnapshot['blockerLens'];
 type PetReviewHeat = PetControlSnapshot['reviewHeat'];
+type PetStopLineState = PetControlSnapshot['stopLine'];
+
+export interface PetStopLineResult {
+  applied: boolean;
+  action: PetStopLineAction;
+  beforeStatus: AutonomousRunCockpitRun['status'] | null;
+  afterStatus: AutonomousRunCockpitRun['status'] | null;
+  errorCode: PetStopLineErrorCode | null;
+}
 
 const PET_BLOCKER_CATEGORY_PRIORITY: PetBlockerCategory[] = [
   'leak',
@@ -272,6 +302,7 @@ export function createPetControlSnapshotFromRunCockpit(
     evidence,
     review,
     reviewHeat: createPetReviewHeat(review),
+    stopLine: createPetStopLineState(activeRun),
   };
 }
 
@@ -280,6 +311,50 @@ export async function getPetControlSnapshot(
 ): Promise<PetControlSnapshot> {
   const cockpit = await getAutonomousRunCockpitSnapshot(now);
   return createPetControlSnapshotFromRunCockpit(cockpit);
+}
+
+export async function applyPetStopLine(now = Date.now()): Promise<PetStopLineResult> {
+  const cockpit = await getAutonomousRunCockpitSnapshot(now);
+  const activeRun = cockpit.activeRun;
+  const stopLine = createPetStopLineState(activeRun);
+  if (!activeRun) {
+    return {
+      applied: false,
+      action: 'none',
+      beforeStatus: null,
+      afterStatus: null,
+      errorCode: 'no_active_run',
+    };
+  }
+  if (!stopLine.available || stopLine.action === 'none') {
+    return {
+      applied: false,
+      action: stopLine.action,
+      beforeStatus: activeRun.status,
+      afterStatus: activeRun.status,
+      errorCode: 'action_unavailable',
+    };
+  }
+
+  const nextStatus = stopLine.action === 'pause' ? 'paused' : 'cancelled';
+  const error = stopLine.action === 'cancel'
+    ? {
+      code: 'autonomous_run_cancelled_by_pet_stop_line',
+      message: 'Autonomous run cancelled by Stop-the-Line control.',
+      phase: 'policy' as const,
+      retryable: false,
+      at: now,
+    }
+    : null;
+  const updated = await transitionAutonomousRun(activeRun.id, nextStatus, error, now);
+  const afterStatus = updated?.status ?? activeRun.status;
+  return {
+    applied: afterStatus === nextStatus,
+    action: stopLine.action,
+    beforeStatus: activeRun.status,
+    afterStatus,
+    errorCode: afterStatus === nextStatus ? null : 'transition_rejected',
+  };
 }
 
 export function mergeRuntimeDoctorReportIntoSnapshot(
@@ -333,6 +408,7 @@ export function mergeRuntimeDoctorReportIntoSnapshot(
       issueCount: next.review.issueCount,
     }),
     reviewHeat: createPetReviewHeat(next.review),
+    stopLine: snapshot.stopLine,
   };
 }
 
@@ -422,6 +498,7 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
       issueCount: next.review.issueCount,
     }),
     reviewHeat: createPetReviewHeat(next.review),
+    stopLine: snapshot.stopLine,
   };
 }
 
@@ -525,6 +602,39 @@ function createPetReviewHeat(review: PetControlSnapshot['review']): PetReviewHea
   };
 }
 
+function createPetStopLineState(activeRun: AutonomousRunCockpitRun | null): PetStopLineState {
+  if (!activeRun) {
+    return {
+      available: false,
+      action: 'none',
+      reason: 'no_run',
+      runStatus: null,
+    };
+  }
+  if (activeRun.status === 'queued' || activeRun.status === 'running') {
+    return {
+      available: true,
+      action: 'pause',
+      reason: 'can_pause',
+      runStatus: activeRun.status,
+    };
+  }
+  if (activeRun.status === 'paused' || activeRun.status === 'blocked') {
+    return {
+      available: true,
+      action: 'cancel',
+      reason: 'can_cancel',
+      runStatus: activeRun.status,
+    };
+  }
+  return {
+    available: false,
+    action: 'none',
+    reason: 'terminal',
+    runStatus: activeRun.status,
+  };
+}
+
 export type PetHandoffNextAction =
   | 'idle'
   | 'make_ready'
@@ -554,6 +664,9 @@ export interface PetHandoffCapsule {
   acceptedEvidenceCount: number;
   reviewHeatLevel: PetReviewHeatLevel;
   reviewHeatReasons: PetReviewHeatReason[];
+  stopLineAvailable: boolean;
+  stopLineAction: PetStopLineAction;
+  stopLineReason: PetStopLineReason;
   evidenceStatus: PetControlSnapshot['evidence']['status'];
   evidenceCount: number;
   latestEvidenceAgeMs: number | null;
@@ -589,6 +702,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const issueCount = review.issueCount;
   const acceptedEvidenceCount = review.acceptedEvidenceCount;
   const reviewHeat = snapshot.reviewHeat;
+  const stopLine = snapshot.stopLine;
   const evidenceStatus = evidence.status;
   const evidenceCount = evidence.count;
   const latestEvidenceAgeMs = evidence.latestAgeMs;
@@ -633,6 +747,9 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     acceptedEvidenceCount,
     reviewHeatLevel: reviewHeat.level,
     reviewHeatReasons: reviewHeat.reasons,
+    stopLineAvailable: stopLine.available,
+    stopLineAction: stopLine.action,
+    stopLineReason: stopLine.reason,
     evidenceStatus,
     evidenceCount,
     latestEvidenceAgeMs,
