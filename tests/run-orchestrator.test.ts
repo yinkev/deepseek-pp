@@ -3,10 +3,12 @@ import {
   appendAutonomousEvidenceRecord,
   appendAutonomousRunStep,
   createAutonomousRun,
+  getAutonomousRunById,
   transitionAutonomousRun,
   upsertAutonomousTargetLease,
 } from '../core/run/store';
 import {
+  executeAutonomousOrchestratorCycle,
   getAutonomousRunCockpitSnapshot,
   initializeAutonomousRunOrchestrator,
 } from '../core/run/orchestrator';
@@ -16,6 +18,172 @@ afterEach(() => {
 });
 
 describe('autonomous run orchestrator startup bridge', () => {
+  it('selects the newest queued run and advances it through the worker cycle', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'queued-cycle' });
+
+    await createAutonomousRun({
+      id: 'older-queued',
+      goal: 'Older queued',
+      proofContract: createProofContract(),
+    }, 100);
+    const newer = await createAutonomousRun({
+      id: 'newer-queued',
+      goal: 'Newer queued',
+      proofContract: createProofContract(),
+    }, 200);
+
+    const executor = vi.fn(async ({ runId }) => {
+      await appendAutonomousRunStep(runId, {
+        phase: 'model_turn',
+        progressScore: 0,
+      }, 310);
+    });
+
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 300 });
+
+    expect(result.selectedRunId).toBe(newer.id);
+    expect(result.workerResult).toMatchObject({
+      runId: newer.id,
+      started: true,
+      finalStatus: 'running',
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+
+    const final = await getAutonomousRunById(newer.id);
+    expect(final?.status).toBe(result.workerResult?.finalStatus);
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: newer.id,
+      status: final?.status,
+    });
+  });
+
+  it('prioritizes a running run over a newer queued run', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'running-priority' });
+
+    const running = await createAutonomousRun({
+      id: 'running-priority',
+      goal: 'Running priority',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(running.id, 'running', null, 110);
+    await createAutonomousRun({
+      id: 'newer-queued',
+      goal: 'Newer queued',
+      proofContract: createProofContract(),
+    }, 500);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 600 });
+
+    expect(result.selectedRunId).toBe(running.id);
+    expect(result.workerResult).toMatchObject({
+      runId: running.id,
+      started: false,
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconciles stale running runs before falling back to queued work', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'stale-fallback' });
+
+    const stale = await createAutonomousRun({
+      id: 'stale-running',
+      goal: 'Stale running',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(stale.id, 'running', null, 110);
+    const queued = await createAutonomousRun({
+      id: 'queued-after-stale',
+      goal: 'Queued after stale',
+      proofContract: createProofContract(),
+    }, 500);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      interruptedThresholdMs: 100,
+      now: 1_000,
+    });
+
+    expect(result.reconciledInterruptedRuns).toBe(1);
+    expect(result.beforeSnapshot.totals).toMatchObject({ blocked: 1, queued: 1, running: 0 });
+    expect(result.selectedRunId).toBe(queued.id);
+    expect(executor).toHaveBeenCalledTimes(1);
+    await expect(getAutonomousRunById(stale.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: 'autonomous_run_interrupted' },
+    });
+  });
+
+  it('returns noop when no runnable run exists and does not resume paused or blocked runs', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'noop-cycle' });
+
+    const paused = await createAutonomousRun({ id: 'paused-run', goal: 'Paused run' }, 100);
+    await transitionAutonomousRun(paused.id, 'running', null, 110);
+    await transitionAutonomousRun(paused.id, 'paused', null, 120);
+    const blocked = await createAutonomousRun({ id: 'blocked-run', goal: 'Blocked run' }, 200);
+    await transitionAutonomousRun(blocked.id, 'running', null, 210);
+    await transitionAutonomousRun(blocked.id, 'blocked', {
+      code: 'needs_review',
+      message: 'Needs review',
+      phase: 'review',
+      retryable: true,
+      at: 220,
+    }, 220);
+    const succeeded = await createAutonomousRun({ id: 'succeeded-run', goal: 'Succeeded run' }, 300);
+    await transitionAutonomousRun(succeeded.id, 'running', null, 310);
+    await transitionAutonomousRun(succeeded.id, 'succeeded', null, 320);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 400 });
+
+    expect(result.selectedRunId).toBeNull();
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(paused.id)).resolves.toMatchObject({ status: 'paused' });
+    await expect(getAutonomousRunById(blocked.id)).resolves.toMatchObject({ status: 'blocked' });
+  });
+
+  it('keeps orchestrator cycle snapshots private', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'cycle-private' });
+
+    const running = await createAutonomousRun({
+      id: 'private-running',
+      goal: 'Private running',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(running.id, 'running', null, 110);
+    const lease = await upsertAutonomousTargetLease({
+      id: 'private-lease',
+      runId: running.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+    }, 120);
+    await appendAutonomousEvidenceRecord(running.id, {
+      id: 'private-evidence',
+      leaseId: lease?.id,
+      kind: 'browser_snapshot',
+      refs: ['snapshot-private-ref'],
+      summary: 'Authorization: Bearer secret-token',
+      metadata: { url: 'https://example.com/private?token=secret' },
+    }, 130);
+
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), { now: 140 });
+
+    expect(result.selectedRunId).toBe(running.id);
+    expect(JSON.stringify(result)).not.toMatch(/snapshot-private-ref|Bearer|secret-token|private\?token/);
+  });
+
   it('reconciles stale running runs on startup and returns a blocked cockpit snapshot', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
@@ -177,6 +345,14 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
   });
 });
+
+function createProofContract() {
+  return {
+    doneCriteria: ['operator cycle continues'],
+    requiredEvidence: [],
+    antiProof: [],
+  };
+}
 
 function createChromeStub() {
   const storage = new Map<string, unknown>();

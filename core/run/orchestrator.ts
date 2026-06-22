@@ -2,8 +2,15 @@ import {
   getAutonomousRunLedgerSnapshot,
   reconcileInterruptedAutonomousRuns,
 } from './store';
+import {
+  executeAutonomousRunCycle,
+  type AutonomousRunActionKind,
+  type AutonomousRunCycleResult,
+  type AutonomousRunExecutor,
+} from './worker';
 import type {
   AutonomousRun,
+  AutonomousRunId,
   AutonomousRunStatus,
   AutonomousRunStep,
   AutonomousRunStorageState,
@@ -40,6 +47,20 @@ export interface AutonomousRunStartupResult {
   snapshot: AutonomousRunCockpitSnapshot;
 }
 
+export interface AutonomousRunOrchestratorCycleOptions {
+  interruptedThresholdMs?: number;
+  now?: number;
+  actionKind?: AutonomousRunActionKind;
+}
+
+export interface AutonomousRunOrchestratorCycleResult {
+  selectedRunId: AutonomousRunId | null;
+  reconciledInterruptedRuns: number;
+  beforeSnapshot: AutonomousRunCockpitSnapshot;
+  workerResult: AutonomousRunCycleResult | null;
+  afterSnapshot: AutonomousRunCockpitSnapshot;
+}
+
 export async function initializeAutonomousRunOrchestrator(
   options: {
     interruptedThresholdMs?: number;
@@ -54,6 +75,32 @@ export async function initializeAutonomousRunOrchestrator(
   return {
     reconciledInterruptedRuns,
     snapshot: await getAutonomousRunCockpitSnapshot(now),
+  };
+}
+
+export async function executeAutonomousOrchestratorCycle(
+  executor: AutonomousRunExecutor,
+  options: AutonomousRunOrchestratorCycleOptions = {},
+): Promise<AutonomousRunOrchestratorCycleResult> {
+  const now = options.now ?? Date.now();
+  const reconciledInterruptedRuns = await reconcileInterruptedAutonomousRuns(
+    options.interruptedThresholdMs ?? AUTONOMOUS_RUN_STARTUP_RECONCILE_THRESHOLD_MS,
+    now,
+  );
+  const beforeSnapshot = await getAutonomousRunCockpitSnapshot(now);
+  const selectedRunId = selectRunnableRun((await getAutonomousRunLedgerSnapshot()).runs)?.id ?? null;
+  const workerResult = selectedRunId
+    ? await executeAutonomousRunCycle(selectedRunId, executor, {
+      now,
+      actionKind: options.actionKind,
+    })
+    : null;
+  return {
+    selectedRunId,
+    reconciledInterruptedRuns,
+    beforeSnapshot,
+    workerResult,
+    afterSnapshot: await getAutonomousRunCockpitSnapshot(now),
   };
 }
 
@@ -91,6 +138,13 @@ function createStatusTotals(runs: readonly AutonomousRun[]): Record<AutonomousRu
 
 function countRuns(runs: readonly AutonomousRun[], status: AutonomousRunStatus): number {
   return runs.filter((run) => run.status === status).length;
+}
+
+function selectRunnableRun(runs: readonly AutonomousRun[]): AutonomousRun | null {
+  const sorted = sortRunsByUpdatedAt(runs);
+  return sorted.find((run) => run.status === 'running') ??
+    sorted.find((run) => run.status === 'queued') ??
+    null;
 }
 
 function getCockpitStatus(totals: Record<AutonomousRunStatus, number>): AutonomousRunCockpitSnapshot['status'] {
