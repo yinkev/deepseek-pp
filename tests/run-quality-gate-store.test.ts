@@ -79,7 +79,7 @@ describe('autonomous quality gate store', () => {
     const stored = await getAutonomousRunQualityGates(run.id);
 
     expect(first).toMatchObject({ id: 'gate-gate-2', seq: 1, createdAt: NOW + 2, status: 'passed' });
-    expect(second).toMatchObject({ id: 'gate-gate-3', seq: 2, createdAt: NOW + 3, status: 'failed' });
+    expect(second).toMatchObject({ id: 'gate-gate-3', seq: 2, createdAt: NOW + 3, status: 'blocked' });
     expect(stored).toEqual([first, second]);
   });
 
@@ -183,6 +183,108 @@ describe('autonomous quality gate store', () => {
     });
     expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
     expect(JSON.stringify(storage.get(AUTONOMOUS_RUN_STORAGE_KEY))).not.toContain('"status":"passed"');
+  });
+
+  it('fails overall passed gates when normalized verification commands fail', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'verification-fail' });
+
+    const run = await createAutonomousRun({ id: 'verification-fail-run', goal: 'Verification failure gate' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        complete: true,
+        coveredCount: 1,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+      },
+      resultStateConsistency: {
+        status: 'consistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      verification: {
+        commands: [
+          { name: 'missing result command', summary: 'missing command result must fail the gate' },
+        ],
+      },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    } as any, NOW + 2);
+
+    expect(gate).toMatchObject({
+      status: 'failed',
+      verification: {
+        commands: [
+          { name: 'missing result command', result: 'failed' },
+        ],
+      },
+    });
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
+  });
+
+  it('redacts quality-gate secrets before truncating text', async () => {
+    const { chromeStub, storage } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'truncate' });
+
+    const run = await createAutonomousRun({ id: 'truncate-run', goal: 'Truncation privacy gate' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+    const longPrefix = 'x'.repeat(115);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        complete: true,
+        coveredCount: 1,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+      },
+      resultStateConsistency: {
+        status: 'consistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      verification: {
+        commands: [
+          {
+            name: `${longPrefix} ghp_abcdefghijklmnopqrstuvwxyz1234567890 run-boundary12345`,
+            result: 'passed',
+            summary: `${'y'.repeat(250)} token=boundary-token-123 api_key=boundary-key-456 github_pat_1234567890abcdefghijklmnopqrstuvwxyz`,
+          },
+        ],
+      },
+      commit: {
+        hash: 'abcdef1',
+        message: `${'z'.repeat(155)} run-boundary12345 token=boundary-token-123`,
+      },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    }, NOW + 2);
+
+    const returnedJson = JSON.stringify(gate);
+    const durableJson = JSON.stringify(storage.get(AUTONOMOUS_RUN_STORAGE_KEY));
+
+    expect(returnedJson).not.toMatch(/ghp_|github_pat_|abcdefghijklmnopqrstuvwxyz1234567890|run-boundary12345|boundary-token-123|boundary-key-456/);
+    expect(durableJson).not.toMatch(/ghp_|github_pat_|abcdefghijklmnopqrstuvwxyz1234567890|run-boundary12345|boundary-token-123|boundary-key-456/);
+    expect(returnedJson).toContain('[redacted:secret]');
+    expect(durableJson).toContain('[redacted:secret]');
+    expect(returnedJson).toContain('[redacted:id]');
+    expect(durableJson).toContain('[redacted:id]');
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
   });
 
   it('returns null and writes no gate for missing or terminal runs', async () => {

@@ -832,18 +832,29 @@ function normalizeQualityGateRecord(raw: unknown): AutonomousQualityGateRecord |
   const runId = normalizeId(record.runId);
   const createdAt = normalizeTimestamp(record.createdAt);
   if (!id || !runId || createdAt === null) return null;
+  const contractCoverage = normalizeQualityGateContractCoverage(record.contractCoverage);
+  const resultStateConsistency = normalizeQualityGateResultStateConsistency(record.resultStateConsistency);
+  const selfReview = normalizeQualityGateSelfReview(record.selfReview);
+  const verification = normalizeQualityGateVerification(record.verification);
+  const commit = normalizeQualityGateCommit(record.commit);
+  const independentReview = normalizeQualityGateIndependentReview(record.independentReview);
   return {
     id,
     runId,
     seq: normalizePositiveInteger(record.seq) ?? 1,
     createdAt,
-    status: normalizeQualityGateStatus(record.status),
-    contractCoverage: normalizeQualityGateContractCoverage(record.contractCoverage),
-    resultStateConsistency: normalizeQualityGateResultStateConsistency(record.resultStateConsistency),
-    selfReview: normalizeQualityGateSelfReview(record.selfReview),
-    verification: normalizeQualityGateVerification(record.verification),
-    commit: normalizeQualityGateCommit(record.commit),
-    independentReview: normalizeQualityGateIndependentReview(record.independentReview),
+    status: normalizeQualityGateStatus(record.status, {
+      contractCoverage,
+      resultStateConsistency,
+      verification,
+      independentReview,
+    }),
+    contractCoverage,
+    resultStateConsistency,
+    selfReview,
+    verification,
+    commit,
+    independentReview,
   };
 }
 
@@ -931,7 +942,22 @@ function nextQualityGateSeq(records: readonly AutonomousQualityGateRecord[], run
     .reduce((max, record) => Math.max(max, record.seq), 0) + 1;
 }
 
-function normalizeQualityGateStatus(value: unknown): AutonomousQualityGateRecord['status'] {
+function normalizeQualityGateStatus(
+  value: unknown,
+  summary: Pick<AutonomousQualityGateRecord, 'contractCoverage' | 'resultStateConsistency' | 'verification' | 'independentReview'>,
+): AutonomousQualityGateRecord['status'] {
+  if (summary.independentReview.status === 'blocked' || summary.independentReview.blockingIssueCount > 0) return 'blocked';
+  if (
+    summary.contractCoverage.conflictCount > 0 ||
+    summary.resultStateConsistency.blockingIssueCount > 0 ||
+    summary.verification.commands.some((command) => command.result === 'failed') ||
+    summary.independentReview.status === 'failed'
+  ) {
+    return 'failed';
+  }
+  if (!summary.contractCoverage.complete || summary.contractCoverage.gapCount > 0 || summary.resultStateConsistency.ok === false) {
+    return value === 'blocked' ? 'blocked' : 'warning';
+  }
   if (value === 'failed' || value === 'blocked' || value === 'warning') return value;
   return value === 'passed' ? 'passed' : 'failed';
 }
@@ -956,7 +982,7 @@ function normalizeQualityGateGrade(value: unknown): AutonomousQualityGateGrade |
 }
 
 function normalizeQualityGateText(value: unknown, maxLength: number): string | null {
-  const text = normalizeText(value, maxLength);
+  const text = normalizeQualityGateRawText(value, maxLength);
   if (!text) return null;
   return redactQualityGateDurableIds(
     redactQualityGateOpaqueTokens(
@@ -967,6 +993,46 @@ function normalizeQualityGateText(value: unknown, maxLength: number): string | n
   )
     .replace(/\b(?:rawOutput|rawTranscript|transcriptText|reviewProse)\b/gi, '[redacted:raw]');
 }
+
+function normalizeQualityGateRawText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const redacted = redactRunStoreText(
+    redactQualityGateDurableIds(
+      redactQualityGateOpaqueTokens(
+        redactQualityGateCommonSecrets(
+          redactQualityGateLooseSecrets(value.trim()),
+        ),
+      ),
+    ),
+  ) ?? '';
+  const truncated = truncateQualityGateText(redacted, maxLength);
+  return truncated || null;
+}
+
+function truncateQualityGateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const truncated = value.slice(0, maxLength);
+  const lastBracket = truncated.lastIndexOf('[');
+  if (lastBracket >= 0) {
+    const suffix = truncated.slice(lastBracket);
+    const sourceSuffix = value.slice(lastBracket);
+    for (const marker of QUALITY_GATE_REDACTION_MARKERS) {
+      if (marker.startsWith(suffix) && sourceSuffix.startsWith(marker)) {
+        return `${truncated.slice(0, lastBracket)}${marker}`;
+      }
+    }
+  }
+  return truncated;
+}
+
+const QUALITY_GATE_REDACTION_MARKERS = [
+  '[redacted:secret]',
+  '[redacted:id]',
+  '[redacted:url]',
+  '[redacted:raw]',
+  '[redacted:media]',
+  '[redacted:vision-ref]',
+] as const;
 
 function redactQualityGateLooseSecrets(value: string): string {
   return value.replace(/\b[A-Z0-9_]*SECRET[A-Z0-9_]*\b/gi, (match, offset: number, full: string) => {
