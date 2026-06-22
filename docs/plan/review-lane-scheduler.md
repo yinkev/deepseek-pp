@@ -28,8 +28,8 @@ Add a pure review-lane dispatch planner for autonomous runs. This slice does not
 
 Decision order:
 
-1. Halt on blocking gate signals (`status: blocked`, `canProceed: false`, P1/P2, or block recommendation).
-2. Idle if the run is not `queued` or `running`.
+1. Idle if the run is not `queued` or `running`, ignoring stale gate fields.
+2. Halt on blocking gate signals (`status: blocked`, `canProceed: false`, P1/P2, or block recommendation).
 3. Hold if active lanes already meet `maxParallel`.
 4. Select roles by priority: implementer, reviewer, safety, UX, oracle.
 
