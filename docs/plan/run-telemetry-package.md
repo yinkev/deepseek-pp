@@ -7,17 +7,20 @@ Create a pure run telemetry exporter that turns the durable autonomous run ledge
 | Requirement | Coverage |
 | --- | --- |
 | Missing runs return `null`. | `returns null for a missing run` |
-| Existing runs produce stable `.runs/<runId>/...` file paths. | `creates stable repo-visible telemetry files for one run` |
+| Existing runs produce stable `.runs/<runHandle>/...` file paths. | `creates stable repo-visible telemetry files for one run` |
+| Omitted `generatedAt` is deterministic. | `uses deterministic generatedAt when omitted` |
 | Manifest exposes safe status, counts, policy modes/counts, budgets, and proof-contract counts. | `creates stable repo-visible telemetry files for one run` |
 | Steps export only IDs, phases, status, timestamps, progress score, counts, and safe error codes. | `creates stable repo-visible telemetry files for one run` |
+| Exported run, step, evidence, and target lease IDs are package-local opaque handles, not raw durable IDs. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
 | Evidence export omits summaries, refs, metadata, URLs, and raw target content. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
 | Checkpoint export omits provider IDs and resumable summary text while preserving presence/count signals. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
 | Verification and commit metadata are sanitized and bounded. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
+| Verification summary cannot pass when durable run/step state records failure, even if command metadata says success. | `fails verification summary when durable run state failed despite passing commands` |
 | Root paths are normalized so package file paths remain under the requested telemetry root. | `normalizes root paths and keeps package paths inside .runs-style directories` |
 
 ## Mechanism
 
-`createAutonomousRunTelemetryPackage(state, runId, options)` returns:
+`createAutonomousRunTelemetryPackage(state, runId, options)` returns deterministic package-local telemetry. The raw durable `runId` is used only to select the run; exported identifiers are opaque handles such as `run-1`, `step-1`, `evidence-1`, and `target-lease-1`.
 
 - `manifest.json`
 - `checkpoint.json`
@@ -29,6 +32,8 @@ Create a pure run telemetry exporter that turns the durable autonomous run ledge
 - `report.md`
 
 The function is pure. It does not call Chrome, storage, filesystem, terminal, network, or pet reducers.
+
+When `generatedAt` is omitted, the exporter uses `run.updatedAt` instead of wall-clock time.
 
 ## Privacy
 
@@ -45,7 +50,9 @@ It exports only safe IDs, counts, booleans, timestamps, status enums, and bounde
 
 ## Adversarial Probe
 
-The privacy probe constructs a state containing bearer tokens, cookies, signed URLs, file refs, data URLs, private target metadata, evidence refs, proof text, and checkpoint text. The source JSON must contain those strings; the telemetry package JSON must omit them.
+The privacy probe constructs a state containing bearer tokens, cookies, signed URLs, secret-bearing durable IDs, file refs, data URLs, private target metadata, evidence refs, proof text, and checkpoint text. The source JSON must contain those strings; the telemetry package JSON must omit them.
+
+The false-positive success probe constructs a failed durable run with a passing command exit. The command row can still record the raw command exit result, but the package-level verification summary must remain `failed`.
 
 ## Scope Caveat
 
@@ -69,9 +76,12 @@ git diff --check
 
 Grade: A.
 
-Iteration applied before commit:
+Review-driven iteration applied before this follow-up commit:
 
 - verification `passed` is derived from the normalized exit code, so a caller cannot mark a nonzero exit as passed;
-- sensitive assignment redaction is case-insensitive and covers token variants before verification/commit strings are exported.
+- sensitive assignment redaction is case-insensitive and covers token variants before verification/commit strings are exported;
+- exported IDs are package-local handles, so secret-bearing durable IDs cannot leak into files, paths, or reports;
+- package-level verification summary reconciles command results with durable run/step failure state;
+- omitted `generatedAt` is deterministic and uses `run.updatedAt`.
 
 The slice is pure, metadata-only, and moves the autonomous loop toward repo-visible source-of-truth without touching Chrome/runtime files.

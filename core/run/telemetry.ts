@@ -9,7 +9,7 @@ import type {
 } from './types';
 
 const GENERIC_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]+/gi;
-const SENSITIVE_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|signed[_-]?path)\s*[:=]\s*[^"'\s,;}]+/gi;
+const SENSITIVE_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*[:=]\s*[^"'\s,;}]+/gi;
 
 export interface AutonomousRunTelemetryVerification {
   command: string;
@@ -41,6 +41,32 @@ export interface AutonomousRunTelemetryPackage {
   runId: AutonomousRunId;
   rootDir: string;
   files: AutonomousRunTelemetryFile[];
+}
+
+type TelemetryVerificationStatus = 'not-recorded' | 'passed' | 'failed' | 'conflicted';
+
+interface TelemetryHandles {
+  runId: string;
+  stepIds: Map<string, string>;
+  evidenceIds: Map<string, string>;
+  targetLeaseIds: Map<string, string>;
+}
+
+interface SafeVerificationCommand {
+  command: string;
+  exitCode: number;
+  durationMs: number | null;
+  passed: boolean;
+}
+
+interface VerificationSummary {
+  status: TelemetryVerificationStatus;
+  commandStatus: Exclude<TelemetryVerificationStatus, 'conflicted'>;
+  durableStatus: AutonomousRun['status'];
+  durableSucceeded: boolean;
+  durableFailurePresent: boolean;
+  failedStepCount: number;
+  runErrorPresent: boolean;
 }
 
 interface RunTelemetryManifest {
@@ -79,6 +105,7 @@ interface RunTelemetryManifest {
     deniedToolCount: number;
   };
   budgets: AutonomousRun['budgets'];
+  verification: VerificationSummary;
 }
 
 interface SafeError {
@@ -98,32 +125,37 @@ export function createAutonomousRunTelemetryPackage(
   const run = state.runs.find((item) => item.id === runId);
   if (!run) return null;
 
-  const generatedAt = normalizeTimestamp(options.generatedAt) ?? Date.now();
-  const rootDir = normalizeRootDir(options.rootDir, run.id);
+  const generatedAt = normalizeTimestamp(options.generatedAt) ??
+    normalizeTimestamp(run.updatedAt) ??
+    normalizeTimestamp(run.createdAt) ??
+    0;
   const steps = state.steps
     .filter((step) => step.runId === run.id)
-    .sort((a, b) => a.seq - b.seq);
+    .sort(compareSteps);
   const evidence = state.evidence
     .filter((record) => record.runId === run.id)
-    .sort((a, b) => a.capturedAt - b.capturedAt);
+    .sort(compareEvidence);
   const targetLeases = state.targetLeases
     .filter((lease) => lease.runId === run.id)
-    .sort((a, b) => a.acquiredAt - b.acquiredAt);
+    .sort(compareTargetLeases);
+  const handles = createTelemetryHandles(steps, evidence, targetLeases);
+  const rootDir = normalizeRootDir(options.rootDir, handles.runId);
   const verification = sanitizeVerification(options.verification);
-  const commits = sanitizeCommits(options.commits);
+  const verificationSummary = createVerificationSummary(run, steps, verification);
+  const commits = sanitizeCommits(options.commits, handles);
 
   return {
-    runId: run.id,
+    runId: handles.runId,
     rootDir,
     files: [
-      jsonFile(rootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, verification, commits, generatedAt)),
-      jsonFile(rootDir, 'checkpoint.json', createCheckpointExport(run)),
-      ndjsonFile(rootDir, 'steps.ndjson', steps.map(toStepExport)),
-      ndjsonFile(rootDir, 'evidence.ndjson', evidence.map(toEvidenceExport)),
-      ndjsonFile(rootDir, 'target-leases.ndjson', targetLeases.map(toTargetLeaseExport)),
-      jsonFile(rootDir, 'verification.json', { schemaVersion: 1, generatedAt, commands: verification }),
+      jsonFile(rootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, verification, commits, generatedAt, handles, verificationSummary)),
+      jsonFile(rootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
+      ndjsonFile(rootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
+      ndjsonFile(rootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
+      ndjsonFile(rootDir, 'target-leases.ndjson', targetLeases.map((lease) => toTargetLeaseExport(lease, handles))),
+      jsonFile(rootDir, 'verification.json', { schemaVersion: 1, generatedAt, summary: verificationSummary, commands: verification }),
       ndjsonFile(rootDir, 'commits.ndjson', commits),
-      markdownFile(rootDir, 'report.md', createReport(run, steps, evidence, targetLeases, verification, commits, generatedAt)),
+      markdownFile(rootDir, 'report.md', createReport(run, steps, evidence, targetLeases, commits, generatedAt, handles, verificationSummary)),
     ],
   };
 }
@@ -133,15 +165,17 @@ function createManifest(
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
-  verification: readonly ReturnType<typeof sanitizeVerification>[number][],
+  verification: readonly SafeVerificationCommand[],
   commits: readonly ReturnType<typeof sanitizeCommits>[number][],
   generatedAt: number,
+  handles: TelemetryHandles,
+  verificationSummary: VerificationSummary,
 ): RunTelemetryManifest {
   return {
     schemaVersion: 1,
     generatedAt,
     run: {
-      id: run.id,
+      id: handles.runId,
       status: run.status,
       mode: run.mode,
       modelAdapter: run.modelAdapter,
@@ -173,14 +207,15 @@ function createManifest(
       deniedToolCount: run.policy.deniedTools.length,
     },
     budgets: run.budgets,
+    verification: verificationSummary,
   };
 }
 
-function createCheckpointExport(run: AutonomousRun) {
+function createCheckpointExport(run: AutonomousRun, handles: TelemetryHandles) {
   return {
     schemaVersion: 1,
-    runId: run.id,
-    latestStepId: run.checkpoint.latestStepId,
+    runId: handles.runId,
+    latestStepId: run.checkpoint.latestStepId ? handles.stepIds.get(run.checkpoint.latestStepId) ?? null : null,
     providerConversationPresent: run.checkpoint.providerConversationId !== null,
     parentMessagePresent: run.checkpoint.parentMessageId !== null,
     resumableSummaryCharCount: run.checkpoint.resumableSummary.length,
@@ -188,10 +223,10 @@ function createCheckpointExport(run: AutonomousRun) {
   };
 }
 
-function toStepExport(step: AutonomousRunStep) {
+function toStepExport(step: AutonomousRunStep, handles: TelemetryHandles) {
   return {
-    id: step.id,
-    runId: step.runId,
+    id: handles.stepIds.get(step.id) ?? 'step-unknown',
+    runId: handles.runId,
     seq: step.seq,
     phase: step.phase,
     status: step.status,
@@ -207,10 +242,10 @@ function toStepExport(step: AutonomousRunStep) {
   };
 }
 
-function toEvidenceExport(record: AutonomousEvidenceRecord) {
+function toEvidenceExport(record: AutonomousEvidenceRecord, handles: TelemetryHandles) {
   return {
-    id: record.id,
-    runId: record.runId,
+    id: handles.evidenceIds.get(record.id) ?? 'evidence-unknown',
+    runId: handles.runId,
     leasePresent: record.leaseId !== null,
     kind: record.kind,
     freshness: record.freshness,
@@ -229,10 +264,10 @@ function toEvidenceExport(record: AutonomousEvidenceRecord) {
   };
 }
 
-function toTargetLeaseExport(lease: AutonomousTargetLease) {
+function toTargetLeaseExport(lease: AutonomousTargetLease, handles: TelemetryHandles) {
   return {
-    id: lease.id,
-    runId: lease.runId,
+    id: handles.targetLeaseIds.get(lease.id) ?? 'target-lease-unknown',
+    runId: handles.runId,
     status: lease.status,
     labelPresent: lease.label.length > 0,
     tabPresent: Number.isFinite(lease.tabId),
@@ -251,22 +286,20 @@ function createReport(
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
-  verification: readonly ReturnType<typeof sanitizeVerification>[number][],
   commits: readonly ReturnType<typeof sanitizeCommits>[number][],
   generatedAt: number,
+  handles: TelemetryHandles,
+  verificationSummary: VerificationSummary,
 ): string {
-  const verificationPassed = verification.length === 0
-    ? 'not-recorded'
-    : verification.every((item) => item.passed) ? 'passed' : 'failed';
   return [
-    `# Autonomous Run ${run.id}`,
+    `# Autonomous Run ${handles.runId}`,
     '',
     `- generatedAt: ${generatedAt}`,
     `- status: ${run.status}`,
     `- steps: ${steps.length}`,
     `- evidence: ${evidence.length}`,
     `- targetLeases: ${targetLeases.length}`,
-    `- verification: ${verificationPassed}`,
+    `- verification: ${verificationSummary.status}`,
     `- commits: ${commits.length}`,
     '',
   ].join('\n');
@@ -281,7 +314,7 @@ function toSafeError(error: NonNullable<AutonomousRun['error']>): SafeError {
   };
 }
 
-function sanitizeVerification(input: readonly AutonomousRunTelemetryVerification[] | null | undefined) {
+function sanitizeVerification(input: readonly AutonomousRunTelemetryVerification[] | null | undefined): SafeVerificationCommand[] {
   if (!Array.isArray(input)) return [];
   return input.map((item) => {
     const exitCode = normalizeInteger(item.exitCode) ?? 1;
@@ -294,13 +327,46 @@ function sanitizeVerification(input: readonly AutonomousRunTelemetryVerification
   });
 }
 
-function sanitizeCommits(input: readonly AutonomousRunTelemetryCommit[] | null | undefined) {
+function createVerificationSummary(
+  run: AutonomousRun,
+  steps: readonly AutonomousRunStep[],
+  commands: readonly SafeVerificationCommand[],
+): VerificationSummary {
+  const failedStepCount = steps.filter((step) => step.status === 'failed' || step.error !== null).length;
+  const runErrorPresent = run.error !== null;
+  const durableFailurePresent = runErrorPresent ||
+    failedStepCount > 0 ||
+    run.status === 'failed' ||
+    run.status === 'blocked' ||
+    run.status === 'cancelled';
+  const durableSucceeded = run.status === 'succeeded' && !durableFailurePresent;
+  const commandStatus = commands.length === 0
+    ? 'not-recorded'
+    : commands.every((item) => item.passed) ? 'passed' : 'failed';
+  const status = commandStatus === 'not-recorded'
+    ? 'not-recorded'
+    : commandStatus === 'failed' || durableFailurePresent
+      ? 'failed'
+      : durableSucceeded ? 'passed' : 'conflicted';
+
+  return {
+    status,
+    commandStatus,
+    durableStatus: run.status,
+    durableSucceeded,
+    durableFailurePresent,
+    failedStepCount,
+    runErrorPresent,
+  };
+}
+
+function sanitizeCommits(input: readonly AutonomousRunTelemetryCommit[] | null | undefined, handles: TelemetryHandles) {
   if (!Array.isArray(input)) return [];
   return input.map((item) => ({
     sha: sanitizeToken(item.sha, 80),
     message: sanitizeOptionalString(item.message ?? '', 200) ?? '',
     filesChanged: normalizeNonNegativeInteger(item.filesChanged),
-    linkedStepId: sanitizeOptionalString(item.linkedStepId ?? '', 120) || null,
+    linkedStepId: typeof item.linkedStepId === 'string' ? handles.stepIds.get(item.linkedStepId) ?? null : null,
   }));
 }
 
@@ -325,9 +391,29 @@ function markdownFile(rootDir: string, name: string, content: string): Autonomou
   };
 }
 
-function normalizeRootDir(input: string | null | undefined, runId: string): string {
-  const base = sanitizePathSegment(input || '.runs');
-  return `${base}/${sanitizePathSegment(runId)}`;
+function createTelemetryHandles(
+  steps: readonly AutonomousRunStep[],
+  evidence: readonly AutonomousEvidenceRecord[],
+  targetLeases: readonly AutonomousTargetLease[],
+): TelemetryHandles {
+  return {
+    runId: 'run-1',
+    stepIds: createHandleMap(steps.map((step) => step.id), 'step'),
+    evidenceIds: createHandleMap(evidence.map((record) => record.id), 'evidence'),
+    targetLeaseIds: createHandleMap(targetLeases.map((lease) => lease.id), 'target-lease'),
+  };
+}
+
+function createHandleMap(ids: readonly string[], prefix: string): Map<string, string> {
+  const output = new Map<string, string>();
+  ids.forEach((id, index) => output.set(id, `${prefix}-${index + 1}`));
+  return output;
+}
+
+function normalizeRootDir(input: string | null | undefined, runHandle: string): string {
+  const safeBase = sanitizeOptionalString(input || '.runs', 240) ?? '.runs';
+  const base = sanitizePathSegment(safeBase);
+  return `${base}/${sanitizePathSegment(runHandle)}`;
 }
 
 function sanitizePathSegment(value: string): string {
@@ -351,6 +437,22 @@ function sanitizeOptionalString(value: string | null | undefined, maxLength: num
 
 function sanitizeToken(value: string, maxLength: number): string {
   return (sanitizeOptionalString(value, maxLength) ?? '').replace(/[^A-Za-z0-9._:-]/g, '_');
+}
+
+function compareSteps(a: AutonomousRunStep, b: AutonomousRunStep): number {
+  return compareNumber(a.seq, b.seq) || compareNumber(a.startedAt, b.startedAt) || a.id.localeCompare(b.id);
+}
+
+function compareEvidence(a: AutonomousEvidenceRecord, b: AutonomousEvidenceRecord): number {
+  return compareNumber(a.capturedAt, b.capturedAt) || a.id.localeCompare(b.id);
+}
+
+function compareTargetLeases(a: AutonomousTargetLease, b: AutonomousTargetLease): number {
+  return compareNumber(a.acquiredAt, b.acquiredAt) || a.id.localeCompare(b.id);
+}
+
+function compareNumber(a: number, b: number): number {
+  return a === b ? 0 : a < b ? -1 : 1;
 }
 
 function normalizeTimestamp(value: unknown): number | null {

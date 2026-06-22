@@ -57,8 +57,20 @@ describe('autonomous run telemetry package', () => {
         allowedToolCount: 1,
         deniedToolCount: 1,
       },
+      verification: {
+        status: 'conflicted',
+        commandStatus: 'passed',
+        durableStatus: 'running',
+        durableSucceeded: false,
+        durableFailurePresent: false,
+      },
     });
 
+    expect(readJson(pkg, 'verification.json').summary).toMatchObject({
+      status: 'conflicted',
+      commandStatus: 'passed',
+      durableStatus: 'running',
+    });
     expect(readNdjson(pkg, 'steps.ndjson')).toEqual([
       expect.objectContaining({
         id: 'step-1',
@@ -87,22 +99,30 @@ describe('autonomous run telemetry package', () => {
   });
 
   it('omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets', () => {
+    const secretRunId = 'https://example.com/run?token=secret';
     const state = createState({
+      runId: secretRunId,
+      step1Id: 'step-1-token=secret',
+      step2Id: 'step-2-token=secret',
+      evidenceId: 'evidence-token=secret',
+      leaseId: 'lease-token=secret',
       secretGoal: 'Use Authorization: Bearer secret and https://example.com/private?token=secret',
       secretSummary: 'Resume with Cookie: sid=secret and file-sensitive123',
       secretEvidenceSummary: 'Fetched https://example.com/private?token=secret with data:image/png;base64,AAAA',
     });
-    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+    const pkg = createAutonomousRunTelemetryPackage(state, secretRunId, {
       generatedAt: 500,
+      rootDir: '../https://example.com/root?token=secret//telemetry',
       verification: [{ command: 'curl https://example.com/private?token=secret -H "Authorization: Bearer secret"', exitCode: 1, passed: true }],
-      commits: [{ sha: 'bad sha with spaces', message: 'Fix Token=secret Authorization: Bearer secret', filesChanged: -3 }],
+      commits: [{ sha: 'bad sha with spaces', message: 'Fix Token=secret Authorization: Bearer secret', filesChanged: -3, linkedStepId: 'step-2-token=secret' }],
     });
 
     const source = JSON.stringify(state);
-    expect(source).toMatch(/Bearer secret|token=secret|Cookie|file-sensitive123|data:image/);
+    expect(source).toMatch(/Bearer secret|token=secret|Cookie|file-sensitive123|data:image|step-2-token/);
 
     const output = JSON.stringify(pkg);
-    expect(output).not.toMatch(/Bearer secret|token=secret|Cookie|sid=secret|file-sensitive123|data:image|private\?token|Authorization/i);
+    expect(pkg?.runId).toBe('run-1');
+    expect(output).not.toMatch(/Bearer secret|token=secret|Cookie|sid=secret|file-sensitive123|data:image|private\?token|Authorization|step-2-token|lease-token|evidence-token|root\?token/i);
     expect(output).not.toContain('Use [redacted:secret]');
     expect(output).not.toContain('Resume with');
     expect(output).not.toContain('Fetched');
@@ -122,6 +142,46 @@ describe('autonomous run telemetry package', () => {
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('summary');
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('refs');
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('metadata');
+  });
+
+  it('uses deterministic generatedAt when omitted', () => {
+    const state = createState();
+
+    const first = createAutonomousRunTelemetryPackage(state, 'run-1');
+    const second = createAutonomousRunTelemetryPackage(state, 'run-1');
+
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(readJson(first, 'manifest.json').generatedAt).toBe(state.runs[0].updatedAt);
+  });
+
+  it('fails verification summary when durable run state failed despite passing commands', () => {
+    const error = createRunError('Token=secret failed verification');
+    const state = createState({
+      status: 'failed',
+      runError: error,
+      step2Status: 'failed',
+      step2Error: error,
+    });
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'verification.json').summary).toMatchObject({
+      status: 'failed',
+      commandStatus: 'passed',
+      durableStatus: 'failed',
+      durableSucceeded: false,
+      durableFailurePresent: true,
+      failedStepCount: 1,
+      runErrorPresent: true,
+    });
+    expect(readJson(pkg, 'verification.json').commands[0]).toMatchObject({
+      exitCode: 0,
+      passed: true,
+    });
+    expect(readJson(pkg, 'manifest.json').run.error.code).not.toMatch(/Token=secret/i);
+    expect(pkg?.files.find((file) => file.path.endsWith('/report.md'))?.content).toContain('- verification: failed');
   });
 
   it('normalizes root paths and keeps package paths inside .runs-style directories', () => {
@@ -148,20 +208,34 @@ function readNdjson(pkg: ReturnType<typeof createAutonomousRunTelemetryPackage>,
 }
 
 function createState(overrides: {
+  runId?: string;
+  step1Id?: string;
+  step2Id?: string;
+  leaseId?: string;
+  evidenceId?: string;
   secretGoal?: string;
   secretSummary?: string;
   secretEvidenceSummary?: string;
+  status?: AutonomousRunStorageState['runs'][number]['status'];
+  runError?: AutonomousRunStorageState['runs'][number]['error'];
+  step2Status?: AutonomousRunStorageState['steps'][number]['status'];
+  step2Error?: AutonomousRunStorageState['steps'][number]['error'];
 } = {}): AutonomousRunStorageState {
+  const runId = overrides.runId ?? 'run-1';
+  const step1Id = overrides.step1Id ?? 'step-1';
+  const step2Id = overrides.step2Id ?? 'step-2';
+  const leaseId = overrides.leaseId ?? 'lease-1';
+  const evidenceId = overrides.evidenceId ?? 'evidence-1';
   return {
     version: 1,
     runs: [
       {
-        id: 'run-1',
+        id: runId,
         goal: overrides.secretGoal ?? 'Build telemetry',
         mode: 'unattended',
-        status: 'running',
+        status: overrides.status ?? 'running',
         modelAdapter: 'deepseek_web',
-        targetLeaseId: 'lease-1',
+        targetLeaseId: leaseId,
         budgets: {
           maxWallMs: 1000,
           maxModelTurns: 10,
@@ -187,11 +261,11 @@ function createState(overrides: {
         checkpoint: {
           providerConversationId: 'provider-secret-id',
           parentMessageId: 'parent-secret-id',
-          latestStepId: 'step-2',
+          latestStepId: step2Id,
           resumableSummary: overrides.secretSummary ?? 'Resume after tests.',
           unresolvedQuestions: ['Need final review'],
         },
-        error: null,
+        error: overrides.runError ?? null,
         createdAt: 100,
         startedAt: 110,
         completedAt: null,
@@ -200,24 +274,24 @@ function createState(overrides: {
     ],
     steps: [
       {
-        id: 'step-2',
-        runId: 'run-1',
+        id: step2Id,
+        runId,
         seq: 2,
         phase: 'verification',
-        status: 'succeeded',
+        status: overrides.step2Status ?? 'succeeded',
         modelTurnId: 'model-turn-secret',
         toolCallIds: ['tool-call-secret'],
         observationRefs: ['observation-secret'],
-        evidenceRefs: ['evidence-1'],
+        evidenceRefs: [evidenceId],
         progressScore: 1,
         proofDelta: ['tests pass with secret token'],
-        error: null,
+        error: overrides.step2Error ?? null,
         startedAt: 180,
         endedAt: 190,
       },
       {
-        id: 'step-1',
-        runId: 'run-1',
+        id: step1Id,
+        runId,
         seq: 1,
         phase: 'plan',
         status: 'succeeded',
@@ -234,8 +308,8 @@ function createState(overrides: {
     ],
     targetLeases: [
       {
-        id: 'lease-1',
-        runId: 'run-1',
+        id: leaseId,
+        runId,
         status: 'active',
         label: 'Target secret title',
         tabId: 123,
@@ -250,9 +324,9 @@ function createState(overrides: {
     ],
     evidence: [
       {
-        id: 'evidence-1',
-        runId: 'run-1',
-        leaseId: 'lease-1',
+        id: evidenceId,
+        runId,
+        leaseId,
         kind: 'shell_output',
         freshness: 'fresh',
         capturedAt: 170,
@@ -272,5 +346,15 @@ function createState(overrides: {
         },
       },
     ],
+  };
+}
+
+function createRunError(code: string): NonNullable<AutonomousRunStorageState['runs'][number]['error']> {
+  return {
+    code,
+    message: 'Raw error message must not be exported',
+    phase: 'verification',
+    retryable: false,
+    at: 250,
   };
 }
