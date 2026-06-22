@@ -10,8 +10,11 @@ import {
 import {
   createPetControlSnapshotFromRunCockpit,
   getPetControlSnapshot,
+  mergeRuntimeDoctorReportIntoSnapshot,
+  type PetControlSnapshot,
 } from '../core/pet/control';
 import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
+import type { RuntimeDoctorReport } from '../core/chat/runtime-doctor';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -40,6 +43,158 @@ describe('pet control snapshot', () => {
       doneCriteria: ['test done'],
       requiredEvidence: [],
       antiProof: [],
+    };
+  }
+
+  function createBasePetSnapshot(overrides: {
+    generatedAt?: number;
+    readiness?: Partial<PetControlSnapshot['readiness']>;
+    run?: Partial<PetControlSnapshot['run']>;
+    target?: Partial<PetControlSnapshot['target']>;
+    safety?: Partial<PetControlSnapshot['safety']>;
+  } = {}): PetControlSnapshot {
+    return {
+      schemaVersion: 1,
+      generatedAt: overrides.generatedAt ?? 100,
+      readiness: {
+        status: 'ready',
+        blockers: [],
+        preparing: false,
+        ...overrides.readiness,
+      },
+      run: {
+        active: false,
+        label: null,
+        phase: 'idle',
+        nextAction: null,
+        ...overrides.run,
+      },
+      target: {
+        locked: false,
+        label: null,
+        stale: false,
+        ...overrides.target,
+      },
+      safety: {
+        leakIssueCount: 0,
+        highRiskArmed: false,
+        ...overrides.safety,
+      },
+    };
+  }
+
+  function createRuntimeDoctorReport(overrides: {
+    generatedAt?: number;
+    readiness?: Partial<RuntimeDoctorReport['readiness']>;
+    targetLock?: Partial<RuntimeDoctorReport['browserControl']['targetLock']>;
+    leakSentryIssueCount?: number;
+    leakQuarantineIssueCount?: number;
+    leakQuarantineGroups?: RuntimeDoctorReport['leakQuarantine']['groups'];
+    storageIssues?: RuntimeDoctorReport['storage']['issues'];
+    failureExplanations?: RuntimeDoctorReport['failureExplanations'];
+    debugSuggestions?: RuntimeDoctorReport['debugDistiller']['suggestions'];
+    retryableFailure?: RuntimeDoctorReport['automation']['retryableFailure'];
+  } = {}): RuntimeDoctorReport {
+    const leakSentryIssueCount = overrides.leakSentryIssueCount ?? 0;
+    const leakQuarantineIssueCount = overrides.leakQuarantineIssueCount ?? 0;
+    const storageIssues = overrides.storageIssues ?? [];
+
+    return {
+      ok: true,
+      generatedAt: overrides.generatedAt ?? 200,
+      chatEnabled: true,
+      chatBusy: false,
+      provider: 'deepseek-web',
+      hasApiKey: false,
+      hasWebAuth: true,
+      webAuthRejected: false,
+      deepSeekTabCount: 1,
+      sidepanelSession: {
+        active: false,
+        source: 'none',
+        parentMessageId: null,
+      },
+      personalConvenience: {
+        enabled: true,
+        autoReadyCheckBeforeRun: true,
+        autoRefreshWebAuth: true,
+        sameSessionStrategy: 'current',
+        visualMonitorDefault: false,
+        reducedConfirmations: false,
+        lastSessionRemembered: false,
+        lastSessionSource: null,
+        lastSessionUpdatedAt: null,
+      },
+      vision: {
+        maxImagesPerTurn: 0,
+        rawImagesStoredDurably: false,
+      },
+      browserControl: {
+        enabled: true,
+        targetSelected: false,
+        targetLock: {
+          enabled: false,
+          label: null,
+          origin: null,
+          updatedAt: null,
+          ...overrides.targetLock,
+        },
+        visualCaptureAllowed: true,
+        actVerifyEnabled: true,
+        evidencePacksEnabled: true,
+        debugDistillerEnabled: false,
+        monitorReady: true,
+      },
+      contentScripts: {
+        checked: true,
+        totalTabs: 1,
+        healthyTabs: 1,
+        staleTabs: 0,
+        staleTabIds: [],
+      },
+      automation: {
+        maxAttempts: 3,
+        retryableFailure: overrides.retryableFailure ?? null,
+      },
+      autopilot: {
+        inFlightSource: null,
+        latestRun: null,
+        recentRuns: [],
+      },
+      humanEval: {
+        grade: 'A',
+        checks: [],
+      },
+      leakSentry: {
+        ok: leakSentryIssueCount === 0,
+        grade: leakSentryIssueCount === 0 ? 'A' : 'F',
+        issueCount: leakSentryIssueCount,
+        checkedAreas: ['local'],
+      },
+      leakQuarantine: {
+        issueCount: leakQuarantineIssueCount,
+        cleanupEligibleCount: 0,
+        groups: overrides.leakQuarantineGroups ?? [],
+      },
+      debugDistiller: {
+        enabled: false,
+        suggestions: overrides.debugSuggestions ?? [],
+      },
+      readiness: {
+        ready: true,
+        status: 'ready',
+        blockers: [],
+        lastPreparedAt: null,
+        preparing: false,
+        targetStatus: null,
+        noLeak: true,
+        ...overrides.readiness,
+      },
+      failureExplanations: overrides.failureExplanations ?? [],
+      storage: {
+        ok: storageIssues.length === 0,
+        issues: storageIssues,
+      },
     };
   }
 
@@ -303,5 +458,218 @@ describe('pet control snapshot', () => {
     const pet = await getPetControlSnapshot(1000);
     expect(pet.run.phase).toBe('idle');
     expect(pet.run.nextAction).toBeNull();
+  });
+
+  it('merges ready Runtime Doctor status into safe pet fields while preserving run and timestamp', () => {
+    const base = createBasePetSnapshot({
+      generatedAt: 123,
+      run: {
+        active: true,
+        label: 'Continue autonomous run',
+        phase: 'working',
+        nextAction: 'Continue autonomous cycle',
+      },
+      readiness: { status: 'blocked', blockers: ['run_blocked'] },
+    });
+    const report = createRuntimeDoctorReport({
+      generatedAt: 999,
+      readiness: { status: 'ready', targetStatus: 'ready' },
+      targetLock: {
+        enabled: true,
+        label: 'secret target title',
+        origin: 'https://secret-target.example.com?token=TARGET_SECRET',
+      },
+      leakSentryIssueCount: 1,
+      leakQuarantineIssueCount: 4,
+      storageIssues: [{
+        area: 'local',
+        path: 'deepseekCachedClientHeaders',
+        reason: 'deepseek_web_headers',
+      }],
+    });
+
+    const pet = mergeRuntimeDoctorReportIntoSnapshot(base, report);
+
+    expect(pet.generatedAt).toBe(123);
+    expect(pet.run).toBe(base.run);
+    expect(pet.readiness).toEqual({ status: 'ready', blockers: [], preparing: false });
+    expect(pet.target).toEqual({ locked: true, label: 'Target locked', stale: false });
+    expect(pet.safety).toEqual({ leakIssueCount: 4, highRiskArmed: false });
+  });
+
+  it('merges blocked Runtime Doctor status and preparing flag into readiness', () => {
+    const base = createBasePetSnapshot();
+    const report = createRuntimeDoctorReport({
+      readiness: {
+        ready: false,
+        status: 'needs_attention',
+        blockers: ['browser_control_disabled', 'browser_target_not_controllable'],
+        preparing: true,
+        targetStatus: 'not_controllable',
+      },
+    });
+
+    const pet = mergeRuntimeDoctorReportIntoSnapshot(base, report);
+
+    expect(pet.readiness).toEqual({
+      status: 'needs_attention',
+      blockers: ['browser_control_disabled', 'browser_target_not_controllable'],
+      preparing: true,
+    });
+    expect(pet.target).toEqual({ locked: false, label: 'Target stale', stale: true });
+  });
+
+  it('maps Runtime Doctor target status to generic missing/stale labels only', () => {
+    const base = createBasePetSnapshot();
+    const targetCases: Array<[
+      RuntimeDoctorReport['readiness']['targetStatus'],
+      PetControlSnapshot['target'],
+    ]> = [
+      ['missing', { locked: false, label: 'Target missing', stale: true }],
+      ['unsupported', { locked: false, label: 'Target stale', stale: true }],
+      ['not_controllable', { locked: false, label: 'Target stale', stale: true }],
+      ['selected_active', { locked: false, label: null, stale: false }],
+    ];
+
+    for (const [targetStatus, expected] of targetCases) {
+      const report = createRuntimeDoctorReport({
+        readiness: { targetStatus },
+        targetLock: {
+          enabled: false,
+          label: 'raw target title',
+          origin: 'https://raw-target.example.com',
+        },
+      });
+      expect(mergeRuntimeDoctorReportIntoSnapshot(base, report).target).toEqual(expected);
+    }
+  });
+
+  it('does not fabricate run state from Runtime Doctor report', () => {
+    const base = createBasePetSnapshot({
+      run: {
+        active: true,
+        label: 'Base run label',
+        phase: 'reviewing',
+        nextAction: 'Continue review',
+      },
+    });
+    const report = createRuntimeDoctorReport({
+      readiness: {
+        ready: false,
+        status: 'blocked',
+        blockers: ['storage_leak'],
+        targetStatus: 'unsupported',
+      },
+    });
+
+    const pet = mergeRuntimeDoctorReportIntoSnapshot(base, report);
+
+    expect(pet.run).toBe(base.run);
+    expect(pet.run).toEqual({
+      active: true,
+      label: 'Base run label',
+      phase: 'reviewing',
+      nextAction: 'Continue review',
+    });
+  });
+
+  it('privacy probe: source Runtime Doctor report secrets never appear in merged pet snapshot', () => {
+    const base = createBasePetSnapshot({
+      run: {
+        active: true,
+        label: 'Allowed base run label',
+        phase: 'working',
+        nextAction: 'Continue autonomous cycle',
+      },
+    });
+    const targetSecret = 'https://doctor-target.example.com?token=TARGET_SECRET_123';
+    const failureSecret = 'DOCTOR_FAILURE_SECRET_456';
+    const suggestionSecret = 'DOCTOR_SUGGESTION_SECRET_789';
+    const storageSecret = 'doctor.storage.path.SECRET_abc';
+    const automationSecret = 'AUTOMATION_FAILURE_SECRET_xyz';
+    const sampleSecret = 'doctor.sample.SECRET_path';
+    const report = createRuntimeDoctorReport({
+      readiness: {
+        ready: false,
+        status: 'blocked',
+        blockers: ['storage_leak'],
+        targetStatus: 'unsupported',
+      },
+      targetLock: {
+        enabled: true,
+        label: `raw label ${targetSecret}`,
+        origin: targetSecret,
+      },
+      leakSentryIssueCount: 1,
+      leakQuarantineIssueCount: 2,
+      storageIssues: [{
+        area: 'local',
+        path: storageSecret,
+        reason: 'storage_read_failed',
+      }],
+      leakQuarantineGroups: [{
+        area: 'local',
+        reason: 'storage_read_failed',
+        count: 1,
+        samplePaths: [sampleSecret],
+        cleanupEligible: false,
+      }],
+      failureExplanations: [{
+        blocker: 'storage_leak',
+        severity: 'blocked',
+        cause: failureSecret,
+        action: `Open doctor ${failureSecret}`,
+      }],
+      debugSuggestions: [{
+        id: 'secret-suggestion',
+        kind: 'memory',
+        title: `Suggestion ${suggestionSecret}`,
+        preview: suggestionSecret,
+        reason: `Because ${suggestionSecret}`,
+      }],
+      retryableFailure: {
+        automationId: 'auto-secret',
+        automationName: `Automation ${automationSecret}`,
+        runId: null,
+        code: automationSecret,
+        message: `Message ${automationSecret}`,
+        phase: 'runtime-doctor',
+        at: 123,
+      },
+    });
+
+    const reportJson = JSON.stringify(report);
+    expect(reportJson).toContain('TARGET_SECRET_123');
+    expect(reportJson).toContain(failureSecret);
+    expect(reportJson).toContain(suggestionSecret);
+    expect(reportJson).toContain(storageSecret);
+    expect(reportJson).toContain(automationSecret);
+    expect(reportJson).toContain(sampleSecret);
+
+    const pet = mergeRuntimeDoctorReportIntoSnapshot(base, report);
+    const petJson = JSON.stringify(pet);
+
+    expect(pet).toMatchObject({
+      readiness: { status: 'blocked', blockers: ['storage_leak'], preparing: false },
+      target: { locked: true, label: 'Target stale', stale: true },
+      safety: { leakIssueCount: 2, highRiskArmed: false },
+    });
+    expect(pet.run).toBe(base.run);
+    expect(petJson).not.toContain('TARGET_SECRET_123');
+    expect(petJson).not.toContain(failureSecret);
+    expect(petJson).not.toContain(suggestionSecret);
+    expect(petJson).not.toContain(storageSecret);
+    expect(petJson).not.toContain(automationSecret);
+    expect(petJson).not.toContain(sampleSecret);
+    expect(petJson).toContain('Allowed base run label');
+  });
+
+  it('returns the original pet snapshot when Runtime Doctor report is unavailable', () => {
+    const base = createBasePetSnapshot({
+      target: { locked: true, label: 'Target locked', stale: false },
+    });
+
+    expect(mergeRuntimeDoctorReportIntoSnapshot(base, null)).toBe(base);
+    expect(mergeRuntimeDoctorReportIntoSnapshot(base, undefined)).toBe(base);
   });
 });

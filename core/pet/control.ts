@@ -2,6 +2,7 @@ import {
   type AutonomousRunCockpitSnapshot,
   getAutonomousRunCockpitSnapshot,
 } from '../run/orchestrator';
+import type { RuntimeDoctorReport } from '../chat/runtime-doctor';
 
 export interface PetControlSnapshot {
   schemaVersion: 1;
@@ -167,4 +168,60 @@ export async function getPetControlSnapshot(
 ): Promise<PetControlSnapshot> {
   const cockpit = await getAutonomousRunCockpitSnapshot(now);
   return createPetControlSnapshotFromRunCockpit(cockpit);
+}
+
+export function mergeRuntimeDoctorReportIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  report: RuntimeDoctorReport | null | undefined,
+): PetControlSnapshot {
+  if (!report) {
+    return snapshot;
+  }
+
+  const targetStatus = report.readiness.targetStatus;
+  const targetLocked = report.browserControl.targetLock.enabled;
+  const targetStale = targetStatus
+    ? isRuntimeDoctorTargetStale(targetStatus)
+    : snapshot.target.stale;
+
+  return {
+    ...snapshot,
+    readiness: {
+      status: report.readiness.status,
+      blockers: report.readiness.blockers,
+      preparing: report.readiness.preparing,
+    },
+    target: {
+      locked: targetLocked,
+      label: getRuntimeDoctorTargetLabel(targetStatus, targetLocked, targetStale),
+      stale: targetStale,
+    },
+    safety: {
+      leakIssueCount: Math.max(
+        report.leakSentry.issueCount,
+        report.leakQuarantine.issueCount,
+        report.storage.issues.length,
+      ),
+      highRiskArmed: false,
+    },
+  };
+}
+
+function isRuntimeDoctorTargetStale(
+  targetStatus: NonNullable<RuntimeDoctorReport['readiness']['targetStatus']>,
+): boolean {
+  return targetStatus === 'missing' ||
+    targetStatus === 'unsupported' ||
+    targetStatus === 'not_controllable';
+}
+
+function getRuntimeDoctorTargetLabel(
+  targetStatus: RuntimeDoctorReport['readiness']['targetStatus'],
+  locked: boolean,
+  stale: boolean,
+): string | null {
+  if (targetStatus === 'missing') return 'Target missing';
+  if (stale) return 'Target stale';
+  if (locked) return 'Target locked';
+  return null;
 }
