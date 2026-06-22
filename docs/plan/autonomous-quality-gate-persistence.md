@@ -38,7 +38,7 @@ The store ignores raw reviewer prose, raw output, raw transcripts, evidence ids 
 
 ## Adversarial probe design
 
-The focused privacy test deliberately passes untyped extra fields that resemble future mistakes: raw source run ids, evidence ids, reviewer prose, transcript text, raw output, bearer-like strings, GitHub tokens, assignment-style `token=` / `api_key=` secrets, signed/private URLs, cookie-bearing commit messages, and arbitrary `TOPSECRET_*` tokens. It also places GitHub tokens, durable ids, and assignment-style secrets at truncation boundaries so redaction must happen before length clipping and cannot leak partial raw prefixes or token values.
+The focused privacy test deliberately passes untyped extra fields that resemble future mistakes: raw source run ids, evidence ids, model turn ids, tool call ids, observation refs, reviewer prose, transcript text, raw output, bearer-like strings, GitHub tokens, assignment-style `token=` / `api_key=` secrets, signed/private URLs, cookie-bearing commit messages, and arbitrary `TOPSECRET_*` tokens. It also places GitHub tokens, durable ids, and assignment-style secrets at truncation boundaries so redaction must happen before length clipping and cannot leak partial raw prefixes, secret key names, or token values.
 
 The expected durable output keeps only bounded aggregate fields and redacted short command/commit summaries. The exact append result is then compared against durable retrieval to prevent false-positive success claims where the returned object differs from storage.
 

@@ -116,9 +116,9 @@ describe('autonomous quality gate store', () => {
       verification: {
         commands: [
           {
-            name: 'curl https://private.example.com?token=secret-token run-durable12345 evidence-proof98765 ghp_abcdefghijklmnopqrstuvwxyz github_pat_1234567890abcdefghijklmnopqrstuvwxyz',
+            name: 'github_pat_1234567890abcdefghijklmnopqrstuvwxyz token=early-token api_key=early-key curl https://private.example.com?token=secret-token run-durable12345 evidence-proof98765 ghp_abcdefghijklmnopqrstuvwxyz model-turn-abc12345 tool-call-def67890 observation-ref-ghi12345',
             result: 'passed',
-            summary: 'Authorization: Bearer sk-live-secret1234567890 api_key=plain-key-123 token=plain-token-456 Cookie: sid=secret-session transcript TOPSECRET_TRANSCRIPT_TEXT ev-evidence123456',
+            summary: 'Authorization: Bearer sk-live-secret1234567890 api_key=plain-key-123 token=plain-token-456 Cookie: sid=secret-session transcript TOPSECRET_TRANSCRIPT_TEXT ev-evidence123456 observation-raw98765',
             rawOutput: 'TOPSECRET_RAW_OUTPUT',
           } as any,
         ],
@@ -140,8 +140,8 @@ describe('autonomous quality gate store', () => {
 
     expect(gate).not.toBeNull();
     expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
-    expect(returnedJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT|run-durable12345|evidence-proof98765|ev-evidence123456|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_1234567890abcdefghijklmnopqrstuvwxyz|plain-key-123|plain-token-456/);
-    expect(durableJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT|run-durable12345|evidence-proof98765|ev-evidence123456|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_1234567890abcdefghijklmnopqrstuvwxyz|plain-key-123|plain-token-456/);
+    expect(returnedJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT|run-durable12345|evidence-proof98765|ev-evidence123456|observation-raw98765|model-turn-abc12345|tool-call-def67890|observation-ref-ghi12345|ghp_|github_pat_|token=|api_key=|plain-key-123|plain-token-456|early-token|early-key|Authorization|Bearer|Cookie/);
+    expect(durableJson).not.toMatch(/RAW_RUN_ID_SECRET|RAW_EVIDENCE_ID_SECRET|TOPSECRET|sk-live-secret|secret-token|secret-session|private\.example|signed\.example|raw reviewer prose|RAW_OUTPUT|run-durable12345|evidence-proof98765|ev-evidence123456|observation-raw98765|model-turn-abc12345|tool-call-def67890|observation-ref-ghi12345|ghp_|github_pat_|token=|api_key=|plain-key-123|plain-token-456|early-token|early-key|Authorization|Bearer|Cookie/);
     expect(returnedJson).toContain('[redacted:secret]');
     expect(durableJson).toContain('[redacted:secret]');
     expect(returnedJson).toContain('[redacted:id]');

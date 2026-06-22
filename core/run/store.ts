@@ -1049,20 +1049,20 @@ function redactQualityGateOpaqueTokens(value: string): string {
 
 function redactQualityGateCommonSecrets(value: string): string {
   return value
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted:secret]')
-    .replace(/\b(Authorization|Cookie|Set-Cookie)\s*[:=]\s*[^\n]+/gi, '$1: [redacted:secret]')
-    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g, 'sk-[redacted:secret]')
-    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}/g, 'gh[redacted:secret]')
-    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, 'github_pat_[redacted:secret]')
-    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, 'AIza[redacted:secret]')
-    .replace(/([?&](?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token|token|secret)=)[^&\s]+/gi, '$1[redacted:secret]')
-    .replace(/\b((?:x[-_])?(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)\s*:)\s*[^\s,;]+/gi, '$1 [redacted:secret]')
-    .replace(/\b((?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)=)[^&\s]+/gi, '$1[redacted:secret]');
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted:secret]')
+    .replace(/\b(?:Authorization|Cookie|Set-Cookie)\s*[:=]\s*[^\n]+/gi, '[redacted:secret]')
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}/g, '[redacted:secret]')
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}/g, '[redacted:secret]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, '[redacted:secret]')
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, '[redacted:secret]')
+    .replace(/[?&](?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token|token|secret)=[^&\s]+/gi, '[redacted:secret]')
+    .replace(/\b(?:x[-_])?(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)\s*:\s*[^\s,;]+/gi, '[redacted:secret]')
+    .replace(/\b(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)=[^&\s]+/gi, '[redacted:secret]');
 }
 
 function redactQualityGateDurableIds(value: string): string {
   return value.replace(
-    /\b(?:run|step|evidence|target-lease|lease|gate|ev)-(?=[A-Za-z0-9_.:-]{8,}\b)(?=[A-Za-z0-9_.:-]*\d)[A-Za-z0-9_.:-]+\b/g,
+    /\b(?:run|step|evidence|target-lease|lease|gate|ev|model-turn|modelTurn|tool-call|toolCall|observation|observation-ref|observationRef|obs)-(?=[A-Za-z0-9_.:-]{8,}\b)(?=[A-Za-z0-9_.:-]*\d)[A-Za-z0-9_.:-]+\b/g,
     '[redacted:id]',
   );
 }
