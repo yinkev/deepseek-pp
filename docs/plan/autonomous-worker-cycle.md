@@ -61,7 +61,7 @@ Worker chooses the simpler repo-fit: executor performs its work (including appen
 Tests prove:
 - noop for missing/terminal/paused/blocked (no executor).
 - queued transitions to running before work.
-- policy non-allow (deny or manual_review, including with non-empty valid proofContract) records review step, explicitly transitions to blocked durably (before iteration review), skips executor, calls apply (no-op, applied=false), returns action=block + finalStatus=blocked.
+- policy deny/manual appends review step, transitions durable run to blocked, then iteration apply noops/applied=false because run is no longer running (including with non-empty valid proofContract); returns action=block + finalStatus=blocked.
 - allow calls executor, applies iteration.
 - executor throw records failed step, applies, surfaces in result.
 - blocked runs (including policy-blocked) are not auto-resumed on subsequent calls.
