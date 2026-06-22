@@ -35,11 +35,11 @@ describe('autonomous run orchestrator startup bridge', () => {
       proofContract: createProofContract(),
     }, 200);
 
-    const executor = vi.fn(async ({ runId }) => {
+    const executor = vi.fn(async ({ runId, now: execNow }) => {
       await appendAutonomousRunStep(runId, {
         phase: 'model_turn',
         progressScore: 0,
-      }, 310);
+      }, execNow);
     });
 
     const result = await executeAutonomousOrchestratorCycle(executor, { now: 300 });
@@ -50,14 +50,18 @@ describe('autonomous run orchestrator startup bridge', () => {
       started: true,
       finalStatus: 'running',
     });
+    expect(executor).toHaveBeenCalledWith({ runId: newer.id, now: 300 });
     expect(executor).toHaveBeenCalledTimes(1);
 
     const final = await getAutonomousRunById(newer.id);
     expect(final?.status).toBe(result.workerResult?.finalStatus);
+    expect(final?.updatedAt).toBe(300);
     expect(result.afterSnapshot.activeRun).toMatchObject({
       id: newer.id,
       status: final?.status,
+      updatedAt: 300,
     });
+    expect(result.afterSnapshot.generatedAt).toBe(300);
   });
 
   it('prioritizes a running run over a newer queued run', async () => {
@@ -86,6 +90,49 @@ describe('autonomous run orchestrator startup bridge', () => {
       started: false,
     });
     expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects the newest updatedAt running run among multiple running runs', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'multi-running-select' });
+
+    const older = await createAutonomousRun({
+      id: 'older-running',
+      goal: 'Older running',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(older.id, 'running', null, 110);
+
+    const newer = await createAutonomousRun({
+      id: 'newer-running',
+      goal: 'Newer running',
+      proofContract: createProofContract(),
+    }, 200);
+    await transitionAutonomousRun(newer.id, 'running', null, 250);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 300 });
+
+    expect(result.selectedRunId).toBe(newer.id);
+    expect(result.workerResult).toMatchObject({
+      runId: newer.id,
+      started: false,
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+
+    // adversarial result/state probe: selected result and durable agree
+    const final = await getAutonomousRunById(newer.id);
+    expect(final?.status).toBe(result.workerResult?.finalStatus ?? 'running');
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: newer.id,
+      status: final?.status,
+      updatedAt: 300,
+    });
+    // confirm the older running was not selected
+    const olderFinal = await getAutonomousRunById(older.id);
+    expect(olderFinal?.status).toBe('running');
+    expect(result.selectedRunId).not.toBe(older.id);
   });
 
   it('forwards actionKind to the selected worker cycle', async () => {

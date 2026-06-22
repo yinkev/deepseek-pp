@@ -40,9 +40,11 @@ Tests prove:
 
 - newest queued run selection and worker-cycle delegation;
 - running runs are prioritized over newer queued runs;
+- newest `updatedAt` running run is selected among multiple concurrent running runs;
 - stale running runs are reconciled before queued fallback selection;
 - paused, blocked, and terminal runs are not resumed;
 - no-runnable cycles do not call the executor;
 - selected cycles forward `actionKind` to the worker gate;
+- provided `now` is forwarded into the selected worker cycle (executor receives it; durable `updatedAt` and afterSnapshot agree with provided `now`);
 - cycle result snapshots preserve cockpit privacy;
 - selected result status agrees with durable stored state.
