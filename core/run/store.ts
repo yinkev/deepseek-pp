@@ -1,0 +1,670 @@
+import { redactDurableToolString } from '../tool/redaction';
+import {
+  isTerminalRunStatus,
+  shouldTransitionAutonomousRun,
+} from './kernel';
+import type {
+  AutonomousRun,
+  AutonomousRunBudgets,
+  AutonomousRunCheckpoint,
+  AutonomousRunCreateInput,
+  AutonomousRunError,
+  AutonomousRunId,
+  AutonomousRunPolicy,
+  AutonomousRunProofContract,
+  AutonomousRunStep,
+  AutonomousRunStepCreateInput,
+  AutonomousRunStorageState,
+  AutonomousRunUpdateInput,
+} from './types';
+
+export const AUTONOMOUS_RUN_STORAGE_KEY = 'deepseek_pp_autonomous_runs_v1';
+
+const STORAGE_VERSION = 1;
+const MAX_RUNS = 100;
+const MAX_STEPS = 1_000;
+const MAX_TEXT_LENGTH = 2_000;
+const MAX_LIST_ITEMS = 32;
+const MAX_DETAILS_DEPTH = 3;
+const MAX_DETAILS_KEYS = 16;
+const MAX_DETAILS_ARRAY_ITEMS = 16;
+const MAX_DETAILS_STRING_LENGTH = 512;
+const MAX_DETAILS_JSON_LENGTH = 4_000;
+const MUTATION_LOCK_NAME = `${AUTONOMOUS_RUN_STORAGE_KEY}:mutation`;
+
+export const DEFAULT_AUTONOMOUS_RUN_BUDGETS: AutonomousRunBudgets = {
+  maxWallMs: 2 * 60 * 60 * 1000,
+  maxModelTurns: 80,
+  maxToolCalls: 200,
+  maxConsecutiveNoProgress: 4,
+  maxSameErrorRepeats: 2,
+  maxPromptBytesPerTurn: 48_000,
+  maxObservationBytesPerTurn: 12_000,
+};
+
+export const DEFAULT_AUTONOMOUS_RUN_POLICY: AutonomousRunPolicy = {
+  approvalMode: 'auto_low_risk',
+  allowedTools: [],
+  deniedTools: [],
+  browserMutationRequiresTargetLock: true,
+  persistMemory: 'propose',
+  shellMode: 'allowlisted',
+};
+
+export const DEFAULT_AUTONOMOUS_PROOF_CONTRACT: AutonomousRunProofContract = {
+  doneCriteria: [],
+  requiredEvidence: [],
+  antiProof: [
+    'Do not claim completion from model text alone.',
+    'Do not claim browser actions succeeded without post-action evidence.',
+  ],
+};
+
+const EMPTY_STATE: AutonomousRunStorageState = {
+  version: STORAGE_VERSION,
+  runs: [],
+  steps: [],
+};
+
+let storageMutationQueue: Promise<unknown> = Promise.resolve();
+
+export async function createAutonomousRun(
+  input: AutonomousRunCreateInput,
+  now = Date.now(),
+): Promise<AutonomousRun> {
+  const id = normalizeId(input.id) ?? createId('run');
+  const run: AutonomousRun = {
+    id,
+    goal: normalizeText(input.goal, MAX_TEXT_LENGTH) || 'Untitled autonomous run',
+    mode: input.mode === 'interactive' ? 'interactive' : 'unattended',
+    status: 'queued',
+    modelAdapter: input.modelAdapter === 'deepseek_api' ? 'deepseek_api' : 'deepseek_web',
+    targetLeaseId: normalizeId(input.targetLeaseId),
+    budgets: normalizeBudgets(input.budgets),
+    policy: normalizePolicy(input.policy),
+    proofContract: normalizeProofContract(input.proofContract),
+    checkpoint: normalizeCheckpoint(input.checkpoint),
+    error: null,
+    createdAt: now,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: now,
+  };
+  return mutateAutonomousRunState((state) => ({
+    state: {
+      ...state,
+      runs: pruneRuns([run, ...state.runs.filter((stored) => stored.id !== run.id)]),
+      steps: state.steps.filter((step) => step.runId !== run.id),
+    },
+    result: run,
+  }));
+}
+
+export async function getAutonomousRuns(limit = MAX_RUNS): Promise<AutonomousRun[]> {
+  const state = await readAutonomousRunState();
+  return [...state.runs]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, limit);
+}
+
+export async function getAutonomousRunById(id: AutonomousRunId): Promise<AutonomousRun | null> {
+  const state = await readAutonomousRunState();
+  return state.runs.find((run) => run.id === id) ?? null;
+}
+
+export async function getAutonomousRunSteps(runId: AutonomousRunId): Promise<AutonomousRunStep[]> {
+  const state = await readAutonomousRunState();
+  return state.steps
+    .filter((step) => step.runId === runId)
+    .sort((a, b) => a.seq - b.seq);
+}
+
+export async function updateAutonomousRun(
+  id: AutonomousRunId,
+  patch: AutonomousRunUpdateInput,
+  now = Date.now(),
+): Promise<AutonomousRun | null> {
+  return mutateAutonomousRunState((state) => {
+    let updated: AutonomousRun | null = null;
+    const runs = state.runs.map((run) => {
+      if (run.id !== id) return run;
+      if (isTerminalRunStatus(run.status)) {
+        updated = run;
+        return run;
+      }
+      const status = patch.status && shouldTransitionAutonomousRun(run.status, patch.status)
+        ? patch.status
+        : run.status;
+      updated = normalizeRun({
+        ...run,
+        ...patch,
+        status,
+        budgets: normalizeBudgets({ ...run.budgets, ...patch.budgets }),
+        policy: normalizePolicy({ ...run.policy, ...patch.policy }),
+        proofContract: normalizeProofContract({ ...run.proofContract, ...patch.proofContract }),
+        checkpoint: normalizeCheckpoint({ ...run.checkpoint, ...patch.checkpoint }),
+        error: 'error' in patch ? normalizeError(patch.error) : run.error,
+        updatedAt: now,
+      });
+      return updated ?? run;
+    });
+    return {
+      state: updated ? { ...state, runs: pruneRuns(runs) } : state,
+      result: updated,
+      write: updated !== null,
+    };
+  });
+}
+
+export async function transitionAutonomousRun(
+  id: AutonomousRunId,
+  status: AutonomousRun['status'],
+  error: AutonomousRunError | null = null,
+  now = Date.now(),
+): Promise<AutonomousRun | null> {
+  return mutateAutonomousRunState((state) => {
+    let updated: AutonomousRun | null = null;
+    const runs = state.runs.map((run) => {
+      if (run.id !== id) return run;
+      if (isTerminalRunStatus(run.status)) {
+        updated = run;
+        return run;
+      }
+      if (!shouldTransitionAutonomousRun(run.status, status)) {
+        updated = run;
+        return run;
+      }
+      updated = normalizeRun({
+        ...run,
+        status,
+        error,
+        startedAt: run.startedAt ?? (status === 'running' ? now : null),
+        completedAt: isTerminalRunStatus(status) ? now : run.completedAt,
+        updatedAt: now,
+      });
+      return updated ?? run;
+    });
+    return {
+      state: updated ? { ...state, runs: pruneRuns(runs) } : state,
+      result: updated,
+      write: updated !== null,
+    };
+  });
+}
+
+export async function appendAutonomousRunStep(
+  runId: AutonomousRunId,
+  input: AutonomousRunStepCreateInput,
+  now = Date.now(),
+): Promise<AutonomousRunStep | null> {
+  return mutateAutonomousRunState((state) => {
+    const run = state.runs.find((item) => item.id === runId);
+    if (!run || isTerminalRunStatus(run.status)) {
+      return { state, result: null, write: false };
+    }
+    const seq = state.steps.filter((stepItem) => stepItem.runId === runId).reduce((max, stepItem) => Math.max(max, stepItem.seq), 0) + 1;
+    const step = normalizeStep({
+      id: input.id ?? createId('step'),
+      runId,
+      seq,
+      phase: input.phase,
+      status: input.status ?? 'succeeded',
+      modelTurnId: input.modelTurnId ?? null,
+      toolCallIds: input.toolCallIds ?? [],
+      observationRefs: input.observationRefs ?? [],
+      evidenceRefs: input.evidenceRefs ?? [],
+      progressScore: input.progressScore ?? 0,
+      proofDelta: input.proofDelta ?? [],
+      error: input.error ?? null,
+      startedAt: input.startedAt ?? now,
+      endedAt: input.endedAt ?? now,
+    });
+    if (!step) return { state, result: null, write: false };
+    const runs = state.runs.map((item) => item.id === runId
+      ? {
+        ...item,
+        checkpoint: {
+          ...item.checkpoint,
+          latestStepId: step.id,
+        },
+        updatedAt: now,
+      }
+      : item);
+    return {
+      state: {
+        runs: pruneRuns(runs),
+        steps: pruneSteps([step, ...state.steps.filter((stored) => stored.id !== step.id)]),
+        version: STORAGE_VERSION,
+      },
+      result: step,
+    };
+  });
+}
+
+export async function updateAutonomousRunCheckpoint(
+  id: AutonomousRunId,
+  checkpoint: Partial<AutonomousRunCheckpoint>,
+  now = Date.now(),
+): Promise<AutonomousRun | null> {
+  return mutateAutonomousRunState((state) => {
+    let updated: AutonomousRun | null = null;
+    const runs = state.runs.map((run) => {
+      if (run.id !== id) return run;
+      if (isTerminalRunStatus(run.status)) {
+        updated = run;
+        return run;
+      }
+      updated = normalizeRun({
+        ...run,
+        checkpoint: normalizeCheckpoint({
+          ...run.checkpoint,
+          ...checkpoint,
+        }),
+        updatedAt: now,
+      });
+      return updated ?? run;
+    });
+    return {
+      state: updated ? { ...state, runs: pruneRuns(runs) } : state,
+      result: updated,
+      write: updated !== null,
+    };
+  });
+}
+
+export async function reconcileInterruptedAutonomousRuns(
+  thresholdMs: number,
+  now = Date.now(),
+): Promise<number> {
+  return mutateAutonomousRunState((state) => {
+    let count = 0;
+    const runs = state.runs.map((run) => {
+      if (run.status !== 'running' || run.startedAt == null) return run;
+      if (now - run.updatedAt < thresholdMs) return run;
+      count += 1;
+      return normalizeRun({
+        ...run,
+        status: 'blocked',
+        error: {
+          code: 'autonomous_run_interrupted',
+          message: 'Service worker stopped while the autonomous run was active.',
+          phase: 'storage',
+          retryable: true,
+          at: now,
+          details: { startedAt: run.startedAt, lastUpdatedAt: run.updatedAt },
+        },
+        updatedAt: now,
+      }) ?? run;
+    });
+    return {
+      state: count > 0 ? { ...state, runs } : state,
+      result: count,
+      write: count > 0,
+    };
+  });
+}
+
+async function readAutonomousRunState(): Promise<AutonomousRunStorageState> {
+  const data = await chrome.storage.local.get(AUTONOMOUS_RUN_STORAGE_KEY) as Record<string, unknown>;
+  return normalizeState(data[AUTONOMOUS_RUN_STORAGE_KEY]);
+}
+
+async function writeAutonomousRunState(state: AutonomousRunStorageState): Promise<void> {
+  await chrome.storage.local.set({
+    [AUTONOMOUS_RUN_STORAGE_KEY]: {
+      version: STORAGE_VERSION,
+      runs: pruneRuns(state.runs),
+      steps: pruneSteps(state.steps),
+    },
+  });
+}
+
+interface AutonomousRunStateMutation<T> {
+  state: AutonomousRunStorageState;
+  result: T;
+  write?: boolean;
+}
+
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+interface NavigatorWithLocks {
+  locks?: LockManagerLike;
+}
+
+async function mutateAutonomousRunState<T>(
+  mutator: (state: AutonomousRunStorageState) => AutonomousRunStateMutation<T> | Promise<AutonomousRunStateMutation<T>>,
+): Promise<T> {
+  return withStorageMutationLock(async () => {
+    const state = await readAutonomousRunState();
+    const mutation = await mutator(state);
+    if (mutation.write !== false) await writeAutonomousRunState(mutation.state);
+    return mutation.result;
+  });
+}
+
+async function withStorageMutationLock<T>(callback: () => Promise<T>): Promise<T> {
+  const locks = getLockManager();
+  if (locks) return locks.request(MUTATION_LOCK_NAME, callback);
+  return enqueueStorageMutation(callback);
+}
+
+function enqueueStorageMutation<T>(callback: () => Promise<T>): Promise<T> {
+  const operation = storageMutationQueue.catch(() => undefined).then(callback);
+  storageMutationQueue = operation.catch(() => undefined);
+  return operation;
+}
+
+function getLockManager(): LockManagerLike | null {
+  const maybeNavigator = typeof globalThis.navigator === 'object'
+    ? globalThis.navigator as NavigatorWithLocks
+    : null;
+  return maybeNavigator?.locks && typeof maybeNavigator.locks.request === 'function'
+    ? maybeNavigator.locks
+    : null;
+}
+
+function normalizeState(raw: unknown): AutonomousRunStorageState {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...EMPTY_STATE };
+  const value = raw as Partial<AutonomousRunStorageState>;
+  return {
+    version: STORAGE_VERSION,
+    runs: Array.isArray(value.runs)
+      ? value.runs.map(normalizeRun).filter((item): item is AutonomousRun => item !== null)
+      : [],
+    steps: Array.isArray(value.steps)
+      ? value.steps.map(normalizeStep).filter((item): item is AutonomousRunStep => item !== null)
+      : [],
+  };
+}
+
+function normalizeRun(raw: unknown): AutonomousRun | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const run = raw as Partial<AutonomousRun>;
+  const id = normalizeId(run.id);
+  const createdAt = normalizeTimestamp(run.createdAt);
+  const updatedAt = normalizeTimestamp(run.updatedAt);
+  if (!id || createdAt === null || updatedAt === null) return null;
+  return {
+    id,
+    goal: normalizeText(run.goal, MAX_TEXT_LENGTH) || 'Untitled autonomous run',
+    mode: run.mode === 'interactive' ? 'interactive' : 'unattended',
+    status: normalizeStatus(run.status),
+    modelAdapter: run.modelAdapter === 'deepseek_api' ? 'deepseek_api' : 'deepseek_web',
+    targetLeaseId: normalizeId(run.targetLeaseId),
+    budgets: normalizeBudgets(run.budgets),
+    policy: normalizePolicy(run.policy),
+    proofContract: normalizeProofContract(run.proofContract),
+    checkpoint: normalizeCheckpoint(run.checkpoint),
+    error: normalizeError(run.error),
+    createdAt,
+    startedAt: normalizeTimestamp(run.startedAt),
+    completedAt: normalizeTimestamp(run.completedAt),
+    updatedAt,
+  };
+}
+
+function normalizeStep(raw: unknown): AutonomousRunStep | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const step = raw as Partial<AutonomousRunStep>;
+  const id = normalizeId(step.id);
+  const runId = normalizeId(step.runId);
+  const startedAt = normalizeTimestamp(step.startedAt);
+  if (!id || !runId || startedAt === null || !isPhase(step.phase)) return null;
+  const status = isStepStatus(step.status) ? step.status : 'succeeded';
+  return {
+    id,
+    runId,
+    seq: normalizeNonNegativeInteger(step.seq) ?? 0,
+    phase: step.phase,
+    status,
+    modelTurnId: normalizeId(step.modelTurnId),
+    toolCallIds: normalizeStringList(step.toolCallIds, MAX_LIST_ITEMS, 128),
+    observationRefs: normalizeStringList(step.observationRefs, MAX_LIST_ITEMS, 128),
+    evidenceRefs: normalizeStringList(step.evidenceRefs, MAX_LIST_ITEMS, 128),
+    progressScore: clampProgressScore(step.progressScore),
+    proofDelta: normalizeStringList(step.proofDelta, MAX_LIST_ITEMS, 256),
+    error: normalizeError(step.error),
+    startedAt,
+    endedAt: normalizeTimestamp(step.endedAt),
+  };
+}
+
+function normalizeBudgets(value: Partial<AutonomousRunBudgets> | undefined): AutonomousRunBudgets {
+  return {
+    maxWallMs: normalizePositiveInteger(value?.maxWallMs) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxWallMs,
+    maxModelTurns: normalizePositiveInteger(value?.maxModelTurns) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxModelTurns,
+    maxToolCalls: normalizePositiveInteger(value?.maxToolCalls) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxToolCalls,
+    maxConsecutiveNoProgress: normalizePositiveInteger(value?.maxConsecutiveNoProgress) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxConsecutiveNoProgress,
+    maxSameErrorRepeats: normalizePositiveInteger(value?.maxSameErrorRepeats) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxSameErrorRepeats,
+    maxPromptBytesPerTurn: normalizePositiveInteger(value?.maxPromptBytesPerTurn) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxPromptBytesPerTurn,
+    maxObservationBytesPerTurn: normalizePositiveInteger(value?.maxObservationBytesPerTurn) ?? DEFAULT_AUTONOMOUS_RUN_BUDGETS.maxObservationBytesPerTurn,
+  };
+}
+
+function normalizePolicy(value: Partial<AutonomousRunPolicy> | undefined): AutonomousRunPolicy {
+  return {
+    approvalMode: value?.approvalMode === 'manual_all' || value?.approvalMode === 'confirm_high_risk'
+      ? value.approvalMode
+      : 'auto_low_risk',
+    allowedTools: normalizeStringList(value?.allowedTools, MAX_LIST_ITEMS, 128),
+    deniedTools: normalizeStringList(value?.deniedTools, MAX_LIST_ITEMS, 128),
+    browserMutationRequiresTargetLock: true,
+    persistMemory: value?.persistMemory === 'off' || value?.persistMemory === 'auto_pinned_only'
+      ? value.persistMemory
+      : 'propose',
+    shellMode: value?.shellMode === 'disabled' || value?.shellMode === 'manual' || value?.shellMode === 'unrestricted_local'
+      ? value.shellMode
+      : 'allowlisted',
+  };
+}
+
+function normalizeProofContract(value: Partial<AutonomousRunProofContract> | undefined): AutonomousRunProofContract {
+  return {
+    doneCriteria: normalizeStringList(value?.doneCriteria, MAX_LIST_ITEMS, 256),
+    requiredEvidence: normalizeStringList(value?.requiredEvidence, MAX_LIST_ITEMS, 128),
+    antiProof: normalizeStringList(value?.antiProof, MAX_LIST_ITEMS, 256)
+      .concat(DEFAULT_AUTONOMOUS_PROOF_CONTRACT.antiProof)
+      .filter((item, index, array) => array.indexOf(item) === index)
+      .slice(0, MAX_LIST_ITEMS),
+  };
+}
+
+function normalizeCheckpoint(value: Partial<AutonomousRunCheckpoint> | undefined): AutonomousRunCheckpoint {
+  return {
+    providerConversationId: normalizeId(value?.providerConversationId),
+    parentMessageId: normalizeId(value?.parentMessageId),
+    latestStepId: normalizeId(value?.latestStepId),
+    resumableSummary: normalizeText(value?.resumableSummary, MAX_TEXT_LENGTH) ?? '',
+    unresolvedQuestions: normalizeStringList(value?.unresolvedQuestions, MAX_LIST_ITEMS, 256),
+  };
+}
+
+function normalizeError(value: AutonomousRunError | null | undefined): AutonomousRunError | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const code = normalizeId(value.code);
+  const at = normalizeTimestamp(value.at);
+  if (!code || at === null) return null;
+  return {
+    code,
+    message: normalizeText(value.message, 512) ?? 'Autonomous run error.',
+    phase: isPhase(value.phase) || value.phase === 'storage' || value.phase === 'policy' ? value.phase : 'unknown',
+    retryable: value.retryable === true,
+    at,
+    details: normalizeDetails(value.details),
+  };
+}
+
+function normalizeDetails(value: unknown): Record<string, unknown> | undefined {
+  const bounded = normalizeDetailValue(value, 0);
+  if (!bounded || typeof bounded !== 'object' || Array.isArray(bounded)) return undefined;
+  const details = bounded as Record<string, unknown>;
+  if (JSON.stringify(details).length <= MAX_DETAILS_JSON_LENGTH) return details;
+  return {
+    truncated: true,
+    keys: Object.keys(details).slice(0, MAX_DETAILS_KEYS),
+  };
+}
+
+function normalizeDetailValue(value: unknown, depth: number): unknown {
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string') return normalizeText(value, MAX_DETAILS_STRING_LENGTH) ?? '';
+  if (!value || typeof value !== 'object') return undefined;
+  if (depth >= MAX_DETAILS_DEPTH) return '[truncated]';
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_DETAILS_ARRAY_ITEMS)
+      .map((item) => normalizeDetailValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+
+  const output: Record<string, unknown> = {};
+  let count = 0;
+  for (const [rawKey, item] of Object.entries(value)) {
+    if (count >= MAX_DETAILS_KEYS) {
+      output.truncated = true;
+      break;
+    }
+    const key = normalizeDetailKey(rawKey, count);
+    const normalized = normalizeDetailValue(redactDetailValueByKey(rawKey, item), depth + 1);
+    if (normalized !== undefined) {
+      output[key] = normalized;
+      count += 1;
+    }
+  }
+  return output;
+}
+
+function normalizeDetailKey(key: string, index: number): string {
+  const lower = key.toLowerCase();
+  if (isDetailSecretKey(lower)) return `redactedCred${index}`;
+  if (isDetailMediaKey(lower)) return `redactedMedia${index}`;
+  if (isDetailVisionKey(lower)) return `redactedVisionRef${index}`;
+  if (lower === 'url' || lower === 'title') return `redactedPage${index}`;
+  return normalizeId(key) ?? `key_${index}`;
+}
+
+function redactDetailValueByKey(key: string, value: unknown): unknown {
+  const lower = key.toLowerCase();
+  if (isDetailSecretKey(lower)) return value === undefined || value === null || value === '' ? value : '[redacted:secret]';
+  if (isDetailMediaKey(lower)) return value === undefined || value === null || value === '' ? value : '[redacted:media]';
+  if (isDetailVisionKey(lower)) return '[redacted:vision-ref]';
+  if ((lower === 'url' || lower === 'title') && typeof value === 'string' && value) return '[redacted:url]';
+  return value;
+}
+
+function isDetailSecretKey(lower: string): boolean {
+  return lower.includes('authorization') ||
+    lower.includes('cookie') ||
+    lower.includes('api-key') ||
+    lower.includes('api_key') ||
+    lower.includes('apikey') ||
+    lower.includes('token') ||
+    lower.includes('secret') ||
+    lower.includes('signed');
+}
+
+function isDetailMediaKey(lower: string): boolean {
+  return lower.includes('base64') ||
+    lower.includes('dataurl') ||
+    lower.includes('imageurl') ||
+    lower === 'image_url';
+}
+
+function isDetailVisionKey(lower: string): boolean {
+  return lower.includes('reffile') || lower.includes('vision');
+}
+
+function normalizeStatus(value: unknown): AutonomousRun['status'] {
+  if (
+    value === 'queued' ||
+    value === 'running' ||
+    value === 'paused' ||
+    value === 'blocked' ||
+    value === 'succeeded' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  ) return value;
+  return 'queued';
+}
+
+function isPhase(value: unknown): value is AutonomousRunStep['phase'] {
+  return value === 'plan' ||
+    value === 'model_turn' ||
+    value === 'tool_selection' ||
+    value === 'tool_execution' ||
+    value === 'observation' ||
+    value === 'verification' ||
+    value === 'review' ||
+    value === 'checkpoint' ||
+    value === 'finish';
+}
+
+function isStepStatus(value: unknown): value is AutonomousRunStep['status'] {
+  return value === 'running' || value === 'succeeded' || value === 'failed' || value === 'skipped';
+}
+
+function normalizeId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const redacted = redactDurableToolString(value.trim()) ?? '';
+  const normalized = redacted.replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 128);
+  return normalized || null;
+}
+
+function normalizeText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const redacted = redactDurableToolString(value.trim())?.slice(0, maxLength) ?? '';
+  return redacted || null;
+}
+
+function normalizeStringList(value: unknown, maxItems: number, maxLength: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const output: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeText(item, maxLength);
+    if (normalized && !output.includes(normalized)) output.push(normalized);
+    if (output.length >= maxItems) break;
+  }
+  return output;
+}
+
+function normalizeTimestamp(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
+}
+
+function normalizePositiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : null;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : null;
+}
+
+function clampProgressScore(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function pruneRuns(runs: AutonomousRun[]): AutonomousRun[] {
+  return [...runs]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_RUNS);
+}
+
+function pruneSteps(steps: AutonomousRunStep[]): AutonomousRunStep[] {
+  return [...steps]
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .slice(0, MAX_STEPS);
+}
+
+function createId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
