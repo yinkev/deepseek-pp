@@ -1,0 +1,160 @@
+import {
+  appendAutonomousRunStep,
+  applyAutonomousRunIterationReview,
+  getAutonomousRunById,
+  getAutonomousRunSteps,
+  transitionAutonomousRun,
+} from './store';
+import { reviewAutonomousRunAction } from './policy';
+import { isTerminalRunStatus } from './kernel';
+import type {
+  AutonomousRunId,
+  AutonomousRunStatus,
+} from './types';
+import type { AutonomousRunGateDecision } from './policy';
+
+export type AutonomousRunActionKind = 'model_turn' | 'tool_call';
+
+export interface AutonomousRunExecutorInput {
+  runId: AutonomousRunId;
+  now?: number;
+}
+
+export type AutonomousRunExecutor = (input: AutonomousRunExecutorInput) => Promise<void> | void;
+
+export interface AutonomousRunCycleResult {
+  action: 'noop' | 'start' | 'advance' | 'block' | 'fail';
+  runId: AutonomousRunId;
+  started: boolean;
+  advanced: boolean;
+  applied: boolean;
+  policyDecision: AutonomousRunGateDecision | null;
+  iterationAction: string | null;
+  finalStatus: AutonomousRunStatus | null;
+  errorCode: string | null;
+}
+
+export async function executeAutonomousRunCycle(
+  runId: AutonomousRunId,
+  executor: AutonomousRunExecutor,
+  options: { now?: number; actionKind?: AutonomousRunActionKind } = {},
+): Promise<AutonomousRunCycleResult> {
+  const now = options.now ?? Date.now();
+  const actionKind = options.actionKind ?? 'model_turn';
+
+  let run = await getAutonomousRunById(runId);
+  if (!run) {
+    return makeResult('noop', runId, false, false, false, null, null, null, null);
+  }
+  if (isTerminalRunStatus(run.status)) {
+    return makeResult('noop', runId, false, false, false, null, null, run.status, null);
+  }
+
+  let started = false;
+  if (run.status === 'queued') {
+    await transitionAutonomousRun(runId, 'running', null, now);
+    started = true;
+    run = await getAutonomousRunById(runId) ?? run;
+  }
+
+  if (run.status === 'paused' || run.status === 'blocked') {
+    return makeResult('noop', runId, false, false, false, null, null, run.status, null);
+  }
+
+  const steps = await getAutonomousRunSteps(runId);
+  const policyReview = reviewAutonomousRunAction(run, steps, { kind: actionKind }, now);
+
+  if (policyReview.decision !== 'allow') {
+    await appendAutonomousRunStep(runId, {
+      phase: 'review',
+      status: 'failed',
+      error: policyReview.error,
+      progressScore: 0,
+      proofDelta: [],
+      evidenceRefs: [],
+      toolCallIds: [],
+      observationRefs: policyReview.reason ? [`policy:${policyReview.reason}`] : [],
+    }, now);
+
+    const iter = await applyAutonomousRunIterationReview({ runId }, now);
+    const final = await getAutonomousRunById(runId);
+    return makeResult(
+      policyReview.decision === 'deny' ? 'block' : 'block',
+      runId,
+      started,
+      false,
+      iter.applied,
+      policyReview.decision,
+      iter.review?.action ?? null,
+      final?.status ?? null,
+      policyReview.error?.code ?? null,
+    );
+  }
+
+  let advanced = false;
+  let execErrorCode: string | null = null;
+  try {
+    await executor({ runId, now });
+    advanced = true;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    await appendAutonomousRunStep(runId, {
+      phase: 'model_turn',
+      status: 'failed',
+      error: {
+        code: 'executor_error',
+        message,
+        phase: 'model_turn',
+        retryable: true,
+        at: now,
+      },
+      progressScore: 0,
+      proofDelta: [],
+      evidenceRefs: [],
+      toolCallIds: [],
+      observationRefs: [],
+    }, now);
+    execErrorCode = 'executor_error';
+  }
+
+  const iter = await applyAutonomousRunIterationReview({ runId }, now);
+  const final = await getAutonomousRunById(runId);
+
+  const action: AutonomousRunCycleResult['action'] = execErrorCode ? 'fail' : 'advance';
+
+  return makeResult(
+    action,
+    runId,
+    started,
+    advanced,
+    iter.applied,
+    'allow',
+    iter.review?.action ?? null,
+    final?.status ?? null,
+    execErrorCode ?? iter.review?.error?.code ?? null,
+  );
+}
+
+function makeResult(
+  action: AutonomousRunCycleResult['action'],
+  runId: AutonomousRunId,
+  started: boolean,
+  advanced: boolean,
+  applied: boolean,
+  policyDecision: AutonomousRunGateDecision | null,
+  iterationAction: string | null,
+  finalStatus: AutonomousRunStatus | null,
+  errorCode: string | null,
+): AutonomousRunCycleResult {
+  return {
+    action,
+    runId,
+    started,
+    advanced,
+    applied,
+    policyDecision,
+    iterationAction,
+    finalStatus,
+    errorCode,
+  };
+}
