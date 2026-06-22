@@ -1,5 +1,8 @@
 import {
   createPetReviewLaneGate,
+  mergeAutonomousQualityGateDecisionIntoSnapshot,
+  mergeAutonomousWorkerCycleResultIntoSnapshot,
+  mergeOrchestratorTelemetryResultIntoSnapshot,
   type PetControlSnapshot,
   type PetReviewLanePriority,
   type PetReviewLaneRecommendation,
@@ -7,7 +10,10 @@ import {
   type PetReviewLaneStatus,
   type PetReviewLaneSummary,
 } from './control';
-import type { AutonomousRunOrchestratorCycleOptions } from '../run/orchestrator';
+import type {
+  AutonomousRunOrchestratorCycleOptions,
+  AutonomousRunOrchestratorCycleResult,
+} from '../run/orchestrator';
 import type { AutonomousReviewLaneRiskFlags } from '../run/review-scheduler';
 
 export type PetOrchestratorReviewLaneOptions = Pick<
@@ -48,6 +54,27 @@ export function createPetOrchestratorReviewLaneOptions(
       oracleRequested: options.oracleRequested === true,
     },
   };
+}
+
+export function mergeAutonomousOrchestratorCycleResultIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  result: AutonomousRunOrchestratorCycleResult | null | undefined,
+): PetControlSnapshot {
+  if (!result) {
+    return snapshot;
+  }
+
+  let next = snapshot;
+  if (result.workerResult) {
+    next = mergeAutonomousWorkerCycleResultIntoSnapshot(next, result.workerResult);
+  }
+  if (result.telemetryResult) {
+    next = mergeOrchestratorTelemetryResultIntoSnapshot(next, result.telemetryResult);
+  }
+  if (result.qualityGateDecision) {
+    next = mergeAutonomousQualityGateDecisionIntoSnapshot(next, result.qualityGateDecision);
+  }
+  return next;
 }
 
 function createRiskFlags(

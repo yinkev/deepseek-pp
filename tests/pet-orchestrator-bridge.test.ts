@@ -1,10 +1,14 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
+  createPetHandoffCapsule,
   createPetControlSnapshotFromRunCockpit,
   mergePetReviewLanesIntoSnapshot,
   type PetControlSnapshot,
 } from '../core/pet/control';
-import { createPetOrchestratorReviewLaneOptions } from '../core/pet/orchestrator-bridge';
+import {
+  createPetOrchestratorReviewLaneOptions,
+  mergeAutonomousOrchestratorCycleResultIntoSnapshot,
+} from '../core/pet/orchestrator-bridge';
 import {
   createAutonomousRun,
   getAutonomousRunById,
@@ -12,7 +16,9 @@ import {
 import {
   executeAutonomousOrchestratorCycle,
   type AutonomousRunCockpitSnapshot,
+  type AutonomousRunOrchestratorCycleResult,
 } from '../core/run/orchestrator';
+import type { AutonomousRunCycleResult } from '../core/run/worker';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -249,6 +255,195 @@ describe('pet to orchestrator review lane bridge', () => {
       /SECRET_ROLE|SECRET_LABEL|SECRET_TRANSCRIPT|secret\.invalid|SECRET_MESSAGE/,
     );
   });
+
+  it('returns the original snapshot when orchestrator cycle result is unavailable', () => {
+    const snapshot = createBasePetSnapshot();
+
+    expect(mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, null)).toBe(snapshot);
+    expect(mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, undefined)).toBe(snapshot);
+  });
+
+  it('projects worker, telemetry, and quality gate results from one orchestrator cycle', () => {
+    const snapshot = createBasePetSnapshot();
+    const result = createOrchestratorResult({
+      workerResult: createWorkerResult({
+        applied: true,
+        advanced: true,
+        iterationAction: 'iterate',
+        reviewSummary: {
+          action: 'iterate',
+          completionDecision: 'iterate',
+          grade: 'B',
+          score: 82,
+          issueCount: 1,
+          proofDebtCount: 2,
+          acceptedEvidenceCount: 3,
+          progressReason: null,
+          errorCode: 'completion_review_iterate',
+        },
+      }),
+      telemetryResult: {
+        status: 'written',
+        runId: 'SECRET_TELEMETRY_RUN',
+        rootDir: '.runs/SECRET_TELEMETRY_RUN',
+        fileCount: 2,
+        contentLength: 400,
+        paths: [
+          '.runs/SECRET_TELEMETRY_RUN/manifest.json',
+          '.runs/SECRET_TELEMETRY_RUN/.complete.json',
+        ],
+        errorCode: null,
+      },
+      qualityGateDecision: {
+        blocked: false,
+        reason: 'gate_warning',
+        latestGateStatus: 'warning',
+        seq: 4,
+        coverageComplete: true,
+        coveredCount: 6,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 1,
+        selfReviewGrade: 'B',
+        verificationPassed: false,
+      },
+    });
+
+    const merged = mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, result);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.workerCycle).toMatchObject({
+      lastAction: 'advance',
+      applied: true,
+      advanced: true,
+      reviewGrade: 'B',
+      reviewDecision: 'iterate',
+      reviewIssueCount: 1,
+      reviewProofDebtCount: 2,
+      acceptedEvidenceCount: 3,
+      reviewErrorCode: 'completion_review_iterate',
+    });
+    expect(merged.telemetry).toEqual({
+      status: 'written',
+      complete: true,
+      fileCount: 2,
+      contentLength: 400,
+      errorCode: null,
+    });
+    expect(merged.qualityGate).toMatchObject({
+      status: 'warning',
+      reason: 'gate_warning',
+      latestGateStatus: 'warning',
+      seq: 4,
+      selfReviewGrade: 'B',
+      verificationPassed: false,
+    });
+    expect(capsule.workerCycleReviewGrade).toBe(merged.workerCycle.reviewGrade);
+    expect(capsule.telemetryComplete).toBe(merged.telemetry.complete);
+    expect(capsule.qualityGateStatus).toBe(merged.qualityGate.status);
+    expect(JSON.stringify(merged)).not.toMatch(/SECRET_TELEMETRY_RUN/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_TELEMETRY_RUN/);
+  });
+
+  it('projects non-mutating quality-gate holds without inventing worker progress', () => {
+    const snapshot = createBasePetSnapshot({
+      workerCycle: {
+        lastAction: null,
+        advanced: false,
+        applied: false,
+      },
+    });
+    const result = createOrchestratorResult({
+      selectedRunId: 'SECRET_SELECTED_RUN',
+      workerResult: null,
+      telemetryResult: null,
+      qualityGateDecision: {
+        blocked: true,
+        reason: 'state_inconsistent',
+        latestGateStatus: 'failed',
+        seq: 5,
+        coverageComplete: false,
+        coveredCount: 4,
+        gapCount: 1,
+        conflictCount: 0,
+        notTestableCount: 0,
+        selfReviewGrade: 'D',
+        verificationPassed: false,
+      },
+    });
+
+    const merged = mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, result);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.workerCycle).toEqual(snapshot.workerCycle);
+    expect(merged.qualityGate).toMatchObject({
+      status: 'blocked',
+      reason: 'state_inconsistent',
+      latestGateStatus: 'failed',
+      seq: 5,
+    });
+    expect(merged.blockerLens).toMatchObject({
+      primary: 'review',
+      counts: { review: 1 },
+    });
+    expect(capsule.nextAction).toBe('review_blocker');
+    expect(JSON.stringify(merged)).not.toMatch(/SECRET_SELECTED_RUN/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_SELECTED_RUN/);
+  });
+
+  it('keeps raw orchestrator cycle fields out of pet projection', () => {
+    const snapshot = createBasePetSnapshot();
+    const result = {
+      ...createOrchestratorResult({
+        workerResult: createWorkerResult({
+          runId: 'SECRET_WORKER_RUN',
+          errorCode: 'SECRET_WORKER_ERROR',
+        }),
+        telemetryResult: {
+          status: 'failed',
+          runId: 'SECRET_TELEMETRY_RUN',
+          rootDir: '.runs/SECRET_TELEMETRY_ROOT',
+          fileCount: 0,
+          contentLength: 0,
+          paths: ['.runs/SECRET_TELEMETRY_ROOT/private?token=SECRET_TOKEN'],
+          errorCode: 'SECRET_TELEMETRY_ERROR',
+        } as any,
+        qualityGateDecision: {
+          blocked: true,
+          reason: 'review_issues',
+          latestGateStatus: 'blocked',
+          seq: 1,
+          coverageComplete: false,
+          coveredCount: 1,
+          gapCount: 1,
+          conflictCount: 0,
+          notTestableCount: 0,
+          selfReviewGrade: 'F',
+          verificationPassed: false,
+          rawReviewerProse: 'SECRET_REVIEWER_PROSE',
+        } as any,
+      }),
+      selectedRunId: 'SECRET_SELECTED_RUN',
+      privateNote: 'SECRET_ORCHESTRATOR_NOTE',
+    } as AutonomousRunOrchestratorCycleResult & Record<string, unknown>;
+
+    expect(JSON.stringify(result)).toMatch(
+      /SECRET_WORKER_RUN|SECRET_WORKER_ERROR|SECRET_TELEMETRY_RUN|SECRET_TELEMETRY_ROOT|SECRET_TOKEN|SECRET_TELEMETRY_ERROR|SECRET_REVIEWER_PROSE|SECRET_SELECTED_RUN|SECRET_ORCHESTRATOR_NOTE/,
+    );
+
+    const merged = mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, result);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.workerCycle.reviewErrorCode).toBeNull();
+    expect(merged.telemetry.errorCode).toBe('unknown_telemetry_error');
+    expect(merged.qualityGate.selfReviewGrade).toBe('F');
+    expect(JSON.stringify(merged)).not.toMatch(
+      /SECRET_WORKER_RUN|SECRET_WORKER_ERROR|SECRET_TELEMETRY_RUN|SECRET_TELEMETRY_ROOT|SECRET_TOKEN|SECRET_TELEMETRY_ERROR|SECRET_REVIEWER_PROSE|SECRET_SELECTED_RUN|SECRET_ORCHESTRATOR_NOTE|private\?token/,
+    );
+    expect(JSON.stringify(capsule)).not.toMatch(
+      /SECRET_WORKER_RUN|SECRET_WORKER_ERROR|SECRET_TELEMETRY_RUN|SECRET_TELEMETRY_ROOT|SECRET_TOKEN|SECRET_TELEMETRY_ERROR|SECRET_REVIEWER_PROSE|SECRET_SELECTED_RUN|SECRET_ORCHESTRATOR_NOTE|private\?token/,
+    );
+  });
 });
 
 function createBasePetSnapshot(overrides: {
@@ -289,6 +484,46 @@ function createIdleCockpit(): AutonomousRunCockpitSnapshot {
       failed: 0,
       cancelled: 0,
     },
+  };
+}
+
+function createWorkerResult(overrides: Partial<AutonomousRunCycleResult> = {}): AutonomousRunCycleResult {
+  return {
+    action: 'advance',
+    runId: 'run-1',
+    started: false,
+    advanced: false,
+    applied: false,
+    policyDecision: 'allow',
+    iterationAction: 'iterate',
+    reviewSummary: null,
+    finalStatus: 'running',
+    errorCode: null,
+    ...overrides,
+  };
+}
+
+function createOrchestratorResult(
+  overrides: Partial<AutonomousRunOrchestratorCycleResult> = {},
+): AutonomousRunOrchestratorCycleResult {
+  return {
+    selectedRunId: 'run-1',
+    reconciledInterruptedRuns: 0,
+    beforeSnapshot: createIdleCockpit(),
+    reviewLanePlan: {
+      action: 'idle',
+      selectedRoles: [],
+      canRunWorker: true,
+      reason: 'no_pending_lanes',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+      maxParallel: 0,
+    },
+    qualityGateDecision: null,
+    workerResult: null,
+    telemetryResult: null,
+    afterSnapshot: createIdleCockpit(),
+    ...overrides,
   };
 }
 
