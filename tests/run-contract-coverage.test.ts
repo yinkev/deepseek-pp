@@ -248,7 +248,7 @@ describe('autonomous contract coverage table', () => {
     const run = createRun({
       proofContract: {
         doneCriteria: [
-          'check https://private.example.com/path?case=123 and ghp_abcdefghijklmnopqrstuvwxyz1234567890 plus github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ_1234567890abcdef',
+          'check https://private.example.com/path?case=123 and ghp_abcdefghijklmnopqrstuvwxyz1234567890 plus github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ_1234567890abcdef x-api-key: leaked-header-secret token: leaked-token-secret',
         ],
         requiredEvidence: [],
         antiProof: [],
@@ -264,12 +264,12 @@ describe('autonomous contract coverage table', () => {
     expect(table.rows).toEqual([
       {
         kind: 'done_criterion',
-        requirement: 'check [REDACTED_URL] and gh[REDACTED] plus github_pat_[REDACTED]',
+        requirement: 'check [REDACTED_URL] and gh[REDACTED] plus github_pat_[REDACTED] x-api-key: [REDACTED] token: [REDACTED]',
         status: 'gap',
         matchedBy: [],
       },
     ]);
-    expect(JSON.stringify(table)).not.toMatch(/private\.example|case=123|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ/);
+    expect(JSON.stringify(table)).not.toMatch(/private\.example|case=123|ghp_abcdefghijklmnopqrstuvwxyz|github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ|leaked-header-secret|leaked-token-secret/);
   });
 
   it('false-positive success probe: coverage gaps agree with completion review missing lists', () => {

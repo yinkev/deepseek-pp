@@ -193,6 +193,7 @@ function sanitizeCoverageText(value: string): string {
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, 'github_pat_[REDACTED]')
     .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, 'AIza[REDACTED]')
     .replace(/([?&](?:X-Amz-Signature|X-Amz-Credential|X-Amz-Security-Token|AWSAccessKeyId|Signature|access_token|refresh_token|token|secret)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/\b((?:x[-_])?(?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)\s*:)\s*[^\s,;]+/gi, '$1 [REDACTED]')
     .replace(/\b((?:api[_-]?key|apiKey|token|secret|signed[_-]?path|signedPath)=)[^&\s]+/gi, '$1[REDACTED]')
     .replace(/https?:\/\/[^\s]+/gi, '[REDACTED_URL]');
 }
