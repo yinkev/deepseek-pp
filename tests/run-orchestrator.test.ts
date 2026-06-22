@@ -162,6 +162,12 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
 
     expect(result.selectedRunId).toBe(run.id);
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'dispatch',
+      selectedRoles: ['implementer'],
+      canRunWorker: true,
+      reason: 'dispatch_lanes',
+    });
     expect(result.workerResult).toMatchObject({
       runId: run.id,
       action: 'block',
@@ -291,6 +297,15 @@ describe('autonomous run orchestrator startup bridge', () => {
 
     expect(result.selectedRunId).toBeNull();
     expect(result.workerResult).toBeNull();
+    expect(result.reviewLanePlan).toEqual({
+      action: 'idle',
+      selectedRoles: [],
+      canRunWorker: false,
+      reason: 'no_runnable_run',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+      maxParallel: 2,
+    });
     expect(executor).not.toHaveBeenCalled();
     await expect(getAutonomousRunById(paused.id)).resolves.toMatchObject({ status: 'paused' });
     await expect(getAutonomousRunById(blocked.id)).resolves.toMatchObject({ status: 'blocked' });
@@ -329,6 +344,150 @@ describe('autonomous run orchestrator startup bridge', () => {
 
     expect(result.selectedRunId).toBe(running.id);
     expect(JSON.stringify(result)).not.toMatch(/snapshot-private-ref|Bearer|secret-token|private\?token/);
+  });
+
+  it('returns review lane hold plan without preventing worker progress', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'scheduler-hold' });
+
+    const run = await createAutonomousRun({
+      id: 'scheduler-hold',
+      goal: 'Hold review lanes',
+      proofContract: createProofContract(),
+    }, 100);
+
+    const executor = vi.fn(async ({ runId, now: execNow }) => {
+      await appendAutonomousRunStep(runId, {
+        phase: 'model_turn',
+        progressScore: 0.1,
+      }, execNow);
+    });
+
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 120,
+      reviewLaneScheduler: {
+        maxParallel: 1,
+        lanes: [{ role: 'unknown-active-role', status: 'running' }],
+        workerAdvanced: true,
+        risk: { shell: true },
+      },
+    });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'hold',
+      selectedRoles: [],
+      canRunWorker: true,
+      reason: 'at_capacity',
+      maxParallel: 1,
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+    expect(result.workerResult).toMatchObject({
+      runId: run.id,
+      started: true,
+      advanced: true,
+    });
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+    });
+  });
+
+  it('returns halt review lane plan and durable worker block on blocking gate', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'scheduler-halt' });
+
+    const run = await createAutonomousRun({
+      id: 'scheduler-halt',
+      goal: 'Halt review lanes',
+      proofContract: createProofContract(),
+    }, 100);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 120,
+      reviewLaneGate: {
+        status: 'attention',
+        reason: 'p2',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 1,
+      },
+      reviewLaneScheduler: {
+        workerAdvanced: true,
+        risk: { shell: true, browser: true, memory: true, ui: true },
+        oracleRequested: true,
+      },
+    });
+
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'halt',
+      selectedRoles: [],
+      canRunWorker: false,
+      reason: 'review_gate_p2',
+      blockingPriority: 'P2',
+      blockingLaneCount: 1,
+    });
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      runId: run.id,
+      started: false,
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+      error: { code: result.workerResult?.errorCode },
+    });
+  });
+
+  it('keeps orchestrator review lane plan private', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'scheduler-private' });
+
+    await createAutonomousRun({
+      id: 'scheduler-private',
+      goal: 'Private scheduler',
+      proofContract: createProofContract(),
+    }, 100);
+
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 120,
+      reviewLaneScheduler: {
+        maxParallel: 1,
+        lanes: [
+          {
+            role: 'SECRET_ROLE',
+            status: 'running',
+            transcript: 'SECRET_TRANSCRIPT',
+            prompt: 'SECRET_PROMPT',
+            url: 'https://secret.invalid/review',
+          } as any,
+        ],
+        risk: {
+          shell: true,
+          rawCommand: 'rm -rf SECRET_PATH',
+        } as any,
+        oracleRequested: true,
+      },
+    });
+
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'hold',
+      selectedRoles: [],
+      canRunWorker: true,
+      maxParallel: 1,
+    });
+    expect(JSON.stringify(result.reviewLanePlan)).not.toMatch(
+      /SECRET_ROLE|SECRET_TRANSCRIPT|SECRET_PROMPT|secret\.invalid|SECRET_PATH/,
+    );
+    expect(JSON.stringify(result)).not.toMatch(
+      /SECRET_ROLE|SECRET_TRANSCRIPT|SECRET_PROMPT|secret\.invalid|SECRET_PATH/,
+    );
   });
 
   it('reconciles stale running runs on startup and returns a blocked cockpit snapshot', async () => {

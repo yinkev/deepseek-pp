@@ -3,6 +3,12 @@ import {
   reconcileInterruptedAutonomousRuns,
 } from './store';
 import {
+  planAutonomousReviewLanes,
+  type AutonomousReviewLanePlan,
+  type AutonomousReviewLaneRiskFlags,
+  type AutonomousReviewLaneSchedulerLaneInput,
+} from './review-scheduler';
+import {
   executeAutonomousRunCycle,
   type AutonomousRunActionKind,
   type AutonomousRunCycleResult,
@@ -61,12 +67,23 @@ export interface AutonomousRunOrchestratorCycleOptions {
   now?: number;
   actionKind?: AutonomousRunActionKind;
   reviewLaneGate?: AutonomousRunReviewLaneGateInput | null;
+  reviewLaneScheduler?: AutonomousRunOrchestratorReviewLaneSchedulerInput | null;
+}
+
+export interface AutonomousRunOrchestratorReviewLaneSchedulerInput {
+  lanes?: readonly AutonomousReviewLaneSchedulerLaneInput[] | null;
+  maxParallel?: number | null;
+  workerAdvanced?: boolean | null;
+  workerApplied?: boolean | null;
+  risk?: AutonomousReviewLaneRiskFlags | null;
+  oracleRequested?: boolean | null;
 }
 
 export interface AutonomousRunOrchestratorCycleResult {
   selectedRunId: AutonomousRunId | null;
   reconciledInterruptedRuns: number;
   beforeSnapshot: AutonomousRunCockpitSnapshot;
+  reviewLanePlan: AutonomousReviewLanePlan;
   workerResult: AutonomousRunCycleResult | null;
   afterSnapshot: AutonomousRunCockpitSnapshot;
 }
@@ -98,7 +115,18 @@ export async function executeAutonomousOrchestratorCycle(
     now,
   );
   const beforeSnapshot = await getAutonomousRunCockpitSnapshot(now);
-  const selectedRunId = selectRunnableRun((await getAutonomousRunLedgerSnapshot()).runs)?.id ?? null;
+  const selectedRun = selectRunnableRun((await getAutonomousRunLedgerSnapshot()).runs);
+  const selectedRunId = selectedRun?.id ?? null;
+  const reviewLanePlan = planAutonomousReviewLanes({
+    runStatus: selectedRun?.status ?? null,
+    reviewLaneGate: options.reviewLaneGate,
+    lanes: options.reviewLaneScheduler?.lanes,
+    maxParallel: options.reviewLaneScheduler?.maxParallel,
+    workerAdvanced: options.reviewLaneScheduler?.workerAdvanced,
+    workerApplied: options.reviewLaneScheduler?.workerApplied,
+    risk: options.reviewLaneScheduler?.risk,
+    oracleRequested: options.reviewLaneScheduler?.oracleRequested,
+  });
   const workerResult = selectedRunId
     ? await executeAutonomousRunCycle(selectedRunId, executor, {
       now,
@@ -110,6 +138,7 @@ export async function executeAutonomousOrchestratorCycle(
     selectedRunId,
     reconciledInterruptedRuns,
     beforeSnapshot,
+    reviewLanePlan,
     workerResult,
     afterSnapshot: await getAutonomousRunCockpitSnapshot(now),
   };
