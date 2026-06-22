@@ -217,6 +217,7 @@ function renderWebSearchGuidance(
 ): string {
   const hasWebSearch = descriptors.some((descriptor) => descriptor.name === 'web_search');
   if (!hasWebSearch) return '';
+
   return translate(locale, 'prompt.webSearchGuidance');
 }
 
@@ -228,6 +229,7 @@ function renderPythonMcpHint(
   const pythonExec = descriptors.find((descriptor) => descriptor.name === 'python_exec');
   const pythonStatus = descriptors.find((descriptor) => descriptor.name === 'python_status');
   if (!pythonExec && !pythonStatus) return '';
+
   const execName = pythonExec ? getPreferredToolInvocationName(pythonExec, catalog) : null;
   const statusName = pythonStatus ? getPreferredToolInvocationName(pythonStatus, catalog) : null;
 
@@ -257,7 +259,7 @@ function renderToolSchema(descriptor: ToolDescriptor, catalog: ToolInvocationCat
     `<${preferredName}>`,
     JSON.stringify(examplePayload, null, 2),
     `</${preferredName}>`,
-    `Invalid formats: <invoke name=\"${preferredName}\">...</invoke>, <tool_call>...</tool_call>`,
+    `Invalid formats: <invoke name="${preferredName}">...</invoke>, <tool_call>...</tool_call>`,
     `Parameters JSON Schema: ${JSON.stringify(descriptor.inputSchema)}`,
   ];
   return lines.filter(Boolean).join('\n');
@@ -270,6 +272,7 @@ function renderShellMcpHint(
 ): string {
   const shellExec = descriptors.find((descriptor) => descriptor.name === 'shell_exec');
   if (!shellExec) return '';
+
   const shellStatus = descriptors.find((descriptor) => descriptor.name === 'shell_status');
   const execName = getPreferredToolInvocationName(shellExec, catalog);
   const statusName = shellStatus ? getPreferredToolInvocationName(shellStatus, catalog) : null;

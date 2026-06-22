@@ -44,7 +44,7 @@ Safe metadata-only memory pressure signal derived from existing prompt augmentat
 | 6 | Source-grounded research filtering still works and metadata agrees with selected memory count | tests: source-grounded it: usedMemoryIds=[12], pressure.selectedCount=1, .selectedCount === .usedMemoryIds.length, truncated=true (filter) | covered |
 | 7 | New metadata must not leak memory names/content/tags/raw prompt/project context/tool schema | tests: mpJson not.match on names/contents; also no raw in pressure object | covered |
 | 8 | Existing `usedMemoryIds` behavior remains unchanged | all tests assert exact usedMemoryIds arrays unchanged; pressure cross-checks length | covered |
-| 9 | Existing prompt output/freeze-sensitive text remains unchanged | tests preserve all .augmented toContain for text; freeze run reports fail only on source hash (unrelated baseline pre-existing + func body) not output text | covered (text), freeze baseline unrelated |
+| 9 | Existing prompt output/freeze-sensitive text remains unchanged | tests preserve all .augmented toContain for text; freeze run reports intentional `promptAugmentationBuild` source-hash drift plus pre-existing locale hash drift, not rendered text drift | covered (text), freeze source hash documented |
 | 10 | No Chrome/background/runtime files are touched | git status/diff: only core/prompt/* , tests/* , docs/plan/* ; entrypoints/background.ts untouched (pre-existing mod only) | covered |
 
 ## Adversarial Probe
@@ -56,7 +56,7 @@ Safe metadata-only memory pressure signal derived from existing prompt augmentat
 - `npm test -- tests/request-augmentation.test.ts` → 18/18 pass
 - `npm run compile` → clean
 - `git diff --check` → clean
-- `npm run prompt:freeze` → fails on source hash (pre-existing baseline drift for promptAugmentationBuild + locales + our intentional func addition); no change to generated augmented text or tool protocol (as required)
+- `npm run prompt:freeze` → fails on source hash: intentional `promptAugmentationBuild` body change for metadata plus pre-existing locale hash drift; no change to generated augmented text or tool protocol (as required)
 
 ## Residual / Edge
 - Pressure ratio thresholds (0.33/0.66) are heuristic for 'low/medium/high'; stable and sufficient for pet meter.
