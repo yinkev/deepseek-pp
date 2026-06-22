@@ -1006,20 +1006,21 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const workerCycleAcceptedEvidenceCount = wc ? wc.acceptedEvidenceCount : 0;
   const workerCycleReviewErrorCode = wc ? wc.reviewErrorCode : null;
 
-  const reviewLaneSummaries = rl && Array.isArray(rl.lanes)
-    ? rl.lanes.slice(0, 4).map((lane) => normalizeLane(lane))
+  const allReviewLaneSummaries = rl && Array.isArray(rl.lanes)
+    ? rl.lanes.map((lane) => normalizeLane(lane))
     : [];
-  const reviewLaneCount = reviewLaneSummaries.length;
-  const reviewLaneActiveCount = reviewLaneSummaries.filter((lane) => lane.status === 'running').length;
-  const reviewLanePassedCount = reviewLaneSummaries.filter((lane) => lane.status === 'passed').length;
-  const reviewLaneBlockedCount = reviewLaneSummaries.filter((lane) => lane.status === 'blocked').length;
-  const reviewLaneFailedCount = reviewLaneSummaries.filter((lane) => lane.status === 'failed').length;
-  const reviewLaneHighestPriority = pickHighestPriority(reviewLaneSummaries);
-  const reviewLaneWorstGrade = pickWorstGrade(reviewLaneSummaries);
-  const reviewLaneProceedCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'proceed').length;
-  const reviewLaneIterateCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'iterate').length;
-  const reviewLaneBlockCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'block').length;
-  const reviewLaneUnknownCount = reviewLaneSummaries.filter((lane) => lane.recommendation === 'unknown').length;
+  const reviewLaneSummaries = allReviewLaneSummaries.slice(0, 4);
+  const reviewLaneCount = allReviewLaneSummaries.length;
+  const reviewLaneActiveCount = allReviewLaneSummaries.filter((lane) => lane.status === 'running').length;
+  const reviewLanePassedCount = allReviewLaneSummaries.filter((lane) => lane.status === 'passed').length;
+  const reviewLaneBlockedCount = allReviewLaneSummaries.filter((lane) => lane.status === 'blocked').length;
+  const reviewLaneFailedCount = allReviewLaneSummaries.filter((lane) => lane.status === 'failed').length;
+  const reviewLaneHighestPriority = pickHighestPriority(allReviewLaneSummaries);
+  const reviewLaneWorstGrade = pickWorstGrade(allReviewLaneSummaries);
+  const reviewLaneProceedCount = allReviewLaneSummaries.filter((lane) => lane.recommendation === 'proceed').length;
+  const reviewLaneIterateCount = allReviewLaneSummaries.filter((lane) => lane.recommendation === 'iterate').length;
+  const reviewLaneBlockCount = allReviewLaneSummaries.filter((lane) => lane.recommendation === 'block').length;
+  const reviewLaneUnknownCount = allReviewLaneSummaries.filter((lane) => lane.recommendation === 'unknown').length;
   const reviewLaneGate = createPetReviewLaneGate({
     total: reviewLaneCount,
     activeCount: reviewLaneActiveCount,
@@ -1032,7 +1033,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     iterateCount: reviewLaneIterateCount,
     blockCount: reviewLaneBlockCount,
     unknownCount: reviewLaneUnknownCount,
-    lanes: reviewLaneSummaries,
+    lanes: allReviewLaneSummaries,
   });
   const reviewLaneGateStatus = reviewLaneGate.status;
   const reviewLaneGateReason = reviewLaneGate.reason;
@@ -1357,7 +1358,7 @@ export function mergePetReviewLanesIntoSnapshot(
     return snapshot;
   }
   const inputArr = Array.isArray(lanes) ? lanes : [];
-  const normalized = inputArr.slice(0, 4).map((l) => normalizeLane(l));
+  const normalized = inputArr.map((l) => normalizeLane(l));
   const total = normalized.length;
   let activeCount = 0;
   let passedCount = 0;

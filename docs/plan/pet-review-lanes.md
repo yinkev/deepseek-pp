@@ -25,7 +25,7 @@ This slice lets the pet represent reviewer/worker lanes such as implementer, rev
 - issue count
 - updated timestamp
 
-It drops raw ids, names, labels, messages, details, transcripts, raw fields, URLs, and secrets. It caps projected lanes to four, normalizes invalid strings to safe defaults, clamps issue count to a non-negative integer, and uses `null` for non-finite timestamps.
+It drops raw ids, names, labels, messages, details, transcripts, raw fields, URLs, and secrets. It keeps all sanitized lanes for aggregate and gate derivation, caps handoff lane summaries to four, normalizes invalid strings to safe defaults, clamps issue count to a non-negative integer, and uses `null` for non-finite timestamps.
 
 Review lanes do not change review heat, blocker lens, stop-line state, memory pressure, worker-cycle telemetry, or `nextAction`.
 
@@ -36,13 +36,14 @@ Review lanes do not change review heat, blocker lens, stop-line state, memory pr
 | 1 | Base and cockpit snapshots default to empty review lanes | `tests/pet-control.test.ts` review-lane defaults test | covered |
 | 2 | Null/undefined lane input is an identity no-op | `mergePetReviewLanesIntoSnapshot returns original snapshot object unchanged` | covered |
 | 3 | Valid lane inputs normalize and aggregate counts | aggregation test checks total, status counts, recommendation counts, highest priority, worst grade, and summaries | covered |
-| 4 | Lane projection is capped to four | cap/clamp test supplies five lanes and expects four | covered |
+| 4 | Lane aggregation keeps all sanitized lanes for gate derivation | cap/clamp test supplies five lanes and expects all five in snapshot aggregate | covered |
 | 5 | Invalid enums and numbers are clamped to safe defaults | cap/clamp test checks invalid role/status/grade/recommendation/priority, NaN, infinity, negative issue count | covered |
 | 6 | Handoff review-lane fields agree with snapshot state | handoff agreement test compares every handoff field to `merged.reviewLanes` | covered |
 | 7 | Review lane telemetry does not alter `nextAction` | isolation test keeps `finalize` priority despite blocking lane metadata | covered |
 | 8 | Review lane telemetry does not mutate adjacent lenses | isolation test checks review, reviewHeat, blockerLens, stopLine, memoryPressure, and workerCycle unchanged | covered |
 | 9 | Raw lane ids/messages/details/transcripts do not leak | privacy false-positive probe asserts source JSON contains secrets and pet/handoff JSON omit them | covered |
-| 10 | Forbidden files are untouched by the slice | git status/diff before commit | covered |
+| 10 | Handoff summaries are capped while gate still sees hidden blocking lanes | hidden fifth-lane test expects `reviewLaneCount=5`, four summaries, and blocked P1 gate | covered |
+| 11 | Forbidden files are untouched by the slice | git status/diff before commit | covered |
 
 ## Adversarial Probe
 
