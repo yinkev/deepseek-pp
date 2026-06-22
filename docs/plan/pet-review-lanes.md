@@ -4,7 +4,7 @@
 
 Expose a compact agent-council signal in the pet cockpit without storing or handing off reviewer transcripts.
 
-This slice lets the pet represent reviewer/worker lanes such as implementer, reviewer, safety, UX, and Oracle as safe metadata only. It is telemetry, not execution control.
+This slice lets the pet represent reviewer/worker lanes such as implementer, reviewer, safety, UX, Oracle, and Grok as safe metadata only. It is telemetry, not execution control.
 
 ## Scope
 

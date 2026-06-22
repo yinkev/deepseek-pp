@@ -104,28 +104,28 @@ Priority order:
    - Gate: focused consistency/coverage tests, adjacent worker/orchestrator tests, full serial suite, independent P1/P2 review.
 
 4. Durable quality-gate persistence.
-   - Status: next implementation slice.
+   - Status: complete.
    - Accomplish by storing compact gate results for each run/iteration: contract coverage summary, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
    - Gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
 
 5. Orchestrator enforcement.
-   - Status: pending.
+   - Status: complete for pure core orchestration; Chrome/runtime caller wiring remains frozen.
    - Accomplish by making the orchestrator consult persisted quality gates before selecting or advancing the next runnable run.
    - Gate: P1/P2 review state blocks the next cycle; green gate allows continuation; no Chrome/runtime wiring.
 
 6. Review-lane worker coordination.
-   - Status: pending.
+   - Status: partially complete; scheduler, pet bridge, Oracle, and bounded Grok advisory-role metadata are implemented, while actual worker dispatch remains runtime-frozen.
    - Accomplish by formalizing implementer, reviewer, safety, UX, Oracle/advisor, and optional Grok advisory lanes as bounded inputs to the run ledger.
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
 
 7. Autonomous telemetry and repo-visible handoff.
-   - Status: partially complete.
+   - Status: partially complete; marker-based telemetry writing, pet telemetry projection, quality-gate projection, and orchestrator-cycle-to-pet bridge are implemented.
    - Accomplish by exporting complete, marker-based telemetry packages and handoff capsules that reflect post-cycle durable state.
    - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state.
 
 8. Pet cockpit projection.
-   - Status: partially complete.
-   - Accomplish by projecting run status, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, and quality gate status into pet snapshot/handoff fields.
+   - Status: partially complete; run queue, evidence pulse, target lease, proof debt, blocker lens, review heat, stop-line, memory pressure, worker-cycle, telemetry, quality-gate, and review-lane metadata are projected as safe cockpit state.
+   - Accomplish by projecting run status, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, quality gate status, bounded review lanes, and handoff capsule state into pet snapshot/handoff fields.
    - Gate: pet surfaces expose safe metadata only and never trigger browser/file mutation by themselves.
 
 9. Controlled runtime resume.
