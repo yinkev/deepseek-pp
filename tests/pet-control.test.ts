@@ -16,6 +16,7 @@ import {
   mergePromptMemoryPressureIntoSnapshot,
   createPetHandoffCapsule,
   mergeAutonomousWorkerCycleResultIntoSnapshot,
+  mergePetReviewLanesIntoSnapshot,
   type PetControlSnapshot,
 } from '../core/pet/control';
 import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
@@ -66,6 +67,7 @@ describe('pet control snapshot', () => {
     stopLine?: Partial<PetControlSnapshot['stopLine']>;
     memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
     workerCycle?: Partial<PetControlSnapshot['workerCycle']>;
+    reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -172,6 +174,21 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         reviewErrorCode: null,
         ...overrides.workerCycle,
+      },
+      reviewLanes: {
+        total: 0,
+        activeCount: 0,
+        passedCount: 0,
+        blockedCount: 0,
+        failedCount: 0,
+        highestPriority: null,
+        worstGrade: null,
+        proceedCount: 0,
+        iterateCount: 0,
+        blockCount: 0,
+        unknownCount: 0,
+        lanes: [],
+        ...overrides.reviewLanes,
       },
     };
   }
@@ -1948,6 +1965,279 @@ describe('pet control snapshot', () => {
       expect(capsule.workerCycleReviewErrorCode).toBe('unknown_worker_cycle_error');
       expect(petJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
       expect(capsuleJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
+    });
+  });
+
+  describe('review lane telemetry', () => {
+    const defaultReviewLanes: PetControlSnapshot['reviewLanes'] = {
+      total: 0,
+      activeCount: 0,
+      passedCount: 0,
+      blockedCount: 0,
+      failedCount: 0,
+      highestPriority: null,
+      worstGrade: null,
+      proceedCount: 0,
+      iterateCount: 0,
+      blockCount: 0,
+      unknownCount: 0,
+      lanes: [],
+    };
+
+    it('createPetControlSnapshotFromRunCockpit and createBase default to no review lanes observed', () => {
+      const pet = createBasePetSnapshot();
+      expect(pet.reviewLanes).toEqual(defaultReviewLanes);
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).reviewLanes).toEqual(defaultReviewLanes);
+    });
+
+    it('mergePetReviewLanesIntoSnapshot returns original snapshot object unchanged if lanes null or undefined', () => {
+      const snap = createBasePetSnapshot();
+      expect(mergePetReviewLanesIntoSnapshot(snap, null)).toBe(snap);
+      expect(mergePetReviewLanesIntoSnapshot(snap, undefined)).toBe(snap);
+    });
+
+    it('mergePetReviewLanesIntoSnapshot normalizes valid lanes and aggregates counts', () => {
+      const snap = createBasePetSnapshot();
+      const merged = mergePetReviewLanesIntoSnapshot(snap, [
+        {
+          role: 'implementer',
+          status: 'running',
+          grade: 'B',
+          recommendation: 'iterate',
+          highestPriority: 'P2',
+          issueCount: 2.8,
+          updatedAt: 200,
+        },
+        {
+          role: 'reviewer',
+          status: 'passed',
+          grade: 'A',
+          recommendation: 'proceed',
+          highestPriority: null,
+          issueCount: 0,
+          updatedAt: 210,
+        },
+        {
+          role: 'safety',
+          status: 'blocked',
+          grade: 'F',
+          recommendation: 'block',
+          highestPriority: 'P1',
+          issueCount: 3,
+          updatedAt: 220,
+        },
+      ]);
+
+      expect(merged).not.toBe(snap);
+      expect(merged.reviewLanes).toEqual({
+        total: 3,
+        activeCount: 1,
+        passedCount: 1,
+        blockedCount: 1,
+        failedCount: 0,
+        highestPriority: 'P1',
+        worstGrade: 'F',
+        proceedCount: 1,
+        iterateCount: 1,
+        blockCount: 1,
+        unknownCount: 0,
+        lanes: [
+          {
+            role: 'implementer',
+            status: 'running',
+            grade: 'B',
+            recommendation: 'iterate',
+            highestPriority: 'P2',
+            issueCount: 2,
+            updatedAt: 200,
+          },
+          {
+            role: 'reviewer',
+            status: 'passed',
+            grade: 'A',
+            recommendation: 'proceed',
+            highestPriority: null,
+            issueCount: 0,
+            updatedAt: 210,
+          },
+          {
+            role: 'safety',
+            status: 'blocked',
+            grade: 'F',
+            recommendation: 'block',
+            highestPriority: 'P1',
+            issueCount: 3,
+            updatedAt: 220,
+          },
+        ],
+      });
+    });
+
+    it('mergePetReviewLanesIntoSnapshot caps to four lanes and clamps invalid values to safe defaults', () => {
+      const snap = createBasePetSnapshot();
+      const merged = mergePetReviewLanesIntoSnapshot(snap, [
+        {
+          role: 'oracle',
+          status: 'failed',
+          grade: 'D',
+          recommendation: 'unknown',
+          highestPriority: 'P3',
+          issueCount: -4,
+          updatedAt: Number.POSITIVE_INFINITY,
+        },
+        {
+          role: 'bad role',
+          status: 'bad status',
+          grade: 'Z',
+          recommendation: 'bad rec',
+          highestPriority: 'PX',
+          issueCount: Number.NaN,
+          updatedAt: Number.NaN,
+        },
+        { role: 'ux', status: 'idle', grade: 'C', recommendation: 'iterate', highestPriority: 'P2', issueCount: 1 },
+        { role: 'reviewer', status: 'running', grade: 'B', recommendation: 'proceed', highestPriority: 'P1', issueCount: 2 },
+        { role: 'safety', status: 'blocked', grade: 'F', recommendation: 'block', highestPriority: 'P1', issueCount: 9 },
+      ]);
+
+      expect(merged.reviewLanes.total).toBe(4);
+      expect(merged.reviewLanes.failedCount).toBe(1);
+      expect(merged.reviewLanes.activeCount).toBe(1);
+      expect(merged.reviewLanes.highestPriority).toBe('P1');
+      expect(merged.reviewLanes.worstGrade).toBe('D');
+      expect(merged.reviewLanes.unknownCount).toBe(2);
+      expect(merged.reviewLanes.lanes).toEqual([
+        {
+          role: 'oracle',
+          status: 'failed',
+          grade: 'D',
+          recommendation: 'unknown',
+          highestPriority: 'P3',
+          issueCount: 0,
+          updatedAt: null,
+        },
+        {
+          role: 'other',
+          status: 'idle',
+          grade: null,
+          recommendation: 'unknown',
+          highestPriority: null,
+          issueCount: 0,
+          updatedAt: null,
+        },
+        {
+          role: 'ux',
+          status: 'idle',
+          grade: 'C',
+          recommendation: 'iterate',
+          highestPriority: 'P2',
+          issueCount: 1,
+          updatedAt: null,
+        },
+        {
+          role: 'reviewer',
+          status: 'running',
+          grade: 'B',
+          recommendation: 'proceed',
+          highestPriority: 'P1',
+          issueCount: 2,
+          updatedAt: null,
+        },
+      ]);
+    });
+
+    it('createPetHandoffCapsule projects review lane fields that agree with the merged snapshot', () => {
+      const snap = createBaseForHandoff({ run: { active: true, phase: 'working' } });
+      const merged = mergePetReviewLanesIntoSnapshot(snap, [
+        { role: 'reviewer', status: 'passed', grade: 'A', recommendation: 'proceed', highestPriority: null, issueCount: 0, updatedAt: 300 },
+        { role: 'safety', status: 'blocked', grade: 'D', recommendation: 'block', highestPriority: 'P2', issueCount: 2, updatedAt: 310 },
+      ]);
+
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(capsule.reviewLaneCount).toBe(merged.reviewLanes.total);
+      expect(capsule.reviewLaneActiveCount).toBe(merged.reviewLanes.activeCount);
+      expect(capsule.reviewLanePassedCount).toBe(merged.reviewLanes.passedCount);
+      expect(capsule.reviewLaneBlockedCount).toBe(merged.reviewLanes.blockedCount);
+      expect(capsule.reviewLaneFailedCount).toBe(merged.reviewLanes.failedCount);
+      expect(capsule.reviewLaneHighestPriority).toBe(merged.reviewLanes.highestPriority);
+      expect(capsule.reviewLaneWorstGrade).toBe(merged.reviewLanes.worstGrade);
+      expect(capsule.reviewLaneProceedCount).toBe(merged.reviewLanes.proceedCount);
+      expect(capsule.reviewLaneIterateCount).toBe(merged.reviewLanes.iterateCount);
+      expect(capsule.reviewLaneBlockCount).toBe(merged.reviewLanes.blockCount);
+      expect(capsule.reviewLaneUnknownCount).toBe(merged.reviewLanes.unknownCount);
+      expect(capsule.reviewLaneSummaries).toEqual(merged.reviewLanes.lanes);
+    });
+
+    it('review lane metadata does not alter nextAction priority or adjacent pet lenses', () => {
+      const base = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 4, canFinalize: true },
+      });
+      const baseCapsule = createPetHandoffCapsule(base);
+
+      const merged = mergePetReviewLanesIntoSnapshot(base, [
+        { role: 'safety', status: 'blocked', grade: 'F', recommendation: 'block', highestPriority: 'P1', issueCount: 5, updatedAt: 400 },
+      ]);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(capsule.nextAction).toBe(baseCapsule.nextAction);
+      expect(capsule.nextAction).toBe('finalize');
+      expect(merged.review).toEqual(base.review);
+      expect(merged.reviewHeat).toEqual(base.reviewHeat);
+      expect(merged.blockerLens).toEqual(base.blockerLens);
+      expect(merged.stopLine).toEqual(base.stopLine);
+      expect(merged.memoryPressure).toEqual(base.memoryPressure);
+      expect(merged.workerCycle).toEqual(base.workerCycle);
+    });
+
+    it('privacy false-positive probe: raw lane labels, ids, messages, details, transcripts, and raw fields stay out of pet snapshot and handoff projection', () => {
+      const snap = createBaseForHandoff();
+      const lanesWithSecrets = [
+        {
+          role: 'reviewer',
+          status: 'blocked',
+          grade: 'C',
+          recommendation: 'iterate',
+          highestPriority: 'P2',
+          issueCount: 2,
+          updatedAt: 500,
+          laneId: 'lane_SECRET_ID_123',
+          name: 'Hermes SECRET_NAME',
+          label: 'label password=lane-secret',
+          message: 'message SECRET_MESSAGE',
+          details: { token: 'SECRET_DETAILS' },
+          transcript: 'TOPSECRET_TRANSCRIPT',
+          raw: 'RAW_SECRET_FIELD',
+        },
+      ] as Array<Parameters<typeof mergePetReviewLanesIntoSnapshot>[1] extends Array<infer Lane> ? Lane & Record<string, unknown> : never>;
+      const sourceJson = JSON.stringify(lanesWithSecrets);
+      expect(sourceJson).toMatch(/SECRET_ID_123|SECRET_NAME|lane-secret|SECRET_MESSAGE|SECRET_DETAILS|TOPSECRET_TRANSCRIPT|RAW_SECRET_FIELD/);
+
+      const merged = mergePetReviewLanesIntoSnapshot(snap, lanesWithSecrets);
+      const capsule = createPetHandoffCapsule(merged);
+      const petJson = JSON.stringify(merged);
+      const capsuleJson = JSON.stringify(capsule);
+
+      expect(merged.reviewLanes.total).toBe(1);
+      expect(merged.reviewLanes.lanes[0]).toEqual({
+        role: 'reviewer',
+        status: 'blocked',
+        grade: 'C',
+        recommendation: 'iterate',
+        highestPriority: 'P2',
+        issueCount: 2,
+        updatedAt: 500,
+      });
+      expect(capsule.reviewLaneSummaries).toEqual(merged.reviewLanes.lanes);
+      expect(petJson).not.toMatch(/SECRET_ID_123|SECRET_NAME|lane-secret|SECRET_MESSAGE|SECRET_DETAILS|TOPSECRET_TRANSCRIPT|RAW_SECRET_FIELD|password=/);
+      expect(capsuleJson).not.toMatch(/SECRET_ID_123|SECRET_NAME|lane-secret|SECRET_MESSAGE|SECRET_DETAILS|TOPSECRET_TRANSCRIPT|RAW_SECRET_FIELD|password=/);
     });
   });
 });

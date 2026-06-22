@@ -79,6 +79,31 @@ export interface PetWorkerCycle {
   reviewErrorCode: string | null;
 }
 
+export type PetReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'other';
+export type PetReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
+export type PetReviewLaneRecommendation = 'proceed' | 'iterate' | 'block' | 'unknown';
+export type PetReviewLanePriority = 'P1' | 'P2' | 'P3';
+
+export interface PetReviewLaneSummary {
+  role: PetReviewLaneRole;
+  status: PetReviewLaneStatus;
+  grade: AutonomousRunCompletionGrade | null;
+  recommendation: PetReviewLaneRecommendation;
+  highestPriority: PetReviewLanePriority | null;
+  issueCount: number;
+  updatedAt: number | null;
+}
+
+export interface PetReviewLaneInput {
+  role?: unknown;
+  status?: unknown;
+  grade?: unknown;
+  recommendation?: unknown;
+  highestPriority?: unknown;
+  issueCount?: unknown;
+  updatedAt?: unknown;
+}
+
 export interface PetControlSnapshot {
   schemaVersion: 1;
   generatedAt: number;
@@ -148,6 +173,20 @@ export interface PetControlSnapshot {
     budgetTokens: number;
   };
   workerCycle: PetWorkerCycle;
+  reviewLanes: {
+    total: number;
+    activeCount: number;
+    passedCount: number;
+    blockedCount: number;
+    failedCount: number;
+    highestPriority: PetReviewLanePriority | null;
+    worstGrade: AutonomousRunCompletionGrade | null;
+    proceedCount: number;
+    iterateCount: number;
+    blockCount: number;
+    unknownCount: number;
+    lanes: PetReviewLaneSummary[];
+  };
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
@@ -330,6 +369,21 @@ export function createPetControlSnapshotFromRunCockpit(
     reviewErrorCode: null,
   };
 
+  const reviewLanes: PetControlSnapshot['reviewLanes'] = {
+    total: 0,
+    activeCount: 0,
+    passedCount: 0,
+    blockedCount: 0,
+    failedCount: 0,
+    highestPriority: null,
+    worstGrade: null,
+    proceedCount: 0,
+    iterateCount: 0,
+    blockCount: 0,
+    unknownCount: 0,
+    lanes: [],
+  };
+
   return {
     schemaVersion: 1,
     generatedAt: snapshot.generatedAt,
@@ -370,6 +424,7 @@ export function createPetControlSnapshotFromRunCockpit(
     stopLine: createPetStopLineState(activeRun),
     memoryPressure,
     workerCycle,
+    reviewLanes,
   };
 }
 
@@ -762,10 +817,22 @@ export interface PetHandoffCapsule {
   workerCycleReviewProofDebtCount: number;
   workerCycleAcceptedEvidenceCount: number;
   workerCycleReviewErrorCode: string | null;
+  reviewLaneCount: number;
+  reviewLaneActiveCount: number;
+  reviewLanePassedCount: number;
+  reviewLaneBlockedCount: number;
+  reviewLaneFailedCount: number;
+  reviewLaneHighestPriority: PetReviewLanePriority | null;
+  reviewLaneWorstGrade: AutonomousRunCompletionGrade | null;
+  reviewLaneProceedCount: number;
+  reviewLaneIterateCount: number;
+  reviewLaneBlockCount: number;
+  reviewLaneUnknownCount: number;
+  reviewLaneSummaries: PetReviewLaneSummary[];
 }
 
 export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
-  const { readiness, run, target, safety, review, evidence, generatedAt, memoryPressure: mp, workerCycle: wc } = snapshot;
+  const { readiness, run, target, safety, review, evidence, generatedAt, memoryPressure: mp, workerCycle: wc, reviewLanes: rl } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
   if (target.stale) {
@@ -839,6 +906,19 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const workerCycleAcceptedEvidenceCount = wc ? wc.acceptedEvidenceCount : 0;
   const workerCycleReviewErrorCode = wc ? wc.reviewErrorCode : null;
 
+  const reviewLaneCount = rl ? rl.total : 0;
+  const reviewLaneActiveCount = rl ? rl.activeCount : 0;
+  const reviewLanePassedCount = rl ? rl.passedCount : 0;
+  const reviewLaneBlockedCount = rl ? rl.blockedCount : 0;
+  const reviewLaneFailedCount = rl ? rl.failedCount : 0;
+  const reviewLaneHighestPriority = rl ? rl.highestPriority : null;
+  const reviewLaneWorstGrade = rl ? rl.worstGrade : null;
+  const reviewLaneProceedCount = rl ? rl.proceedCount : 0;
+  const reviewLaneIterateCount = rl ? rl.iterateCount : 0;
+  const reviewLaneBlockCount = rl ? rl.blockCount : 0;
+  const reviewLaneUnknownCount = rl ? rl.unknownCount : 0;
+  const reviewLaneSummaries = rl ? rl.lanes : [];
+
   return {
     schemaVersion: 1,
     generatedAt,
@@ -887,6 +967,18 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     workerCycleReviewProofDebtCount,
     workerCycleAcceptedEvidenceCount,
     workerCycleReviewErrorCode,
+    reviewLaneCount,
+    reviewLaneActiveCount,
+    reviewLanePassedCount,
+    reviewLaneBlockedCount,
+    reviewLaneFailedCount,
+    reviewLaneHighestPriority,
+    reviewLaneWorstGrade,
+    reviewLaneProceedCount,
+    reviewLaneIterateCount,
+    reviewLaneBlockCount,
+    reviewLaneUnknownCount,
+    reviewLaneSummaries,
   };
 }
 
@@ -945,4 +1037,145 @@ function toPetWorkerCycleReviewErrorCode(errorCode: string | null): string | nul
   return PET_WORKER_CYCLE_REVIEW_ERROR_CODES.has(errorCode)
     ? errorCode
     : 'unknown_worker_cycle_error';
+}
+
+const VALID_ROLES = ['implementer', 'reviewer', 'safety', 'ux', 'oracle', 'other'] as const;
+const VALID_STATUSES = ['idle', 'running', 'passed', 'blocked', 'failed'] as const;
+const VALID_RECS = ['proceed', 'iterate', 'block', 'unknown'] as const;
+const VALID_PRIOS = ['P1', 'P2', 'P3'] as const;
+
+function normalizeRole(v: unknown): PetReviewLaneRole {
+  if (typeof v === 'string' && (VALID_ROLES as readonly string[]).includes(v)) {
+    return v as PetReviewLaneRole;
+  }
+  return 'other';
+}
+
+function normalizeStatus(v: unknown): PetReviewLaneStatus {
+  if (typeof v === 'string' && (VALID_STATUSES as readonly string[]).includes(v)) {
+    return v as PetReviewLaneStatus;
+  }
+  return 'idle';
+}
+
+function normalizeRecommendation(v: unknown): PetReviewLaneRecommendation {
+  if (typeof v === 'string' && (VALID_RECS as readonly string[]).includes(v)) {
+    return v as PetReviewLaneRecommendation;
+  }
+  return 'unknown';
+}
+
+function normalizePriority(v: unknown): PetReviewLanePriority | null {
+  if (typeof v === 'string' && (VALID_PRIOS as readonly string[]).includes(v)) {
+    return v as PetReviewLanePriority;
+  }
+  return null;
+}
+
+function normalizeGrade(v: unknown): AutonomousRunCompletionGrade | null {
+  if (typeof v === 'string' && ['A', 'B', 'C', 'D', 'F'].includes(v)) {
+    return v as AutonomousRunCompletionGrade;
+  }
+  return null;
+}
+
+function normalizeLane(input: unknown): PetReviewLaneSummary {
+  const i = (input || {}) as Record<string, unknown>;
+  const role = normalizeRole(i.role);
+  const status = normalizeStatus(i.status);
+  const grade = normalizeGrade(i.grade);
+  const recommendation = normalizeRecommendation(i.recommendation);
+  const highestPriority = normalizePriority(i.highestPriority);
+  let issueCount = 0;
+  const ic = i.issueCount;
+  if (typeof ic === 'number' && Number.isFinite(ic)) {
+    issueCount = Math.max(0, Math.floor(ic));
+  }
+  let updatedAt: number | null = null;
+  const ua = i.updatedAt;
+  if (typeof ua === 'number' && Number.isFinite(ua)) {
+    updatedAt = ua;
+  }
+  return {
+    role,
+    status,
+    grade,
+    recommendation,
+    highestPriority,
+    issueCount,
+    updatedAt,
+  };
+}
+
+function pickHighestPriority(lanes: PetReviewLaneSummary[]): PetReviewLanePriority | null {
+  if (lanes.some((l) => l.highestPriority === 'P1')) return 'P1';
+  if (lanes.some((l) => l.highestPriority === 'P2')) return 'P2';
+  if (lanes.some((l) => l.highestPriority === 'P3')) return 'P3';
+  return null;
+}
+
+function pickWorstGrade(lanes: PetReviewLaneSummary[]): AutonomousRunCompletionGrade | null {
+  const valid = lanes.map((l) => l.grade).filter((g): g is AutonomousRunCompletionGrade => g != null);
+  if (valid.length === 0) return null;
+  const rank: Record<AutonomousRunCompletionGrade, number> = { A: 1, B: 2, C: 3, D: 4, F: 5 };
+  let worst: AutonomousRunCompletionGrade | null = null;
+  let maxR = -1;
+  for (const g of valid) {
+    const r = rank[g] ?? 0;
+    if (r > maxR) {
+      maxR = r;
+      worst = g;
+    }
+  }
+  return worst;
+}
+
+export function mergePetReviewLanesIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  lanes: PetReviewLaneInput[] | null | undefined,
+): PetControlSnapshot {
+  if (lanes === null || lanes === undefined) {
+    return snapshot;
+  }
+  const inputArr = Array.isArray(lanes) ? lanes : [];
+  const normalized = inputArr.slice(0, 4).map((l) => normalizeLane(l));
+  const total = normalized.length;
+  let activeCount = 0;
+  let passedCount = 0;
+  let blockedCount = 0;
+  let failedCount = 0;
+  let proceedCount = 0;
+  let iterateCount = 0;
+  let blockCount = 0;
+  let unknownCount = 0;
+  for (const l of normalized) {
+    if (l.status === 'running') activeCount++;
+    if (l.status === 'passed') passedCount++;
+    if (l.status === 'blocked') blockedCount++;
+    if (l.status === 'failed') failedCount++;
+    if (l.recommendation === 'proceed') proceedCount++;
+    else if (l.recommendation === 'iterate') iterateCount++;
+    else if (l.recommendation === 'block') blockCount++;
+    else unknownCount++;
+  }
+  const highestPriority = pickHighestPriority(normalized);
+  const worstGrade = pickWorstGrade(normalized);
+  const reviewLanes = {
+    total,
+    activeCount,
+    passedCount,
+    blockedCount,
+    failedCount,
+    highestPriority,
+    worstGrade,
+    proceedCount,
+    iterateCount,
+    blockCount,
+    unknownCount,
+    lanes: normalized,
+  };
+  return {
+    ...snapshot,
+    reviewLanes,
+  };
 }
