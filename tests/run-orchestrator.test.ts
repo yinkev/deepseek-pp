@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendAutonomousEvidenceRecord,
+  appendAutonomousQualityGateRecord,
   appendAutonomousRunStep,
   createAutonomousRun,
   DEFAULT_AUTONOMOUS_RUN_POLICY,
@@ -9,6 +10,7 @@ import {
   upsertAutonomousTargetLease,
 } from '../core/run/store';
 import {
+  evaluateAutonomousRunQualityGate,
   executeAutonomousOrchestratorCycle,
   getAutonomousRunCockpitSnapshot,
   initializeAutonomousRunOrchestrator,
@@ -817,6 +819,490 @@ describe('autonomous run orchestrator startup bridge', () => {
         cancelled: 0,
       },
     });
+  });
+});
+
+describe('autonomous run orchestrator quality gate enforcement', () => {
+  it('allows worker execution when no quality gate exists (first cycle compatibility)', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'no-gate-allow' });
+
+    const run = await createAutonomousRun({
+      id: 'no-gate-allow',
+      goal: 'No quality gate',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision).toEqual({
+      blocked: false,
+      reason: 'no_quality_gate',
+      latestGateStatus: null,
+      seq: null,
+      coverageComplete: null,
+      coveredCount: null,
+      gapCount: null,
+      conflictCount: null,
+      notTestableCount: null,
+      selfReviewGrade: null,
+      verificationPassed: null,
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows worker execution when latest gate status is passed', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `gate-passed-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'gate-passed-run',
+      goal: 'Gate passed',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: { complete: true, coveredCount: 5, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [{ name: 'npm test', result: 'passed', summary: 'ok' }] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: false,
+      reason: 'gate_passed',
+      latestGateStatus: 'passed',
+      seq: 1,
+    });
+    expect(result.qualityGateDecision?.coverageComplete).toBe(true);
+    expect(result.qualityGateDecision?.selfReviewGrade).toBe('A');
+    expect(result.qualityGateDecision?.verificationPassed).toBe(true);
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows worker execution with warning metadata when latest gate status is warning', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `gate-warn-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'gate-warning-run',
+      goal: 'Gate warning',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 105);
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'warning',
+      contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'B' },
+      verification: { commands: [{ name: 'npm test', result: 'passed', summary: 'ok' }] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: false,
+      reason: 'gate_warning',
+      latestGateStatus: 'warning',
+      seq: 1,
+      selfReviewGrade: 'B',
+    });
+    expect(result.workerResult).toBeTruthy();
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks worker execution when latest gate status is failed', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `gate-fail-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'gate-failed-run',
+      goal: 'Gate failed',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'failed',
+      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'C' },
+      verification: { commands: [] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: true,
+      reason: 'gate_failed',
+      latestGateStatus: 'failed',
+      seq: 1,
+    });
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+
+    // Non-mutating hold: durable status unchanged
+    const durable = await getAutonomousRunById(run.id);
+    expect(durable?.status).toBe('running');
+  });
+
+  it('blocks worker execution when latest gate status is blocked', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `gate-blocked-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'gate-blocked-run',
+      goal: 'Gate blocked',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'blocked',
+      contractCoverage: { complete: false, coveredCount: 0, gapCount: 1, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'D' },
+      verification: { commands: [] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: true,
+      reason: 'gate_blocked',
+      latestGateStatus: 'blocked',
+      seq: 1,
+    });
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks on deep check: independentReview status failed even when top-level is passed', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `deep-irev-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'deep-irev-run',
+      goal: 'Deep independent review',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: { complete: true, coveredCount: 5, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [] },
+      independentReview: { status: 'failed', grade: 'D', blockingIssueCount: 0 },
+    }, 120);
+
+    // Store normalizes: independentReview.status='failed' → status becomes 'failed'
+    // (blockingIssueCount=0 so it does not escalate to 'blocked')
+    expect(gate?.status).toBe('failed');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: true,
+      latestGateStatus: 'failed',
+    });
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks on deep check: independentReview status blocked even when top-level is warning', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `deep-irev-blocked-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'deep-irev-blocked',
+      goal: 'Deep independent review blocked',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'warning',
+      contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'B' },
+      verification: { commands: [] },
+      independentReview: { status: 'blocked', grade: 'F', blockingIssueCount: 1 },
+    }, 120);
+
+    // Store normalizes: independentReview.status='blocked' → status becomes 'blocked'
+    expect(gate?.status).toBe('blocked');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.qualityGateDecision?.blocked).toBe(true);
+    expect(result.qualityGateDecision?.latestGateStatus).toBe('blocked');
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks on deep check: independentReview blockingIssueCount > 0', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `deep-block-ct-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'deep-block-ct',
+      goal: 'Deep blocking issue count',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [] },
+      independentReview: { status: 'passed', grade: 'A', blockingIssueCount: 2 },
+    }, 120);
+
+    // Store normalizes: independentReview.blockingIssueCount > 0 → status becomes 'blocked'
+    expect(gate?.status).toBe('blocked');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.qualityGateDecision?.blocked).toBe(true);
+    expect(result.qualityGateDecision?.latestGateStatus).toBe('blocked');
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks on deep check: resultStateConsistency status inconsistent', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `deep-inconsistent-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'deep-inconsistent',
+      goal: 'Deep inconsistent state',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'inconsistent', ok: false, issueCount: 2, blockingIssueCount: 1 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    // Store normalizes: resultStateConsistency.status='inconsistent' → status becomes 'failed'
+    expect(gate?.status).toBe('failed');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.qualityGateDecision?.blocked).toBe(true);
+    expect(result.qualityGateDecision?.latestGateStatus).toBe('failed');
+    expect(result.qualityGateDecision?.reason).toBe('gate_failed');
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks on deep check: resultStateConsistency blockingIssueCount > 0', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `deep-block-iss-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'deep-block-iss',
+      goal: 'Deep blocking issues state',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'warning',
+      contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 3, blockingIssueCount: 1 },
+      selfReview: { grade: 'B' },
+      verification: { commands: [] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    // Store normalizes: resultStateConsistency.blockingIssueCount > 0 → status becomes 'failed'
+    expect(gate?.status).toBe('failed');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.qualityGateDecision?.blocked).toBe(true);
+    expect(result.qualityGateDecision?.latestGateStatus).toBe('failed');
+    expect(result.qualityGateDecision?.reason).toBe('gate_failed');
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks on deep check: contractCoverage conflictCount > 0', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `deep-conflict-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'deep-conflict',
+      goal: 'Deep contract conflicts',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: { complete: false, coveredCount: 3, gapCount: 0, conflictCount: 2, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [] },
+      independentReview: { status: 'passed', grade: 'A', blockingIssueCount: 0 },
+    }, 120);
+
+    // Store normalizes: contractCoverage.conflictCount > 0 → status becomes 'failed'
+    expect(gate?.status).toBe('failed');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.qualityGateDecision?.blocked).toBe(true);
+    expect(result.qualityGateDecision?.latestGateStatus).toBe('failed');
+    expect(result.qualityGateDecision?.reason).toBe('gate_failed');
+    expect(result.qualityGateDecision?.conflictCount).toBe(2);
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('returns null qualityGateDecision when no selected run exists', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 100 });
+
+    expect(result.selectedRunId).toBeNull();
+    expect(result.qualityGateDecision).toBeNull();
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('adversarial probe: result object and durable state agree when gate blocks (non-mutating hold)', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `adversarial-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'adversarial-blocked',
+      goal: 'Adversarial quality gate',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'failed',
+      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'D' },
+      verification: { commands: [] },
+      independentReview: { status: 'not_run', grade: null, blockingIssueCount: 0 },
+    }, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    // Decision says blocked
+    expect(result.qualityGateDecision).not.toBeNull();
+    expect(result.qualityGateDecision!.blocked).toBe(true);
+    expect(result.qualityGateDecision!.reason).toBe('gate_failed');
+
+    // Worker not called, result null
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+
+    // Durable state remains unadvanced (non-mutating hold)
+    const durable = await getAutonomousRunById(run.id);
+    expect(durable?.status).toBe('running');
+    // updatedAt was bumped to 120 by the quality-gate append, not by the cycle (200)
+    expect(durable?.updatedAt).toBe(120);
+
+    // afterSnapshot does not show status change from the block
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: 'running',
+    });
+  });
+
+  it('privacy probe: quality gate decision exposes only safe aggregate metadata', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `privacy-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'privacy-gate-run',
+      goal: 'Privacy gate',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    // Inject a gate with fields that could leak sensitive data
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'failed',
+      contractCoverage: { complete: false, coveredCount: 2, gapCount: 1, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'F' },
+      verification: {
+        commands: [
+          { name: 'SECRET_COMMAND', result: 'failed', summary: 'SECRET_SUMMARY' },
+        ],
+      },
+      independentReview: { status: 'failed', grade: 'F', blockingIssueCount: 1 },
+    }, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    // The decision must not leak raw command names, summaries, commit data, gate ids, or reviewer prose
+    const json = JSON.stringify(result.qualityGateDecision);
+    expect(json).not.toMatch(/SECRET_COMMAND|SECRET_SUMMARY/);
+    expect(json).not.toMatch(/privacy-gate-/); // run id
+    expect(json).not.toMatch(/raw-phrase|secret-token|Bearer/);
   });
 });
 

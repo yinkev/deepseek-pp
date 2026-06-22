@@ -1,5 +1,6 @@
 import {
   getAutonomousRunLedgerSnapshot,
+  getAutonomousRunQualityGates,
   reconcileInterruptedAutonomousRuns,
 } from './store';
 import {
@@ -26,6 +27,9 @@ import {
   type AutonomousRunReviewLaneGateInput,
 } from './worker';
 import type {
+  AutonomousQualityGateGrade,
+  AutonomousQualityGateRecord,
+  AutonomousQualityGateStatus,
   AutonomousRun,
   AutonomousRunId,
   AutonomousRunStatus,
@@ -95,6 +99,7 @@ export interface AutonomousRunOrchestratorCycleResult {
   reconciledInterruptedRuns: number;
   beforeSnapshot: AutonomousRunCockpitSnapshot;
   reviewLanePlan: AutonomousReviewLanePlan;
+  qualityGateDecision: AutonomousRunQualityGateDecision | null;
   workerResult: AutonomousRunCycleResult | null;
   telemetryResult: AutonomousRunOrchestratorTelemetryResult | null;
   afterSnapshot: AutonomousRunCockpitSnapshot;
@@ -136,6 +141,45 @@ export type AutonomousRunOrchestratorTelemetryResult =
     errorCode: 'telemetry_write_failed';
   };
 
+/**
+ * Compact quality-gate decision for orchestrator cycle results.
+ * Contains only safe aggregate metadata — no raw gate ids,
+ * reviewer prose, commit messages, command summaries, evidence ids,
+ * URLs, tokens, or secrets.
+ */
+export interface AutonomousRunQualityGateDecision {
+  /** Whether the gate blocks worker execution. */
+  blocked: boolean;
+  /** Machine-readable reason for the decision. */
+  reason:
+    | 'no_quality_gate'
+    | 'gate_passed'
+    | 'gate_warning'
+    | 'gate_failed'
+    | 'gate_blocked'
+    | 'contract_conflicts'
+    | 'state_inconsistent'
+    | 'review_issues';
+  /** Top-level status of the latest quality gate, or null if none exist. */
+  latestGateStatus: AutonomousQualityGateStatus | null;
+  /** Sequence number of the latest gate, or null. */
+  seq: number | null;
+  /** Whether contract coverage was complete in the latest gate. */
+  coverageComplete: boolean | null;
+  /** Count of covered requirements. */
+  coveredCount: number | null;
+  /** Count of uncovered/gap requirements. */
+  gapCount: number | null;
+  /** Count of conflicting requirements. */
+  conflictCount: number | null;
+  /** Count of explicitly not-testable items. */
+  notTestableCount: number | null;
+  /** Self-review grade from the latest gate. */
+  selfReviewGrade: AutonomousQualityGateGrade | null;
+  /** Whether all verification commands passed. null when no commands exist. */
+  verificationPassed: boolean | null;
+}
+
 export async function initializeAutonomousRunOrchestrator(
   options: {
     interruptedThresholdMs?: number;
@@ -150,6 +194,75 @@ export async function initializeAutonomousRunOrchestrator(
   return {
     reconciledInterruptedRuns,
     snapshot: await getAutonomousRunCockpitSnapshot(now),
+  };
+}
+
+export async function evaluateAutonomousRunQualityGate(
+  runId: AutonomousRunId,
+): Promise<AutonomousRunQualityGateDecision> {
+  const gates = await getAutonomousRunQualityGates(runId);
+
+  if (gates.length === 0) {
+    return {
+      blocked: false,
+      reason: 'no_quality_gate',
+      latestGateStatus: null,
+      seq: null,
+      coverageComplete: null,
+      coveredCount: null,
+      gapCount: null,
+      conflictCount: null,
+      notTestableCount: null,
+      selfReviewGrade: null,
+      verificationPassed: null,
+    };
+  }
+
+  const latest = gates[gates.length - 1];
+
+  // Deep block conditions — independent of top-level status
+  const deepBlocked =
+    latest.independentReview.status === 'failed' ||
+    latest.independentReview.status === 'blocked' ||
+    latest.independentReview.blockingIssueCount > 0 ||
+    latest.resultStateConsistency.status === 'inconsistent' ||
+    latest.resultStateConsistency.blockingIssueCount > 0 ||
+    latest.contractCoverage.conflictCount > 0;
+
+  // Top-level block conditions
+  const gateBlocked = latest.status === 'failed' || latest.status === 'blocked';
+
+  const blocked = deepBlocked || gateBlocked;
+
+  const reason = blocked
+    ? gateBlocked
+      ? latest.status === 'failed' ? 'gate_failed' : 'gate_blocked'
+      : latest.contractCoverage.conflictCount > 0
+        ? 'contract_conflicts'
+        : latest.resultStateConsistency.status === 'inconsistent' ||
+            latest.resultStateConsistency.blockingIssueCount > 0
+          ? 'state_inconsistent'
+          : 'review_issues'
+    : latest.status === 'warning'
+      ? 'gate_warning'
+      : 'gate_passed';
+
+  const verificationPassed = latest.verification.commands.length > 0
+    ? latest.verification.commands.every((cmd) => cmd.result === 'passed')
+    : null;
+
+  return {
+    blocked,
+    reason,
+    latestGateStatus: latest.status,
+    seq: latest.seq,
+    coverageComplete: latest.contractCoverage.complete,
+    coveredCount: latest.contractCoverage.coveredCount,
+    gapCount: latest.contractCoverage.gapCount,
+    conflictCount: latest.contractCoverage.conflictCount,
+    notTestableCount: latest.contractCoverage.notTestableCount,
+    selfReviewGrade: latest.selfReview.grade,
+    verificationPassed,
   };
 }
 
@@ -175,7 +288,14 @@ export async function executeAutonomousOrchestratorCycle(
     risk: options.reviewLaneScheduler?.risk,
     oracleRequested: options.reviewLaneScheduler?.oracleRequested,
   });
-  const workerResult = selectedRunId
+
+  // Quality gate check — consulted before executor is called
+  const qualityGateDecision = selectedRunId
+    ? await evaluateAutonomousRunQualityGate(selectedRunId)
+    : null;
+  const gateBlocks = qualityGateDecision?.blocked === true;
+
+  const workerResult = selectedRunId && !gateBlocks
     ? await executeAutonomousRunCycle(selectedRunId, executor, {
       now,
       actionKind: options.actionKind,
@@ -189,6 +309,7 @@ export async function executeAutonomousOrchestratorCycle(
     reconciledInterruptedRuns,
     beforeSnapshot,
     reviewLanePlan,
+    qualityGateDecision,
     workerResult,
     telemetryResult,
     afterSnapshot,

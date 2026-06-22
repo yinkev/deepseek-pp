@@ -399,6 +399,7 @@ function createOrchestratorResult(
       maxParallel: 0,
     },
     workerResult: createWorkerResult(),
+    qualityGateDecision: null,
     telemetryResult: null,
     afterSnapshot: createSnapshot(),
     ...overrides,
