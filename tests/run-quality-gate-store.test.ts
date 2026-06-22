@@ -231,6 +231,53 @@ describe('autonomous quality gate store', () => {
     expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
   });
 
+  it('fails overall passed gates when consistency status is inconsistent', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'consistency-fail' });
+
+    const run = await createAutonomousRun({ id: 'consistency-fail-run', goal: 'Consistency failure gate' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        complete: true,
+        coveredCount: 1,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+      },
+      resultStateConsistency: {
+        status: 'inconsistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      verification: {
+        commands: [
+          { name: 'clean verification', result: 'passed', summary: 'verification passed' },
+        ],
+      },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    } as any, NOW + 2);
+
+    expect(gate).toMatchObject({
+      status: 'failed',
+      resultStateConsistency: {
+        status: 'inconsistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+    });
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
+  });
+
   it('redacts quality-gate secrets before truncating text', async () => {
     const { chromeStub, storage } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);

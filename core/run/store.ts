@@ -949,6 +949,7 @@ function normalizeQualityGateStatus(
   if (summary.independentReview.status === 'blocked' || summary.independentReview.blockingIssueCount > 0) return 'blocked';
   if (
     summary.contractCoverage.conflictCount > 0 ||
+    summary.resultStateConsistency.status === 'inconsistent' ||
     summary.resultStateConsistency.blockingIssueCount > 0 ||
     summary.verification.commands.some((command) => command.result === 'failed') ||
     summary.independentReview.status === 'failed'
