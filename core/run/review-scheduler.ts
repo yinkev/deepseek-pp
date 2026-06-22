@@ -1,8 +1,12 @@
-import type { AutonomousRunStatus } from './types';
+import type {
+  AutonomousReviewLaneRole,
+  AutonomousReviewLaneStatus,
+  AutonomousRunStatus,
+} from './types';
 import type { AutonomousRunReviewLaneGateInput } from './worker';
 
-export type AutonomousReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'grok';
-export type AutonomousReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
+export type { AutonomousReviewLaneRole, AutonomousReviewLaneStatus } from './types';
+
 export type AutonomousReviewLaneScheduleAction = 'idle' | 'dispatch' | 'hold' | 'halt';
 export type AutonomousReviewLaneBlockingPriority = 'P1' | 'P2';
 

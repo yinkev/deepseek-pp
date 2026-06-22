@@ -33,6 +33,11 @@ import type {
   AutonomousRunStepCreateInput,
   AutonomousRunStorageState,
   AutonomousRunUpdateInput,
+  AutonomousReviewLaneCreateInput,
+  AutonomousReviewLaneRecord,
+  AutonomousReviewLaneRecordRole,
+  AutonomousReviewLaneRecommendation,
+  AutonomousReviewLaneStatus,
   AutonomousTargetLease,
   AutonomousTargetLeaseCreateInput,
 } from './types';
@@ -45,6 +50,7 @@ const MAX_STEPS = 1_000;
 const MAX_TARGET_LEASES = 200;
 const MAX_EVIDENCE_RECORDS = 500;
 const MAX_QUALITY_GATE_RECORDS = 300;
+const MAX_REVIEW_LANE_RECORDS = 500;
 const MAX_QUALITY_GATE_COMMANDS = 16;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_LIST_ITEMS = 32;
@@ -104,6 +110,7 @@ const EMPTY_STATE: AutonomousRunStorageState = {
   targetLeases: [],
   evidence: [],
   qualityGates: [],
+  reviewLanes: [],
 };
 
 let storageMutationQueue: Promise<unknown> = Promise.resolve();
@@ -138,6 +145,7 @@ export async function createAutonomousRun(
       targetLeases: state.targetLeases.filter((lease) => lease.runId !== run.id),
       evidence: state.evidence.filter((record) => record.runId !== run.id),
       qualityGates: state.qualityGates.filter((record) => record.runId !== run.id),
+      reviewLanes: state.reviewLanes.filter((record) => record.runId !== run.id),
     },
     result: run,
   }));
@@ -488,6 +496,47 @@ export async function getAutonomousRunQualityGates(runId: AutonomousRunId): Prom
     .sort((a, b) => a.seq - b.seq);
 }
 
+export async function appendAutonomousReviewLaneRecord(
+  runId: AutonomousRunId,
+  input: AutonomousReviewLaneCreateInput,
+  now = Date.now(),
+): Promise<AutonomousReviewLaneRecord | null> {
+  return mutateAutonomousRunState((state) => {
+    const run = state.runs.find((item) => item.id === runId);
+    if (!run || isTerminalRunStatus(run.status)) return { state, result: null, write: false };
+    const record = normalizeReviewLaneRecord({
+      id: createId('lane'),
+      runId,
+      seq: nextReviewLaneSeq(state.reviewLanes, runId),
+      createdAt: now,
+      role: input.role,
+      status: input.status,
+      grade: input.grade,
+      recommendation: input.recommendation,
+      highestPriority: input.highestPriority,
+      issueCount: input.issueCount,
+      evidenceRefCount: input.evidenceRefCount,
+      summary: input.summary,
+    });
+    if (!record) return { state, result: null, write: false };
+    return {
+      state: {
+        ...state,
+        runs: pruneRuns(state.runs.map((item) => item.id === runId ? { ...item, updatedAt: now } : item)),
+        reviewLanes: pruneReviewLaneRecords([record, ...state.reviewLanes.filter((stored) => stored.id !== record.id)]),
+      },
+      result: record,
+    };
+  });
+}
+
+export async function getAutonomousRunReviewLanes(runId: AutonomousRunId): Promise<AutonomousReviewLaneRecord[]> {
+  const state = await readAutonomousRunState();
+  return state.reviewLanes
+    .filter((record) => record.runId === runId)
+    .sort((a, b) => a.seq - b.seq);
+}
+
 export async function applyAutonomousRunIterationReview(
   input: AutonomousRunIterationApplyInput,
   now = Date.now(),
@@ -648,6 +697,7 @@ async function writeAutonomousRunState(state: AutonomousRunStorageState): Promis
       targetLeases: pruneTargetLeases(state.targetLeases),
       evidence: pruneEvidenceRecords(state.evidence),
       qualityGates: pruneQualityGateRecords(state.qualityGates),
+      reviewLanes: pruneReviewLaneRecords(state.reviewLanes),
     },
   });
 }
@@ -717,6 +767,9 @@ function normalizeState(raw: unknown): AutonomousRunStorageState {
       : [],
     qualityGates: Array.isArray(value.qualityGates)
       ? value.qualityGates.map(normalizeQualityGateRecord).filter((item): item is AutonomousQualityGateRecord => item !== null)
+      : [],
+    reviewLanes: Array.isArray(value.reviewLanes)
+      ? value.reviewLanes.map(normalizeReviewLaneRecord).filter((item): item is AutonomousReviewLaneRecord => item !== null)
       : [],
   };
 }
@@ -858,6 +911,31 @@ function normalizeQualityGateRecord(raw: unknown): AutonomousQualityGateRecord |
   };
 }
 
+function normalizeReviewLaneRecord(raw: unknown): AutonomousReviewLaneRecord | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Partial<AutonomousReviewLaneRecord>;
+  const id = normalizeId(record.id);
+  const runId = normalizeId(record.runId);
+  const createdAt = normalizeTimestamp(record.createdAt);
+  if (!id || !runId || createdAt === null) return null;
+  const recommendation = normalizeReviewLaneRecommendation(record.recommendation);
+  const highestPriority = normalizeReviewLanePriority(record.highestPriority);
+  return {
+    id,
+    runId,
+    seq: normalizePositiveInteger(record.seq) ?? 1,
+    createdAt,
+    role: normalizeReviewLaneRole(record.role),
+    status: normalizeReviewLaneStatus(record.status, recommendation, highestPriority),
+    grade: normalizeQualityGateGrade(record.grade),
+    recommendation,
+    highestPriority,
+    issueCount: normalizeNonNegativeInteger(record.issueCount) ?? 0,
+    evidenceRefCount: normalizeNonNegativeInteger(record.evidenceRefCount) ?? 0,
+    summary: normalizeReviewLaneText(record.summary, 256),
+  };
+}
+
 function normalizeQualityGateContractCoverage(value: unknown): AutonomousQualityGateRecord['contractCoverage'] {
   const summary = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Partial<AutonomousQualityGateRecord['contractCoverage']>
@@ -942,6 +1020,12 @@ function nextQualityGateSeq(records: readonly AutonomousQualityGateRecord[], run
     .reduce((max, record) => Math.max(max, record.seq), 0) + 1;
 }
 
+function nextReviewLaneSeq(records: readonly AutonomousReviewLaneRecord[], runId: AutonomousRunId): number {
+  return records
+    .filter((record) => record.runId === runId)
+    .reduce((max, record) => Math.max(max, record.seq), 0) + 1;
+}
+
 function normalizeQualityGateStatus(
   value: unknown,
   summary: Pick<AutonomousQualityGateRecord, 'contractCoverage' | 'resultStateConsistency' | 'verification' | 'independentReview'>,
@@ -980,6 +1064,41 @@ function normalizeQualityGateIndependentReviewStatus(value: unknown): Autonomous
 
 function normalizeQualityGateGrade(value: unknown): AutonomousQualityGateGrade | null {
   return value === 'A' || value === 'B' || value === 'C' || value === 'D' || value === 'F' ? value : null;
+}
+
+function normalizeReviewLaneRole(value: unknown): AutonomousReviewLaneRecordRole {
+  return value === 'implementer' ||
+    value === 'reviewer' ||
+    value === 'safety' ||
+    value === 'ux' ||
+    value === 'oracle' ||
+    value === 'grok'
+    ? value
+    : 'other';
+}
+
+function normalizeReviewLaneStatus(
+  value: unknown,
+  recommendation: AutonomousReviewLaneRecommendation,
+  highestPriority: AutonomousReviewLaneRecord['highestPriority'],
+): AutonomousReviewLaneStatus {
+  if (highestPriority === 'P1' || highestPriority === 'P2' || recommendation === 'block') return 'blocked';
+  if (value === 'idle' || value === 'running' || value === 'passed' || value === 'blocked' || value === 'failed') return value;
+  return 'failed';
+}
+
+function normalizeReviewLaneRecommendation(value: unknown): AutonomousReviewLaneRecommendation {
+  return value === 'proceed' || value === 'iterate' || value === 'block' ? value : 'unknown';
+}
+
+function normalizeReviewLanePriority(value: unknown): AutonomousReviewLaneRecord['highestPriority'] {
+  return value === 'P1' || value === 'P2' || value === 'P3' ? value : null;
+}
+
+function normalizeReviewLaneText(value: unknown, maxLength: number): string | null {
+  const text = normalizeQualityGateText(value, maxLength);
+  if (!text) return null;
+  return text.replace(/\b(?:prompt|session|transcript|rawOutput|rawReviewerProse)\b/gi, '[redacted:raw]');
 }
 
 function normalizeQualityGateText(value: unknown, maxLength: number): string | null {
@@ -1382,6 +1501,12 @@ function pruneQualityGateRecords(records: AutonomousQualityGateRecord[]): Autono
   return [...records]
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, MAX_QUALITY_GATE_RECORDS);
+}
+
+function pruneReviewLaneRecords(records: AutonomousReviewLaneRecord[]): AutonomousReviewLaneRecord[] {
+  return [...records]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, MAX_REVIEW_LANE_RECORDS);
 }
 
 function createId(prefix: string): string {

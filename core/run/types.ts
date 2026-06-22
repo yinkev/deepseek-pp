@@ -1,6 +1,7 @@
 export type AutonomousRunId = string;
 export type AutonomousRunStepId = string;
 export type AutonomousQualityGateId = string;
+export type AutonomousReviewLaneId = string;
 
 export type AutonomousRunMode = 'interactive' | 'unattended';
 
@@ -162,6 +163,11 @@ export type AutonomousQualityGateGrade = 'A' | 'B' | 'C' | 'D' | 'F';
 export type AutonomousQualityGateVerificationResult = 'passed' | 'failed' | 'known_preexisting_failure';
 export type AutonomousQualityGateIndependentReviewStatus = 'not_run' | 'passed' | 'failed' | 'blocked';
 export type AutonomousQualityGateConsistencyStatus = 'consistent' | 'inconsistent' | 'not_applicable';
+export type AutonomousReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'grok';
+export type AutonomousReviewLaneRecordRole = AutonomousReviewLaneRole | 'other';
+export type AutonomousReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
+export type AutonomousReviewLaneRecommendation = 'proceed' | 'iterate' | 'block' | 'unknown';
+export type AutonomousReviewLanePriority = 'P1' | 'P2' | 'P3';
 
 export interface AutonomousQualityGateContractCoverageSummary {
   complete: boolean;
@@ -215,6 +221,21 @@ export interface AutonomousQualityGateRecord {
   verification: AutonomousQualityGateVerificationSummary;
   commit: AutonomousQualityGateCommitSummary | null;
   independentReview: AutonomousQualityGateIndependentReviewSummary;
+}
+
+export interface AutonomousReviewLaneRecord {
+  id: AutonomousReviewLaneId;
+  runId: AutonomousRunId;
+  seq: number;
+  createdAt: number;
+  role: AutonomousReviewLaneRecordRole;
+  status: AutonomousReviewLaneStatus;
+  grade: AutonomousQualityGateGrade | null;
+  recommendation: AutonomousReviewLaneRecommendation;
+  highestPriority: AutonomousReviewLanePriority | null;
+  issueCount: number;
+  evidenceRefCount: number;
+  summary: string | null;
 }
 
 export interface AutonomousRunCreateInput {
@@ -290,6 +311,17 @@ export interface AutonomousQualityGateCreateInput {
   independentReview?: Partial<AutonomousQualityGateIndependentReviewSummary>;
 }
 
+export interface AutonomousReviewLaneCreateInput {
+  role?: unknown;
+  status?: unknown;
+  grade?: unknown;
+  recommendation?: unknown;
+  highestPriority?: unknown;
+  issueCount?: unknown;
+  evidenceRefCount?: unknown;
+  summary?: unknown;
+}
+
 export interface AutonomousRunStorageState {
   version: 1;
   runs: AutonomousRun[];
@@ -297,4 +329,5 @@ export interface AutonomousRunStorageState {
   targetLeases: AutonomousTargetLease[];
   evidence: AutonomousEvidenceRecord[];
   qualityGates: AutonomousQualityGateRecord[];
+  reviewLanes: AutonomousReviewLaneRecord[];
 }

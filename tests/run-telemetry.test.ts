@@ -401,6 +401,7 @@ function createState(overrides: {
       },
     ],
     qualityGates: [],
+    reviewLanes: [],
   };
 }
 
