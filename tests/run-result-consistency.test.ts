@@ -196,6 +196,49 @@ describe('autonomous result-state consistency', () => {
     });
   });
 
+  it('still checks malformed no-selected orchestrator worker results against durable state', () => {
+    const run = createRun({ id: 'worker-run', status: 'running' });
+    const review = reviewAutonomousOrchestratorResultStateConsistency({
+      result: createOrchestratorResult({
+        selectedRunId: null,
+        workerResult: createWorkerResult({
+          action: 'advance',
+          runId: run.id,
+          iterationAction: 'succeed',
+          finalStatus: 'succeeded',
+          reviewSummary: {
+            action: 'succeed',
+            completionDecision: 'pass',
+            grade: 'A',
+            score: 1,
+            issueCount: 0,
+            proofDebtCount: 0,
+            acceptedEvidenceCount: 1,
+            progressReason: null,
+            errorCode: null,
+          },
+        }),
+      }),
+      state: createState([run]),
+    });
+
+    expect(review.ok).toBe(false);
+    expect(review.issueCodes).toEqual([
+      'worker_result_present_without_selected_run',
+      'final_status_mismatch',
+      'claimed_success_without_durable_success',
+      'completion_pass_without_durable_success',
+      'iteration_succeed_without_durable_success',
+    ]);
+    expect(review.durableStatus).toBe('running');
+    expect(review.resultStatus).toBe('succeeded');
+    expect(review.checked).toMatchObject({
+      durableRunPresent: true,
+      workerResultPresent: true,
+      selectedRunPresent: false,
+    });
+  });
+
   it('rejects orchestrator selected-run and worker-result mismatches', () => {
     const selected = createRun({ id: 'selected-run', status: 'running' });
     const review = reviewAutonomousOrchestratorResultStateConsistency({

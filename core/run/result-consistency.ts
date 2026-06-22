@@ -113,21 +113,30 @@ export function reviewAutonomousOrchestratorResultStateConsistency(
   }
 
   if (!result.selectedRunId) {
+    const workerReview = result.workerResult
+      ? reviewAutonomousWorkerResultStateConsistency({
+        result: result.workerResult,
+        state: input.state,
+      })
+      : null;
     const issues = result.workerResult
-      ? [createIssue('worker_result_present_without_selected_run', 'P2')]
+      ? [
+        createIssue('worker_result_present_without_selected_run', 'P2'),
+        ...(workerReview?.issues ?? []),
+      ]
       : [];
     return createReview({
       scope: 'orchestrator',
       notApplicable: issues.length === 0,
       checked: {
         resultPresent: true,
-        durableRunPresent: false,
+        durableRunPresent: workerReview?.checked.durableRunPresent ?? false,
         workerResultPresent: Boolean(result.workerResult),
         selectedRunPresent: false,
         afterSnapshotChecked: false,
       },
       resultStatus: result.workerResult?.finalStatus ?? null,
-      durableStatus: null,
+      durableStatus: workerReview?.durableStatus ?? null,
       issues,
     });
   }

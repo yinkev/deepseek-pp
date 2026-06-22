@@ -17,6 +17,7 @@ No Chrome/runtime wiring is included in this slice, and `entrypoints/background.
 | Non-noop results fail closed when the durable run is absent. | `rejects non-noop results when the durable run is missing` |
 | Reports expose issue codes/statuses only, not raw run IDs or secret-bearing run content. | `keeps consistency reports free of raw run IDs and secret-bearing values`; orchestrator mismatch privacy assertion |
 | No-selected-run orchestrator cycles are valid no-op cases when no worker result is present. | `accepts orchestrator cycles with no selected run and no worker result as not applicable` |
+| Malformed no-selected orchestrator cycles with worker results still run worker/durable consistency checks. | `still checks malformed no-selected orchestrator worker results against durable state` |
 | Selected orchestrator runs must have a worker result for the same run. | `rejects orchestrator selected-run and worker-result mismatches`; `rejects orchestrator cycles that select a run but omit worker result` |
 | After-snapshot status is checked only when the active run is the selected run, and then must agree with worker final status. | `does not require after-snapshot active run to be the selected run`; `rejects after-snapshot status disagreement for the selected run` |
 
