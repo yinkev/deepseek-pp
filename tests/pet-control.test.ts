@@ -3,6 +3,7 @@ import {
   appendAutonomousEvidenceRecord,
   appendAutonomousRunStep,
   createAutonomousRun,
+  getAutonomousRunLedgerSnapshot,
   transitionAutonomousRun,
   upsertAutonomousTargetLease,
 } from '../core/run/store';
@@ -217,15 +218,20 @@ describe('pet control snapshot', () => {
       runId: run.id,
       tabId: 42,
       windowId: 1,
-      origin: 'https://secret-target.example.com/path?token=SECRET',
-      title: 'Super Secret Title with pass=123',
+      origin: 'https://secret-target.example.com/path?token=secret-target-token',
+      title: 'secret-target-title with pass=ultra-secret',
     }, 115);
+
+    // prove durable storage contains the injected secret-looking data (positive half of probe)
+    const stored = await getAutonomousRunLedgerSnapshot();
+    const storedJson = JSON.stringify(stored);
+    expect(storedJson).toMatch(/secret-target-title|secret-target-token|ultra-secret/);
 
     const pet = await getPetControlSnapshot(130);
 
     expect(pet.target).toMatchObject({ locked: true, label: 'Target locked', stale: false });
     const json = JSON.stringify(pet);
-    expect(json).not.toMatch(/secret-target|SECRET|pass=123|Super Secret Title/);
+    expect(json).not.toMatch(/secret-target-title|secret-target-token|ultra-secret|secret-target.example.com/);
   });
 
   it('privacy probe: secrets in evidence refs/summary/metadata and target lease origin/title do not appear in pet snapshot JSON', async () => {
@@ -240,7 +246,7 @@ describe('pet control snapshot', () => {
       tabId: 99,
       windowId: 1,
       origin: 'https://leak.example.com?auth=LEAK_SECRET_TOKEN',
-      title: 'Leaky Title with password=ultra-secret',
+      title: 'Leaky Title secret-target-title with password=ultra-secret',
     }, 115);
     await appendAutonomousEvidenceRecord(run.id, {
       kind: 'web',
@@ -249,11 +255,21 @@ describe('pet control snapshot', () => {
       metadata: { secret: 'ultra-secret', url: 'https://leak?token=LEAK_SECRET_TOKEN' },
     }, 120);
 
+    // prove durable ledger/storage contains the injected secret-looking strings from evidence and target lease (positive half inside same test)
+    const stored = await getAutonomousRunLedgerSnapshot();
+    const storedJson = JSON.stringify(stored);
+    expect(storedJson).toMatch(/LEAK_SECRET_TOKEN/);
+    expect(storedJson).toMatch(/ultra-secret/);
+    expect(storedJson).toMatch(/secret-target-title/);
+    expect(storedJson).toMatch(/private-ref/);
+    expect(storedJson).toMatch(/leak.example.com/);
+
     const pet = await getPetControlSnapshot(130);
     const json = JSON.stringify(pet);
 
     expect(json).not.toMatch(/LEAK_SECRET_TOKEN/);
     expect(json).not.toMatch(/ultra-secret/);
+    expect(json).not.toMatch(/secret-target-title/);
     expect(json).not.toMatch(/private-ref/);
     expect(json).not.toMatch(/leak.example.com/);
     expect(json).not.toMatch(/password=/);
