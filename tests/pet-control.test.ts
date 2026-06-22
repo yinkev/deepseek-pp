@@ -12,6 +12,7 @@ import {
   getPetControlSnapshot,
   mergeAutonomousCompletionReviewIntoSnapshot,
   mergeRuntimeDoctorReportIntoSnapshot,
+  createPetHandoffCapsule,
   type PetControlSnapshot,
 } from '../core/pet/control';
 import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
@@ -846,5 +847,178 @@ describe('pet control snapshot', () => {
 
     expect(mergeRuntimeDoctorReportIntoSnapshot(base, null)).toBe(base);
     expect(mergeRuntimeDoctorReportIntoSnapshot(base, undefined)).toBe(base);
+  });
+
+  describe('createPetHandoffCapsule', () => {
+    function createBaseForHandoff(overrides: Parameters<typeof createBasePetSnapshot>[0] = {}): PetControlSnapshot {
+      return createBasePetSnapshot({
+        generatedAt: 123,
+        readiness: { status: 'ready', blockers: [], preparing: false },
+        run: { active: false, label: null, phase: 'idle', nextAction: null },
+        target: { locked: false, label: null, stale: false },
+        safety: { leakIssueCount: 0, highRiskArmed: false },
+        review: { grade: null, decision: null, proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 0, canFinalize: false },
+        ...overrides,
+      });
+    }
+
+    it('idle/ready snapshot creates a safe idle capsule with defaults', () => {
+      const snap = createBaseForHandoff();
+      const capsule = createPetHandoffCapsule(snap);
+
+      expect(capsule).toMatchObject({
+        schemaVersion: 1,
+        generatedAt: 123,
+        readinessStatus: 'ready',
+        runPhase: 'idle',
+        targetState: 'none',
+        reviewState: 'none',
+        blockerCount: 0,
+        proofDebtCount: 0,
+        issueCount: 0,
+        acceptedEvidenceCount: 0,
+        grade: null,
+        canFinalize: false,
+        nextAction: 'idle',
+      });
+      const json = JSON.stringify(capsule);
+      expect(json).not.toContain('secret');
+    });
+
+    it('locked target + active run creates targetState locked and nextAction continue_run', () => {
+      const snap = createBaseForHandoff({
+        run: { active: true, label: 'secret goal label here', phase: 'working', nextAction: 'foo' },
+        target: { locked: true, label: 'Target locked', stale: false },
+        readiness: { status: 'ready', blockers: [], preparing: false },
+      });
+      const capsule = createPetHandoffCapsule(snap);
+
+      expect(capsule.targetState).toBe('locked');
+      expect(capsule.runPhase).toBe('working');
+      expect(capsule.nextAction).toBe('continue_run');
+      // must not leak raw label
+      const json = JSON.stringify(capsule);
+      expect(json).not.toContain('secret goal label here');
+    });
+
+    it('stale/missing target takes priority and nextAction open_target', () => {
+      const stale = createBaseForHandoff({
+        target: { locked: true, label: 'Target locked', stale: true },
+        readiness: { status: 'ready', blockers: [], preparing: false },
+        run: { active: true, phase: 'working' },
+      });
+      expect(createPetHandoffCapsule(stale).targetState).toBe('stale');
+      expect(createPetHandoffCapsule(stale).nextAction).toBe('open_target');
+
+      const missing = createBaseForHandoff({
+        readiness: { status: 'needs_attention', blockers: ['x'], preparing: true },
+        target: { locked: false, label: 'Target missing', stale: false },
+      });
+      expect(createPetHandoffCapsule(missing).targetState).toBe('missing');
+      expect(createPetHandoffCapsule(missing).nextAction).toBe('open_target');
+    });
+
+    it('leak issue takes priority and nextAction open_runtime_doctor', () => {
+      const snap = createBaseForHandoff({
+        safety: { leakIssueCount: 2, highRiskArmed: false },
+        target: { locked: false, label: null, stale: false },
+        readiness: { status: 'ready', preparing: false },
+        run: { active: false, phase: 'idle' },
+      });
+      const capsule = createPetHandoffCapsule(snap);
+      expect(capsule.nextAction).toBe('open_runtime_doctor');
+    });
+
+    it('review pass canFinalize produces nextAction finalize', () => {
+      const snap = createBaseForHandoff({
+        readiness: { status: 'ready', preparing: false },
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'done' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 5, canFinalize: true },
+      });
+      const capsule = createPetHandoffCapsule(snap);
+      expect(capsule.reviewState).toBe('pass');
+      expect(capsule.canFinalize).toBe(true);
+      expect(capsule.nextAction).toBe('finalize');
+    });
+
+    it('review iterate/proof debt produces nextAction iterate', () => {
+      const iterateSnap = createBaseForHandoff({
+        readiness: { status: 'ready', preparing: false },
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'reviewing' },
+        review: { grade: 'C', decision: 'iterate', proofDebtCount: 1, issueCount: 1, acceptedEvidenceCount: 1, canFinalize: false },
+      });
+      expect(createPetHandoffCapsule(iterateSnap).nextAction).toBe('iterate');
+
+      const debtSnap = createBaseForHandoff({
+        readiness: { status: 'ready', preparing: false },
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'working' },
+        review: { grade: 'B', decision: null, proofDebtCount: 3, issueCount: 0, acceptedEvidenceCount: 2, canFinalize: false },
+      });
+      expect(createPetHandoffCapsule(debtSnap).nextAction).toBe('iterate');
+    });
+
+    it('blocked run produces nextAction review_blocker when readiness/target/leak do not override', () => {
+      const snap = createBaseForHandoff({
+        readiness: { status: 'blocked', blockers: ['policy'], preparing: false },
+        target: { locked: true, stale: false },
+        run: { active: true, phase: 'blocked' },
+        review: { grade: null, decision: null, proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 0, canFinalize: false },
+      });
+      const capsule = createPetHandoffCapsule(snap);
+      expect(capsule.runPhase).toBe('blocked');
+      expect(capsule.blockerCount).toBe(1);
+      expect(capsule.nextAction).toBe('review_blocker');
+    });
+
+    it('privacy false-positive probe: source PetControlSnapshot contains secret-looking strings in run.label, readiness.blockers, target.label, and other string fields; capsule JSON omits them while still reflecting safe counts/enums', () => {
+      const snap = createBaseForHandoff({
+        readiness: {
+          status: 'blocked',
+          blockers: ['policy_deny with SECRET_LEAK_TOKEN_777', 'run_blocked_SECRET'],
+          preparing: false,
+        },
+        run: {
+          active: true,
+          label: 'ultra secret run goal with password=supersecret and url https://leak.com',
+          phase: 'blocked',
+          nextAction: 'Review with token=SECRET_999',
+        },
+        target: {
+          locked: true,
+          label: 'Target locked but contains secret-target-title ultra-secret',
+          stale: false,
+        },
+        safety: { leakIssueCount: 0, highRiskArmed: false },
+        review: {
+          grade: 'D',
+          decision: 'iterate',
+          proofDebtCount: 2,
+          issueCount: 2,
+          acceptedEvidenceCount: 1,
+          canFinalize: false,
+        },
+      });
+      const sourceJson = JSON.stringify(snap);
+      expect(sourceJson).toMatch(/SECRET_LEAK_TOKEN_777|ultra secret|supersecret|SECRET_999|secret-target-title|ultra-secret/);
+
+      const capsule = createPetHandoffCapsule(snap);
+      const capsuleJson = JSON.stringify(capsule);
+
+      // safe fields present
+      expect(capsule.readinessStatus).toBe('blocked');
+      expect(capsule.targetState).toBe('locked');
+      expect(capsule.reviewState).toBe('iterate');
+      expect(capsule.blockerCount).toBe(2);
+      expect(capsule.proofDebtCount).toBe(2);
+      expect(capsule.nextAction).toBe('review_blocker');
+      // no secrets leaked
+      expect(capsuleJson).not.toMatch(/SECRET_LEAK_TOKEN_777|ultra secret|supersecret|SECRET_999|secret-target-title|ultra-secret|password=|https:\/\/leak/);
+      // but does reflect the safe structure
+      expect(capsuleJson).toContain('"reviewState":"iterate"');
+      expect(capsuleJson).toContain('"blockerCount":2');
+    });
   });
 });

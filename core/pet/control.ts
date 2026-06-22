@@ -273,3 +273,93 @@ export function mergeAutonomousCompletionReviewIntoSnapshot(
     },
   };
 }
+
+export type PetHandoffNextAction =
+  | 'idle'
+  | 'make_ready'
+  | 'open_target'
+  | 'continue_run'
+  | 'review_blocker'
+  | 'iterate'
+  | 'finalize'
+  | 'open_runtime_doctor';
+
+export interface PetHandoffCapsule {
+  schemaVersion: 1;
+  generatedAt: number;
+  readinessStatus: PetControlSnapshot['readiness']['status'];
+  runPhase: PetControlSnapshot['run']['phase'];
+  targetState: 'locked' | 'missing' | 'stale' | 'none';
+  reviewState: 'none' | 'pass' | 'iterate' | 'fail';
+  blockerCount: number;
+  proofDebtCount: number;
+  issueCount: number;
+  acceptedEvidenceCount: number;
+  grade: PetControlSnapshot['review']['grade'];
+  canFinalize: boolean;
+  nextAction: PetHandoffNextAction;
+}
+
+export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
+  const { readiness, run, target, safety, review, generatedAt } = snapshot;
+
+  let targetState: PetHandoffCapsule['targetState'] = 'none';
+  if (target.stale) {
+    targetState = 'stale';
+  } else if (target.locked) {
+    targetState = 'locked';
+  } else if (readiness.status !== 'ready' || target.label === 'Target missing') {
+    targetState = 'missing';
+  }
+
+  let reviewState: PetHandoffCapsule['reviewState'] = 'none';
+  if (review.decision === 'pass') {
+    reviewState = 'pass';
+  } else if (review.decision === 'iterate') {
+    reviewState = 'iterate';
+  } else if (review.decision === 'fail') {
+    reviewState = 'fail';
+  }
+
+  const blockerCount = readiness.blockers.length;
+  const proofDebtCount = review.proofDebtCount;
+  const issueCount = review.issueCount;
+  const acceptedEvidenceCount = review.acceptedEvidenceCount;
+  const grade = review.grade;
+  const canFinalize = review.canFinalize;
+
+  let nextAction: PetHandoffNextAction = 'idle';
+  if (safety.leakIssueCount > 0) {
+    nextAction = 'open_runtime_doctor';
+  } else if (targetState === 'missing' || targetState === 'stale') {
+    nextAction = 'open_target';
+  } else if (run.phase === 'blocked') {
+    nextAction = 'review_blocker';
+  } else if (readiness.preparing || readiness.status !== 'ready') {
+    nextAction = 'make_ready';
+  } else if (canFinalize) {
+    nextAction = 'finalize';
+  } else if (review.decision === 'iterate' || proofDebtCount > 0 || issueCount > 0) {
+    nextAction = 'iterate';
+  } else if (run.active) {
+    nextAction = 'continue_run';
+  } else {
+    nextAction = 'idle';
+  }
+
+  return {
+    schemaVersion: 1,
+    generatedAt,
+    readinessStatus: readiness.status,
+    runPhase: run.phase,
+    targetState,
+    reviewState,
+    blockerCount,
+    proofDebtCount,
+    issueCount,
+    acceptedEvidenceCount,
+    grade,
+    canFinalize,
+    nextAction,
+  };
+}
