@@ -61,11 +61,14 @@ describe('autonomous run telemetry writer', () => {
 
   it('writes a validated snapshot even if caller mutates package during write', async () => {
     const pkg = createPackage();
+    const originalSecondFile = pkg.files[1];
     const writes: Array<{ path: string; content: string }> = [];
 
     const result = await writeAutonomousRunTelemetryPackage(pkg, {
       async writeTextFile(path, content) {
         writes.push({ path, content });
+        originalSecondFile.path = '/tmp/object-mutated';
+        originalSecondFile.content = 'object-mutated';
         pkg.files[1] = { path: '/tmp/evil', content: 'evil' };
         pkg.files.push({ path: '/tmp/appended', content: 'evil' });
       },
