@@ -104,18 +104,19 @@ Priority order:
    - Gate: focused consistency/coverage tests, adjacent worker/orchestrator tests, full serial suite, independent P1/P2 review.
 
 4. Durable quality-gate persistence.
-   - Status: complete.
-   - Accomplish by storing compact gate results for each run/iteration: contract coverage summary, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
-   - Gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
+   - Status: complete for durable store API and normalized quality-gate records.
+   - Implemented by storing compact gate results for each run/iteration: contract coverage summary, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
+   - Evidence gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
 
 5. Orchestrator enforcement.
    - Status: complete for pure core orchestration; Chrome/runtime caller wiring remains frozen.
-   - Accomplish by making the orchestrator consult persisted quality gates before selecting or advancing the next runnable run.
-   - Gate: P1/P2 review state blocks the next cycle; green gate allows continuation; no Chrome/runtime wiring.
+   - Implemented by making the pure orchestrator consult persisted quality gates before advancing the selected runnable run.
+   - Evidence gate: P1/P2 review state blocks the core cycle; green gate allows continuation; no Chrome/runtime wiring.
 
 6. Review-lane worker coordination.
-   - Status: partially complete; scheduler, pet bridge, Oracle, and bounded Grok advisory-role metadata are implemented, while actual worker dispatch remains runtime-frozen.
-   - Accomplish by formalizing implementer, reviewer, safety, UX, Oracle/advisor, and optional Grok advisory lanes as bounded inputs to the run ledger.
+   - Status: partially complete; scheduler, pet bridge, and bounded Oracle/Grok advisor-role metadata are implemented, while actual worker dispatch remains runtime-frozen.
+   - Implemented so far by formalizing implementer, reviewer, safety, UX, and Oracle/Grok advisor lanes as bounded scheduler/pet metadata.
+   - Remaining work: persist and dispatch actual review worker lane outputs once runtime wiring resumes.
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
 
 7. Autonomous telemetry and repo-visible handoff.
@@ -124,8 +125,8 @@ Priority order:
    - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state.
 
 8. Pet cockpit projection.
-   - Status: partially complete; run queue, evidence pulse, target lease, proof debt, blocker lens, review heat, stop-line, memory pressure, worker-cycle, telemetry, quality-gate, and review-lane metadata are projected as safe cockpit state.
-   - Accomplish by projecting run status, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, quality gate status, bounded review lanes, and handoff capsule state into pet snapshot/handoff fields.
+   - Status: partially complete; the listed cockpit fields below are projected as safe metadata.
+   - Implemented so far by projecting run status, run queue, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, stop-line, memory pressure, worker-cycle, telemetry, quality-gate, bounded review lanes, and handoff capsule state into pet snapshot/handoff fields.
    - Gate: pet surfaces expose safe metadata only and never trigger browser/file mutation by themselves.
 
 9. Controlled runtime resume.
