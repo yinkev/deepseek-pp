@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   appendAutonomousEvidenceRecord,
   appendAutonomousQualityGateRecord,
+  appendAutonomousReviewLaneRecord,
   appendAutonomousRunStep,
   createAutonomousRun,
   DEFAULT_AUTONOMOUS_RUN_POLICY,
@@ -10,13 +11,14 @@ import {
   upsertAutonomousTargetLease,
 } from '../core/run/store';
 import {
+  deriveAutonomousRunReviewLaneGate,
   evaluateAutonomousQualityGateRecord,
   evaluateAutonomousRunQualityGate,
   executeAutonomousOrchestratorCycle,
   getAutonomousRunCockpitSnapshot,
   initializeAutonomousRunOrchestrator,
 } from '../core/run/orchestrator';
-import type { AutonomousQualityGateRecord } from '../core/run/types';
+import type { AutonomousQualityGateRecord, AutonomousReviewLaneRecord } from '../core/run/types';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -595,6 +597,175 @@ describe('autonomous run orchestrator startup bridge', () => {
       status: result.workerResult?.finalStatus,
       error: { code: result.workerResult?.errorCode },
     });
+  });
+
+  it('pure review lane gate derivation covers block, failed, active, and clear states', () => {
+    expect(deriveAutonomousRunReviewLaneGate([
+      createReviewLaneRecord({ recommendation: 'block', status: 'passed' }),
+    ])).toMatchObject({
+      status: 'blocked',
+      reason: 'block_recommendation',
+      canProceed: false,
+      blockingPriority: null,
+      blockingLaneCount: 1,
+    });
+    expect(deriveAutonomousRunReviewLaneGate([
+      createReviewLaneRecord({ recommendation: 'unknown', status: 'failed' }),
+    ])).toMatchObject({
+      status: 'blocked',
+      reason: 'failed_lane',
+      canProceed: false,
+      blockingPriority: null,
+      blockingLaneCount: 1,
+    });
+    expect(deriveAutonomousRunReviewLaneGate([
+      createReviewLaneRecord({ status: 'running' }),
+    ])).toMatchObject({
+      status: 'attention',
+      reason: 'active_review',
+      canProceed: true,
+      blockingLaneCount: 0,
+    });
+    expect(deriveAutonomousRunReviewLaneGate([])).toMatchObject({
+      status: 'clear',
+      reason: 'none',
+      canProceed: true,
+      blockingLaneCount: 0,
+    });
+  });
+
+  it('derives a blocking review lane gate from persisted P2 records', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'persisted-lane-p2' });
+
+    const run = await createAutonomousRun({
+      id: 'persisted-lane-p2',
+      goal: 'Persisted lane P2 blocks',
+      proofContract: createProofContract(),
+    }, 100);
+    await appendAutonomousReviewLaneRecord(run.id, {
+      role: 'grok',
+      status: 'passed',
+      grade: 'B',
+      recommendation: 'proceed',
+      highestPriority: 'P2',
+      issueCount: 1,
+      evidenceRefCount: 1,
+      summary: 'P2 reviewer issue must block.',
+    }, 110);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 120 });
+
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'halt',
+      selectedRoles: [],
+      canRunWorker: false,
+      reason: 'review_gate_p2',
+      blockingPriority: 'P2',
+      blockingLaneCount: 1,
+    });
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      runId: run.id,
+      started: false,
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(executor).not.toHaveBeenCalled();
+    expect(JSON.stringify(result.reviewLanePlan)).not.toMatch(/persisted-lane-p2|Persisted lane P2 blocks|P2 reviewer issue/);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: 'autonomous_review_lane_gate_blocked' },
+    });
+  });
+
+  it('allows worker execution when persisted review lane records are non-blocking', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'persisted-lane-pass' });
+
+    const run = await createAutonomousRun({
+      id: 'persisted-lane-pass',
+      goal: 'Persisted lane pass allows',
+      proofContract: createProofContract(),
+    }, 100);
+    await appendAutonomousReviewLaneRecord(run.id, {
+      role: 'reviewer',
+      status: 'passed',
+      grade: 'A',
+      recommendation: 'proceed',
+      highestPriority: null,
+      issueCount: 0,
+      evidenceRefCount: 1,
+      summary: 'Clear reviewer lane.',
+    }, 110);
+
+    const executor = vi.fn(async ({ runId, now: execNow }) => {
+      await appendAutonomousRunStep(runId, {
+        phase: 'verification',
+        progressScore: 1,
+        proofDelta: ['operator cycle continues'],
+      }, execNow);
+    });
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 120 });
+
+    expect(result.reviewLanePlan.canRunWorker).toBe(true);
+    expect(result.reviewLanePlan.reason).not.toMatch(/review_gate/);
+    expect(result.workerResult).toMatchObject({
+      runId: run.id,
+      started: true,
+      advanced: true,
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets persisted P1 records dominate an explicit clear review lane gate', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'persisted-lane-p1' });
+
+    const run = await createAutonomousRun({
+      id: 'persisted-lane-p1',
+      goal: 'Persisted lane P1 dominates',
+      proofContract: createProofContract(),
+    }, 100);
+    await appendAutonomousReviewLaneRecord(run.id, {
+      role: 'oracle',
+      status: 'passed',
+      grade: 'C',
+      recommendation: 'iterate',
+      highestPriority: 'P1',
+      issueCount: 2,
+      evidenceRefCount: 1,
+      summary: 'P1 oracle issue must dominate clear gate.',
+    }, 110);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      now: 120,
+      reviewLaneGate: {
+        status: 'clear',
+        reason: 'none',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      },
+    });
+
+    expect(result.reviewLanePlan).toMatchObject({
+      action: 'halt',
+      reason: 'review_gate_p1',
+      blockingPriority: 'P1',
+      blockingLaneCount: 1,
+    });
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(executor).not.toHaveBeenCalled();
   });
 
   it('returns grok review lane dispatch when requested and earlier lanes are complete', async () => {
@@ -1461,6 +1632,26 @@ function createProofContract() {
     doneCriteria: ['operator cycle continues'],
     requiredEvidence: [],
     antiProof: [],
+  };
+}
+
+function createReviewLaneRecord(
+  overrides: Partial<AutonomousReviewLaneRecord> = {},
+): AutonomousReviewLaneRecord {
+  return {
+    id: 'lane-test',
+    runId: 'run-test',
+    seq: 1,
+    createdAt: 100,
+    role: 'reviewer',
+    status: 'passed',
+    grade: 'A',
+    recommendation: 'proceed',
+    highestPriority: null,
+    issueCount: 0,
+    evidenceRefCount: 0,
+    summary: null,
+    ...overrides,
   };
 }
 

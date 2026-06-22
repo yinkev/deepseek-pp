@@ -30,6 +30,7 @@ import type {
   AutonomousQualityGateGrade,
   AutonomousQualityGateRecord,
   AutonomousQualityGateStatus,
+  AutonomousReviewLaneRecord,
   AutonomousRun,
   AutonomousRunId,
   AutonomousRunStatus,
@@ -181,6 +182,43 @@ export interface AutonomousRunQualityGateDecision {
   verificationPassed: boolean | null;
 }
 
+export function deriveAutonomousRunReviewLaneGate(
+  records: readonly AutonomousReviewLaneRecord[],
+): AutonomousRunReviewLaneGateInput {
+  const blockingRecords = records.filter(isBlockingReviewLaneRecord);
+  if (blockingRecords.length === 0) {
+    return records.some((record) => record.status === 'running')
+      ? {
+        status: 'attention',
+        reason: 'active_review',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      }
+      : {
+        status: 'clear',
+        reason: 'none',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 0,
+      };
+  }
+
+  const blockingPriority = blockingRecords.some((record) => record.highestPriority === 'P1')
+    ? 'P1'
+    : blockingRecords.some((record) => record.highestPriority === 'P2')
+      ? 'P2'
+      : null;
+
+  return {
+    status: 'blocked',
+    reason: selectReviewLaneGateReason(blockingRecords, blockingPriority),
+    canProceed: false,
+    blockingPriority,
+    blockingLaneCount: blockingRecords.length,
+  };
+}
+
 export async function initializeAutonomousRunOrchestrator(
   options: {
     interruptedThresholdMs?: number;
@@ -280,11 +318,16 @@ export async function executeAutonomousOrchestratorCycle(
     now,
   );
   const beforeSnapshot = await getAutonomousRunCockpitSnapshot(now);
-  const selectedRun = selectRunnableRun((await getAutonomousRunLedgerSnapshot()).runs);
+  const ledger = await getAutonomousRunLedgerSnapshot();
+  const selectedRun = selectRunnableRun(ledger.runs);
   const selectedRunId = selectedRun?.id ?? null;
+  const persistedReviewLaneGate = selectedRunId
+    ? deriveAutonomousRunReviewLaneGate(ledger.reviewLanes.filter((record) => record.runId === selectedRunId))
+    : null;
+  const effectiveReviewLaneGate = mergeReviewLaneGates(options.reviewLaneGate, persistedReviewLaneGate);
   const reviewLanePlan = planAutonomousReviewLanes({
     runStatus: selectedRun?.status ?? null,
-    reviewLaneGate: options.reviewLaneGate,
+    reviewLaneGate: effectiveReviewLaneGate,
     lanes: options.reviewLaneScheduler?.lanes,
     maxParallel: options.reviewLaneScheduler?.maxParallel,
     workerAdvanced: options.reviewLaneScheduler?.workerAdvanced,
@@ -304,7 +347,7 @@ export async function executeAutonomousOrchestratorCycle(
     ? await executeAutonomousRunCycle(selectedRunId, executor, {
       now,
       actionKind: options.actionKind,
-      reviewLaneGate: options.reviewLaneGate,
+      reviewLaneGate: effectiveReviewLaneGate,
     })
     : null;
   const afterSnapshot = await getAutonomousRunCockpitSnapshot(now);
@@ -319,6 +362,45 @@ export async function executeAutonomousOrchestratorCycle(
     telemetryResult,
     afterSnapshot,
   };
+}
+
+function isBlockingReviewLaneRecord(record: AutonomousReviewLaneRecord): boolean {
+  return record.highestPriority === 'P1' ||
+    record.highestPriority === 'P2' ||
+    record.recommendation === 'block' ||
+    record.status === 'blocked' ||
+    record.status === 'failed';
+}
+
+function selectReviewLaneGateReason(
+  records: readonly AutonomousReviewLaneRecord[],
+  blockingPriority: 'P1' | 'P2' | null,
+): AutonomousRunReviewLaneGateInput['reason'] {
+  if (blockingPriority === 'P1') return 'p1';
+  if (blockingPriority === 'P2') return 'p2';
+  if (records.some((record) => record.recommendation === 'block')) return 'block_recommendation';
+  if (records.some((record) => record.status === 'failed')) return 'failed_lane';
+  if (records.some((record) => record.status === 'blocked')) return 'blocked_lane';
+  return 'unknown';
+}
+
+function mergeReviewLaneGates(
+  explicitGate: AutonomousRunReviewLaneGateInput | null | undefined,
+  persistedGate: AutonomousRunReviewLaneGateInput | null | undefined,
+): AutonomousRunReviewLaneGateInput | null {
+  if (isBlockingReviewLaneGate(persistedGate)) return persistedGate ?? null;
+  if (isBlockingReviewLaneGate(explicitGate)) return explicitGate ?? null;
+  return explicitGate ?? persistedGate ?? null;
+}
+
+function isBlockingReviewLaneGate(gate: AutonomousRunReviewLaneGateInput | null | undefined): boolean {
+  return gate?.canProceed === false ||
+    gate?.status === 'blocked' ||
+    gate?.blockingPriority === 'P1' ||
+    gate?.blockingPriority === 'P2' ||
+    gate?.reason === 'p1' ||
+    gate?.reason === 'p2' ||
+    gate?.reason === 'block_recommendation';
 }
 
 export async function getAutonomousRunCockpitSnapshot(
