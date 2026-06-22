@@ -148,6 +148,38 @@ describe('autonomous result-state consistency', () => {
     expect(review.durableStatus).toBeNull();
   });
 
+  it('rejects malformed missing-run noop results that claim success', () => {
+    const review = reviewAutonomousWorkerResultStateConsistency({
+      result: createWorkerResult({
+        action: 'noop',
+        runId: 'missing-run',
+        iterationAction: 'succeed',
+        finalStatus: null,
+        reviewSummary: {
+          action: 'succeed',
+          completionDecision: 'pass',
+          grade: 'A',
+          score: 1,
+          issueCount: 0,
+          proofDebtCount: 0,
+          acceptedEvidenceCount: 1,
+          progressReason: null,
+          errorCode: null,
+        },
+      }),
+      state: createState([]),
+    });
+
+    expect(review.ok).toBe(false);
+    expect(review.issueCodes).toEqual([
+      'durable_run_missing',
+      'completion_pass_without_durable_success',
+      'iteration_succeed_without_durable_success',
+    ]);
+    expect(review.durableStatus).toBeNull();
+    expect(review.resultStatus).toBeNull();
+  });
+
   it('keeps consistency reports free of raw run IDs and secret-bearing values', () => {
     const secretRunId = 'run-secret-sk-live-abc123';
     const review = reviewAutonomousWorkerResultStateConsistency({

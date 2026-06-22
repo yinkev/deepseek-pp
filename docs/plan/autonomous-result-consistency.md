@@ -14,7 +14,7 @@ No Chrome/runtime wiring is included in this slice, and `entrypoints/background.
 | Block results require the result and durable state to agree on `blocked`. | `accepts worker block results only when durable state is blocked too`; `rejects block actions whose result status is not blocked` |
 | Executor failures do not imply durable `failed`; the returned final status must match durable state. | `does not require executor fail actions to produce durable failed status` |
 | False-positive success is rejected when the result claims success/pass but durable state is not `succeeded`. | `adversarial probe: rejects false-positive success when durable state is still running` |
-| Non-noop results fail closed when the durable run is absent. | `rejects non-noop results when the durable run is missing` |
+| Missing durable runs fail closed for non-noop results and malformed noop success/pass claims. | `rejects non-noop results when the durable run is missing`; `rejects malformed missing-run noop results that claim success` |
 | Reports expose issue codes/statuses only, not raw run IDs or secret-bearing run content. | `keeps consistency reports free of raw run IDs and secret-bearing values`; orchestrator mismatch privacy assertion |
 | No-selected-run orchestrator cycles are valid no-op cases when no worker result is present. | `accepts orchestrator cycles with no selected run and no worker result as not applicable` |
 | Malformed no-selected orchestrator cycles with worker results still run worker/durable consistency checks. | `still checks malformed no-selected orchestrator worker results against durable state` |

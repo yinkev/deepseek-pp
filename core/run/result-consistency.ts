@@ -220,10 +220,30 @@ function reviewWorkerAgainstDurableRun(
 function reviewWorkerWithoutDurableRun(
   result: AutonomousRunCycleResult,
 ): AutonomousResultStateConsistencyIssue[] {
-  if (result.action === 'noop' && result.finalStatus === null) {
+  const issues = reviewSuccessClaimsWithoutDurableRun(result);
+  if (result.action === 'noop' && result.finalStatus === null && issues.length === 0) {
     return [];
   }
-  return [createIssue('durable_run_missing', 'P1')];
+  return [
+    createIssue('durable_run_missing', 'P1'),
+    ...issues,
+  ];
+}
+
+function reviewSuccessClaimsWithoutDurableRun(
+  result: AutonomousRunCycleResult,
+): AutonomousResultStateConsistencyIssue[] {
+  const issues: AutonomousResultStateConsistencyIssue[] = [];
+  if (result.finalStatus === 'succeeded') {
+    issues.push(createIssue('claimed_success_without_durable_success', 'P1', 'succeeded', null));
+  }
+  if (result.reviewSummary?.completionDecision === 'pass') {
+    issues.push(createIssue('completion_pass_without_durable_success', 'P1', 'succeeded', null));
+  }
+  if (result.iterationAction === 'succeed' || result.reviewSummary?.action === 'succeed') {
+    issues.push(createIssue('iteration_succeed_without_durable_success', 'P1', 'succeeded', null));
+  }
+  return issues;
 }
 
 function createReview(input: {
