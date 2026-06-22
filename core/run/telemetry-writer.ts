@@ -33,9 +33,13 @@ function validateTelemetryPackage(pkg: AutonomousRunTelemetryPackage): readonly 
   if (!isSafeRelativePath(pkg.rootDir)) {
     throw new Error(`Unsafe telemetry root: ${pkg.rootDir}`);
   }
+  if (!pkg.rootDir.startsWith('.runs/')) {
+    throw new Error(`Telemetry root must stay under .runs: ${pkg.rootDir}`);
+  }
 
   const expectedPrefix = `${pkg.rootDir}/`;
   const seen = new Set<string>();
+  const validated: AutonomousRunTelemetryFile[] = [];
   for (const file of pkg.files) {
     if (!file.path.startsWith(expectedPrefix)) {
       throw new Error(`Telemetry file escapes package root: ${file.path}`);
@@ -43,12 +47,14 @@ function validateTelemetryPackage(pkg: AutonomousRunTelemetryPackage): readonly 
     if (!isSafeRelativePath(file.path)) {
       throw new Error(`Unsafe telemetry file path: ${file.path}`);
     }
-    if (seen.has(file.path)) {
+    const normalizedPath = file.path.toLowerCase();
+    if (seen.has(normalizedPath)) {
       throw new Error(`Duplicate telemetry file path: ${file.path}`);
     }
-    seen.add(file.path);
+    seen.add(normalizedPath);
+    validated.push({ path: file.path, content: file.content });
   }
-  return pkg.files;
+  return validated;
 }
 
 function isSafeRelativePath(value: string): boolean {

@@ -32,12 +32,19 @@ describe('autonomous run telemetry writer', () => {
       createPackage({ rootDir: '/tmp/run-1' }),
       createPackage({ rootDir: 'C:/tmp/run-1' }),
       createPackage({ rootDir: '.runs\\run-1' }),
+      createPackage({ rootDir: 'core/run-1', files: [{ path: 'core/run-1/manifest.json', content: '{}\n' }] }),
       createPackage({ files: [{ path: '.runs/run-2/manifest.json', content: '{}\n' }] }),
       createPackage({ files: [{ path: '.runs/run-1/../manifest.json', content: '{}\n' }] }),
       createPackage({
         files: [
           { path: '.runs/run-1/manifest.json', content: '{}\n' },
           { path: '.runs/run-1/manifest.json', content: '{}\n' },
+        ],
+      }),
+      createPackage({
+        files: [
+          { path: '.runs/run-1/report.md', content: '# Report\n' },
+          { path: '.runs/run-1/REPORT.md', content: '# Report\n' },
         ],
       }),
     ];
@@ -47,9 +54,28 @@ describe('autonomous run telemetry writer', () => {
         writeTextFile(path) {
           writes.push(path);
         },
-      })).rejects.toThrow(/Unsafe telemetry|escapes package root|Duplicate telemetry/);
+      })).rejects.toThrow(/Unsafe telemetry|escapes package root|Duplicate telemetry|must stay under \.runs/);
     }
     expect(writes).toEqual([]);
+  });
+
+  it('writes a validated snapshot even if caller mutates package during write', async () => {
+    const pkg = createPackage();
+    const writes: Array<{ path: string; content: string }> = [];
+
+    const result = await writeAutonomousRunTelemetryPackage(pkg, {
+      async writeTextFile(path, content) {
+        writes.push({ path, content });
+        pkg.files[1] = { path: '/tmp/evil', content: 'evil' };
+        pkg.files.push({ path: '/tmp/appended', content: 'evil' });
+      },
+    });
+
+    expect(writes).toEqual([
+      { path: '.runs/run-1/manifest.json', content: '{}\n' },
+      { path: '.runs/run-1/report.md', content: '# Report\n' },
+    ]);
+    expect(result.paths).toEqual(['.runs/run-1/manifest.json', '.runs/run-1/report.md']);
   });
 });
 
