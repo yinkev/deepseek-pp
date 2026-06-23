@@ -3,6 +3,17 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { evaluateAutonomousDocResumptionGate } from '../core/run/doc-resumption-gate';
 
+const REQUIRED_MARKERS = [
+  'runtime_authorization_required',
+  'background_file_frozen',
+  'step_10_blocked',
+  'contract_coverage_required',
+  'false_positive_probe_required',
+  'self_review_grade_required',
+  'independent_p1p2_review_required',
+  'verification_ladder_required',
+];
+
 describe('autonomous doc resumption gate', () => {
   it('passes when repo-visible docs contain the autonomous resume contract', () => {
     const decision = evaluateAutonomousDocResumptionGate({
@@ -14,62 +25,50 @@ describe('autonomous doc resumption gate', () => {
       canResumeFromDocs: true,
       reason: 'passed',
       documentCount: 3,
-      checkedMarkerCodes: [
-        'runtime_authorization_required',
-        'background_file_frozen',
-        'step_10_blocked',
-        'contract_coverage_required',
-        'false_positive_probe_required',
-        'self_review_grade_required',
-        'independent_p1p2_review_required',
-        'verification_ladder_required',
-      ],
-      presentMarkerCodes: [
-        'runtime_authorization_required',
-        'background_file_frozen',
-        'step_10_blocked',
-        'contract_coverage_required',
-        'false_positive_probe_required',
-        'self_review_grade_required',
-        'independent_p1p2_review_required',
-        'verification_ladder_required',
-      ],
+      checkedMarkerCodes: REQUIRED_MARKERS,
+      presentMarkerCodes: REQUIRED_MARKERS,
       missingMarkerCodes: [],
     });
   });
 
-  it('passes a minimal self-contained contract without relying on existing plan wording', () => {
+  it('passes a minimal self-contained structured contract without relying on plan prose', () => {
     const decision = evaluateAutonomousDocResumptionGate({
-      documents: [{
-        text: [
-          'Step 10 runtime wiring remains blocked.',
-          'entrypoints/background.ts is frozen and do not touch entrypoints/background.ts.',
-          'The runtime slice requires explicit durable chrome_runtime authorization.',
-          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
-          'The false-positive probe proves result object and durable stored state agree.',
-          'Self-review assigns a grade before commit.',
-          'Independent P1/P2 review blocks the next step.',
-          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
-        ].join('\n'),
-      }],
+      documents: [{ text: createStructuredContract() }],
     });
 
     expect(decision.status).toBe('passed');
     expect(decision.missingMarkerCodes).toEqual([]);
   });
 
-  it('blocks denial phrasing that contains the right keywords in the wrong claim', () => {
+  it('blocks when the structured contract status is stale', () => {
+    const decision = evaluateAutonomousDocResumptionGate({
+      documents: [{
+        text: createStructuredContract({ status: 'superseded' }),
+      }],
+    });
+
+    expect(decision).toMatchObject({
+      status: 'blocked',
+      reason: 'missing_required_markers',
+      presentMarkerCodes: [],
+      missingMarkerCodes: REQUIRED_MARKERS,
+    });
+  });
+
+  it('blocks denial phrasing that contains the right keywords without structured markers', () => {
     const decision = evaluateAutonomousDocResumptionGate({
       documents: [{
         text: [
           'Step 10 runtime wiring is not blocked.',
           'entrypoints/background.ts is not frozen.',
           'Step 10 does not require explicit durable chrome_runtime authorization.',
-          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
-          'The false-positive probe proves result object and durable stored state agree.',
-          'Self-review assigns a grade before commit.',
-          'Independent P1/P2 review blocks the next step.',
-          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+          ...createStructuredContract({
+            omit: [
+              'runtime_authorization_required',
+              'background_file_frozen',
+              'step_10_blocked',
+            ],
+          }).split('\n'),
         ].join('\n'),
       }],
     });
@@ -92,11 +91,13 @@ describe('autonomous doc resumption gate', () => {
           'Step 10 runtime wiring remains blocked is incorrect.',
           'The runtime slice requires explicit durable chrome_runtime authorization is outdated.',
           'entrypoints/background.ts is frozen and do not touch entrypoints/background.ts but that is no longer the case.',
-          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
-          'The false-positive probe proves result object and durable stored state agree.',
-          'Self-review assigns a grade before commit.',
-          'Independent P1/P2 review blocks the next step.',
-          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+          ...createStructuredContract({
+            omit: [
+              'runtime_authorization_required',
+              'background_file_frozen',
+              'step_10_blocked',
+            ],
+          }).split('\n'),
         ].join('\n'),
       }],
     });
@@ -109,7 +110,7 @@ describe('autonomous doc resumption gate', () => {
     ]);
   });
 
-  it('blocks separate-sentence stale posture denials after otherwise valid claims', () => {
+  it('blocks separate-sentence stale posture denials after otherwise valid prose claims', () => {
     const decision = evaluateAutonomousDocResumptionGate({
       documents: [{
         text: [
@@ -117,11 +118,13 @@ describe('autonomous doc resumption gate', () => {
           'entrypoints/background.ts is frozen and do not touch entrypoints/background.ts.',
           'The runtime slice requires explicit durable chrome_runtime authorization.',
           'However, that posture is outdated and no longer applies.',
-          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
-          'The false-positive probe proves result object and durable stored state agree.',
-          'Self-review assigns a grade before commit.',
-          'Independent P1/P2 review blocks the next step.',
-          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+          ...createStructuredContract({
+            omit: [
+              'runtime_authorization_required',
+              'background_file_frozen',
+              'step_10_blocked',
+            ],
+          }).split('\n'),
         ].join('\n'),
       }],
     });
@@ -141,11 +144,13 @@ describe('autonomous doc resumption gate', () => {
           'Previously, Step 10 runtime wiring was blocked.',
           'Previously, entrypoints/background.ts was frozen.',
           'The prior requirement was explicit durable chrome_runtime authorization.',
-          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
-          'The false-positive probe proves result object and durable stored state agree.',
-          'Self-review assigns a grade before commit.',
-          'Independent P1/P2 review blocks the next step.',
-          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+          ...createStructuredContract({
+            omit: [
+              'runtime_authorization_required',
+              'background_file_frozen',
+              'step_10_blocked',
+            ],
+          }).split('\n'),
         ].join('\n'),
       }],
     });
@@ -162,27 +167,22 @@ describe('autonomous doc resumption gate', () => {
       canResumeFromDocs: false,
       reason: 'no_documents',
       documentCount: 0,
-      missingMarkerCodes: [
-        'runtime_authorization_required',
-        'background_file_frozen',
-        'step_10_blocked',
-        'contract_coverage_required',
-        'false_positive_probe_required',
-        'self_review_grade_required',
-        'independent_p1p2_review_required',
-        'verification_ladder_required',
-      ],
+      missingMarkerCodes: REQUIRED_MARKERS,
     });
   });
 
   it('blocks incomplete docs with exact missing marker codes', () => {
     const decision = evaluateAutonomousDocResumptionGate({
       documents: [{
-        text: [
-          'Step 10 runtime wiring is blocked.',
-          'Do not touch entrypoints/background.ts while the runtime freeze is active.',
-          'Require explicit durable chrome_runtime authorization.',
-        ].join('\n'),
+        text: createStructuredContract({
+          omit: [
+            'contract_coverage_required',
+            'false_positive_probe_required',
+            'self_review_grade_required',
+            'independent_p1p2_review_required',
+            'verification_ladder_required',
+          ],
+        }),
       }],
     });
 
@@ -208,9 +208,15 @@ describe('autonomous doc resumption gate', () => {
     const decision = evaluateAutonomousDocResumptionGate({
       documents: [{
         text: [
-          'Step 10 runtime wiring is blocked.',
-          'Do not touch entrypoints/background.ts while the runtime freeze is active.',
-          'Require explicit durable chrome_runtime authorization.',
+          createStructuredContract({
+            omit: [
+              'contract_coverage_required',
+              'false_positive_probe_required',
+              'self_review_grade_required',
+              'independent_p1p2_review_required',
+              'verification_ladder_required',
+            ],
+          }),
           'Authorization: Bearer secret-token',
           'https://example.com/private?token=abc123',
         ].join('\n'),
@@ -230,4 +236,18 @@ function readResumptionDocs() {
   ].map((path) => ({
     text: readFileSync(join(process.cwd(), path), 'utf8'),
   }));
+}
+
+function createStructuredContract(options: {
+  status?: 'current' | 'stale' | 'superseded' | 'obsolete';
+  omit?: string[];
+} = {}) {
+  const omitted = new Set(options.omit ?? []);
+  return [
+    'autonomous_doc_resumption_contract_v1',
+    `contract_status: ${options.status ?? 'current'}`,
+    ...REQUIRED_MARKERS
+      .filter((marker) => !omitted.has(marker))
+      .map((marker) => `${marker}: true`),
+  ].join('\n');
 }
