@@ -378,6 +378,51 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(executor).toHaveBeenCalledTimes(1);
     expect(result.errorCode).not.toBe('autonomous_review_lane_gate_blocked');
   });
+
+  it('adversarial probe: contradictory gate cannot allow worker progress', async () => {
+    // Gate has mixed signals: attention status + canProceed: true are permissive,
+    // but reason: 'p1' is blocking. The system must fail closed.
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'contradictory-gate' });
+
+    const run = await createAutonomousRun({
+      goal: 'Contradictory gate probe',
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, {
+      now: 120,
+      reviewLaneGate: {
+        status: 'attention',
+        reason: 'p1',
+        canProceed: true,
+        blockingPriority: null,
+        blockingLaneCount: 2,
+      },
+    });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      started: false,
+      advanced: false,
+      applied: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(executor).not.toHaveBeenCalled();
+
+    const final = await getAutonomousRunById(run.id);
+    expect(final).toMatchObject({
+      status: 'blocked',
+      error: { code: 'autonomous_review_lane_gate_blocked' },
+    });
+  });
 });
 
 function createChromeStub() {

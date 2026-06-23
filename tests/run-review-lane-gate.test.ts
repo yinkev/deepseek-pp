@@ -233,3 +233,86 @@ describe('normalizeReviewLaneGate', () => {
     }
   });
 });
+
+describe('adversarial probe — contradictory gates fail closed', () => {
+  it('isBlockingGateInput fails closed on all contradictory combinations', () => {
+    // Each gate has at least one blocking signal and at least one permissive signal.
+    // The system must fail closed: if ANY blocking signal exists, the gate is blocked.
+    const contradictoryBlockingCases: AutonomousRunReviewLaneGateInput[] = [
+      { canProceed: true,  status: 'blocked' },              // permissive canProceed + blocking status
+      { canProceed: true,  blockingPriority: 'P1' },         // permissive canProceed + P1
+      { canProceed: true,  blockingPriority: 'P2' },         // permissive canProceed + P2
+      { canProceed: true,  reason: 'p1' },                  // permissive canProceed + blocking reason
+      { canProceed: true,  reason: 'p2' },                  // permissive canProceed + blocking reason
+      { canProceed: true,  reason: 'block_recommendation' }, // permissive canProceed + blocking reason
+      { status: 'clear',   canProceed: false },              // permissive status + blocking canProceed
+      { status: 'clear',   blockingPriority: 'P1' },         // permissive status + P1
+      { status: 'clear',   blockingPriority: 'P2' },         // permissive status + P2
+      { status: 'clear',   reason: 'p1' },                  // permissive status + blocking reason
+      { status: 'clear',   reason: 'block_recommendation' }, // permissive status + blocking reason
+      { status: 'attention', canProceed: false },            // permissive attention + blocking canProceed
+      { status: 'attention', blockingPriority: 'P2' },       // permissive attention + P2
+      { status: 'attention', reason: 'p1' },                 // permissive attention + blocking reason
+      { status: 'attention', reason: 'block_recommendation' }, // permissive attention + blocking reason
+      { reason: 'none',     canProceed: false },              // permissive reason + blocking canProceed
+      { reason: 'none',     blockingPriority: 'P1' },         // permissive reason + P1
+      { reason: 'active_review', blockingPriority: 'P2' },    // permissive active_review + P2
+      { status: 'attention', reason: 'p2' },                  // attention status + p2 reason
+      { canProceed: true,   status: 'blocked', reason: 'none', blockingPriority: null },  // status blocked wins
+      { canProceed: false,  status: 'clear',   reason: 'none', blockingPriority: null },  // canProceed false wins
+      { canProceed: true,   status: 'attention', reason: 'p1', blockingPriority: null },  // reason p1 wins
+    ];
+    for (const gate of contradictoryBlockingCases) {
+      expect(isBlockingGateInput(gate)).toBe(true);
+    }
+  });
+
+  it('normalizeReviewLaneGate fails closed on all contradictory combinations', () => {
+    // Same contradictory cases: normalized result must also report blocked
+    const contradictoryBlockingCases: AutonomousRunReviewLaneGateInput[] = [
+      { canProceed: true,  status: 'blocked' },
+      { canProceed: true,  blockingPriority: 'P1' },
+      { canProceed: true,  blockingPriority: 'P2' },
+      { canProceed: true,  reason: 'p1' },
+      { canProceed: true,  reason: 'p2' },
+      { canProceed: true,  reason: 'block_recommendation' },
+      { status: 'clear',   canProceed: false },
+      { status: 'clear',   blockingPriority: 'P1' },
+      { status: 'clear',   blockingPriority: 'P2' },
+      { status: 'clear',   reason: 'p1' },
+      { status: 'clear',   reason: 'block_recommendation' },
+      { status: 'attention', canProceed: false },
+      { status: 'attention', blockingPriority: 'P2' },
+      { status: 'attention', reason: 'p1' },
+      { status: 'attention', reason: 'block_recommendation' },
+      { reason: 'none',     canProceed: false },
+      { reason: 'none',     blockingPriority: 'P1' },
+      { reason: 'active_review', blockingPriority: 'P2' },
+      { canProceed: true,   status: 'blocked', reason: 'none', blockingPriority: null },
+    ];
+    for (const gate of contradictoryBlockingCases) {
+      expect(normalizeReviewLaneGate(gate).blocked).toBe(true);
+    }
+  });
+
+  it('false-positive safety: a truly non-blocking gate with contradictory internal fields does not spuriously block', () => {
+    // These gates have ambiguous or mixed non-blocking signals but NO blocking signal.
+    // The system must NOT fail open (no false positives).
+    const nonBlockingMarginalCases: AutonomousRunReviewLaneGateInput[] = [
+      { canProceed: true },
+      { status: 'clear' },
+      { status: 'attention' },
+      { blockingPriority: null },
+      { blockingPriority: 'P3' },
+      { reason: 'none' },
+      { reason: 'active_review' },
+      { reason: 'failed_lane' },
+      { reason: 'blocked_lane' },
+      { status: 'attention', reason: 'active_review', canProceed: true, blockingPriority: null },
+      { status: 'clear',     reason: 'none',          canProceed: true, blockingPriority: 'P3' },
+    ];
+    for (const gate of nonBlockingMarginalCases) {
+      expect(isBlockingGateInput(gate)).toBe(false);
+    }
+  });
+});
