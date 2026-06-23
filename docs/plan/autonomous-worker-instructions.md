@@ -116,9 +116,9 @@ Priority order:
    - Gate: P1/P2 review state blocks the core cycle; green gate allows continuation; no Chrome/runtime wiring.
 
 6. Review-lane worker coordination.
-   - Status: partially complete; scheduler metadata and pet bridge fields can describe planned advisor lanes, durable lane records persist compact Oracle/Grok advisor outcomes, the pure orchestrator consumes persisted blockers, and pet handoff now projects safe review-lane plan state. Actual worker dispatch remains runtime-frozen.
-   - Implemented so far by formalizing implementer, reviewer, safety, UX, and Oracle/Grok advisor lanes as bounded metadata, durable store records, pure orchestrator gate input, and pet-visible safe plan projection.
-   - Remaining work: dispatch actual review worker lanes once runtime work resumes.
+   - Status: complete for the pure review dispatch contract; actual live worker dispatch remains runtime-frozen.
+   - Implemented by formalizing implementer, reviewer, safety, UX, and Oracle/Grok advisor lanes as bounded metadata, durable review-lane outcome records, pure scheduler/orchestrator gate input, and pet-visible safe plan projection.
+   - Remaining work: live dispatch only after runtime work resumes.
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
 
 7. Autonomous telemetry and repo-visible handoff.
