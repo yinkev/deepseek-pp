@@ -158,6 +158,7 @@ Default worker prompt:
     Raw prompts, transcripts, reviewer prose, command output, provider IDs, session URLs, and secret-like source fields must not leak.
   </objective>
   <quality_gate>
+    <item>Evaluate, Review, Grade, Iterate after implementation before committing.</item>
     <item>Before committing, build a contract coverage table: each required behavior must map to at least one test assertion or be explicitly marked not testable in this slice.</item>
     <item>Run one adversarial probe for false-positive success: prove the result object and durable stored state agree.</item>
     <item>Self-review after verification and assign grade A-F.</item>
