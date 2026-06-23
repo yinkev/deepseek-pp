@@ -3,7 +3,8 @@ import type {
   AutonomousReviewLaneStatus,
   AutonomousRunStatus,
 } from './types';
-import type { AutonomousRunReviewLaneGateInput } from './worker';
+import type { AutonomousRunReviewLaneGateInput, AutonomousRunReviewLaneGateReason } from './worker';
+import { normalizeReviewLaneGate as sharedNormalizeReviewLaneGate } from './review-lane-gate';
 
 export type { AutonomousReviewLaneRole, AutonomousReviewLaneStatus } from './types';
 
@@ -216,83 +217,37 @@ function normalizeMaxParallel(maxParallel: unknown): number {
 function normalizeReviewLaneGate(
   gate: AutonomousRunReviewLaneGateInput | null | undefined,
 ): NormalizedGate {
-  if (!gate) {
+  const result = sharedNormalizeReviewLaneGate(gate);
+  if (!result.blocked) {
     return {
       blocked: false,
       reason: null,
       blockingPriority: null,
-      blockingLaneCount: 0,
+      blockingLaneCount: result.blockingLaneCount,
     };
   }
 
-  const reason = normalizeGateReason(gate.reason);
-  const blockingPriority = normalizeBlockingPriority(gate.blockingPriority, reason);
-  const blockingLaneCount = normalizeCount(gate.blockingLaneCount);
-  if (blockingPriority === 'P1') {
-    return {
-      blocked: true,
-      reason: 'review_gate_p1',
-      blockingPriority,
-      blockingLaneCount,
-    };
-  }
-  if (blockingPriority === 'P2') {
-    return {
-      blocked: true,
-      reason: 'review_gate_p2',
-      blockingPriority,
-      blockingLaneCount,
-    };
-  }
-  if (reason === 'block_recommendation') {
-    return {
-      blocked: true,
-      reason: 'review_gate_block_recommendation',
-      blockingPriority: null,
-      blockingLaneCount,
-    };
-  }
-  if (gate.canProceed === false || gate.status === 'blocked') {
-    return {
-      blocked: true,
-      reason: 'review_gate_blocked',
-      blockingPriority: null,
-      blockingLaneCount,
-    };
-  }
+  // Derive blocking priority from both the priority field AND the reason,
+  // matching the scheduler's historic behavior.
+  const blockingPriority: AutonomousReviewLaneBlockingPriority | null =
+    result.blockingPriority === 'P1' || result.reason === 'p1' ? 'P1' :
+    result.blockingPriority === 'P2' || result.reason === 'p2' ? 'P2' :
+    null;
+
   return {
-    blocked: false,
-    reason: null,
-    blockingPriority: null,
-    blockingLaneCount,
+    blocked: true,
+    reason: mapBlockedReason(result.reason, blockingPriority),
+    blockingPriority,
+    blockingLaneCount: result.blockingLaneCount,
   };
 }
 
-function normalizeGateReason(reason: unknown): string | null {
-  if (
-    reason === 'p1' ||
-    reason === 'p2' ||
-    reason === 'block_recommendation' ||
-    reason === 'active_review' ||
-    reason === 'failed_lane' ||
-    reason === 'blocked_lane' ||
-    reason === 'none'
-  ) {
-    return reason;
-  }
-  return null;
-}
-
-function normalizeBlockingPriority(
-  priority: unknown,
-  reason: string | null,
-): AutonomousReviewLaneBlockingPriority | null {
-  if (priority === 'P1' || reason === 'p1') return 'P1';
-  if (priority === 'P2' || reason === 'p2') return 'P2';
-  return null;
-}
-
-function normalizeCount(count: unknown): number {
-  if (typeof count !== 'number' || !Number.isFinite(count)) return 0;
-  return Math.max(0, Math.floor(count));
+function mapBlockedReason(
+  reason: AutonomousRunReviewLaneGateReason,
+  priority: AutonomousReviewLaneBlockingPriority | null,
+): AutonomousReviewLaneScheduleReason {
+  if (priority === 'P1') return 'review_gate_p1';
+  if (priority === 'P2') return 'review_gate_p2';
+  if (reason === 'block_recommendation') return 'review_gate_block_recommendation';
+  return 'review_gate_blocked';
 }

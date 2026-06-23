@@ -238,6 +238,16 @@ export interface SyncConfig {
   lastSyncAt: number | null;
 }
 
+export interface PetDoctorSnapshot {
+  readinessStatus: 'ready' | 'needs_attention' | 'blocked';
+  blockers: string[];
+  preparing: boolean;
+  targetLocked: boolean;
+  targetLabel: string | null;
+  targetStale: boolean;
+  leakIssueCount: number;
+}
+
 export interface SyncCounts {
   memories: number;
   skills: number;
@@ -583,7 +593,8 @@ export type MessageAction =
   | { type: 'CLEAR_BACKGROUND' }
   | { type: 'GET_PET' }
   | { type: 'SAVE_PET'; payload: PetConfig }
-  | { type: 'CLEAR_PET' };
+  | { type: 'CLEAR_PET' }
+  | { type: 'GET_PET_CONTROL_SNAPSHOT' };
 
 export interface PromptConfig {
   memoryTokenBudget: number;

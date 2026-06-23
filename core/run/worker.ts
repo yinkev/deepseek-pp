@@ -7,6 +7,7 @@ import {
 } from './store';
 import { reviewAutonomousRunAction } from './policy';
 import { isTerminalRunStatus, type AutonomousRunProgressReview } from './kernel';
+import { normalizeReviewLaneGate, type NormalizedReviewLaneGateResult } from './review-lane-gate';
 import type {
   AutonomousRunError,
   AutonomousRunId,
@@ -50,12 +51,7 @@ export interface AutonomousRunReviewLaneGateInput {
   blockingLaneCount?: number | null;
 }
 
-interface NormalizedReviewLaneGate {
-  blocked: boolean;
-  reason: AutonomousRunReviewLaneGateReason;
-  blockingPriority: AutonomousRunReviewLaneGatePriority | null;
-  blockingLaneCount: number;
-}
+type NormalizedReviewLaneGate = NormalizedReviewLaneGateResult;
 
 export interface AutonomousRunCycleResult {
   action: 'noop' | 'start' | 'advance' | 'block' | 'fail';
@@ -244,59 +240,6 @@ function makeResult(
     finalStatus,
     errorCode,
   };
-}
-
-function normalizeReviewLaneGate(
-  gate: AutonomousRunReviewLaneGateInput | null | undefined,
-): NormalizedReviewLaneGate {
-  if (!gate) {
-    return {
-      blocked: false,
-      reason: 'none',
-      blockingPriority: null,
-      blockingLaneCount: 0,
-    };
-  }
-  const reason = normalizeReviewLaneGateReason(gate.reason);
-  const blockingPriority = normalizeReviewLaneGatePriority(gate.blockingPriority);
-  const blockingLaneCount = typeof gate.blockingLaneCount === 'number' && Number.isFinite(gate.blockingLaneCount)
-    ? Math.max(0, Math.floor(gate.blockingLaneCount))
-    : 0;
-  const blocked = gate.canProceed === false ||
-    gate.status === 'blocked' ||
-    blockingPriority === 'P1' ||
-    blockingPriority === 'P2' ||
-    reason === 'p1' ||
-    reason === 'p2' ||
-    reason === 'block_recommendation';
-  return {
-    blocked,
-    reason,
-    blockingPriority,
-    blockingLaneCount,
-  };
-}
-
-function normalizeReviewLaneGateReason(reason: unknown): AutonomousRunReviewLaneGateReason {
-  if (
-    reason === 'none' ||
-    reason === 'active_review' ||
-    reason === 'p1' ||
-    reason === 'p2' ||
-    reason === 'block_recommendation' ||
-    reason === 'failed_lane' ||
-    reason === 'blocked_lane'
-  ) {
-    return reason;
-  }
-  return 'unknown';
-}
-
-function normalizeReviewLaneGatePriority(priority: unknown): AutonomousRunReviewLaneGatePriority | null {
-  if (priority === 'P1' || priority === 'P2' || priority === 'P3') {
-    return priority;
-  }
-  return null;
 }
 
 function createReviewLaneGateError(

@@ -5,6 +5,7 @@ import type {
   ModelType,
   PetConfig,
   PetCustomPosition,
+  PetDoctorSnapshot,
   PromptInjectionSettings,
   Skill,
   SystemPromptPreset,
@@ -304,6 +305,12 @@ let petBubbleHideTimer: ReturnType<typeof setTimeout> | null = null;
 let petBubbleRepeatTimer: ReturnType<typeof setTimeout> | null = null;
 let petBubbleState: PetState | null = null;
 const petRecentLines: string[] = [];
+let petDoctorSnapshot: PetDoctorSnapshot | null = null;
+let petDoctorSnapshotAt = 0;
+const PET_DOCTOR_SNAPSHOT_TTL_MS = 10_000;
+let petControlTargetEl: HTMLElement | null = null;
+let petControlLeakEl: HTMLElement | null = null;
+let petControlBlockerEl: HTMLElement | null = null;
 let inlineAgentContainer: HTMLElement | null = null;
 let inlineAgentCurrentStep: HTMLElement | null = null;
 let inlineAgentLoopId: string | null = null;
@@ -6013,6 +6020,9 @@ function ensurePet(): HTMLElement {
   petControlPanelEl = host.querySelector<HTMLElement>('.dpp-pet-control');
   petControlStateEl = host.querySelector<HTMLElement>('.dpp-pet-control-state');
   petControlNextEl = host.querySelector<HTMLElement>('.dpp-pet-control-next');
+  petControlTargetEl = host.querySelector<HTMLElement>('.dpp-pet-control-target');
+  petControlLeakEl = host.querySelector<HTMLElement>('.dpp-pet-control-leak');
+  petControlBlockerEl = host.querySelector<HTMLElement>('.dpp-pet-control-blocker');
   updatePetControlPanel();
   return host;
 }
@@ -6031,6 +6041,11 @@ function removePet() {
   petControlPanelEl = null;
   petControlStateEl = null;
   petControlNextEl = null;
+  petControlTargetEl = null;
+  petControlLeakEl = null;
+  petControlBlockerEl = null;
+  petDoctorSnapshot = null;
+  petDoctorSnapshotAt = 0;
   uninstallPetControlOutsideListeners();
   uninstallPetResizeListener();
 }
@@ -6148,8 +6163,26 @@ function togglePetControlPanel() {
   setPetControlPanelVisible(petControlPanelEl.dataset.visible !== 'true');
 }
 
+async function fetchPetControlSnapshot(): Promise<void> {
+  if (!hasLiveExtensionContext()) return;
+  const now = Date.now();
+  if (petDoctorSnapshot && now - petDoctorSnapshotAt < PET_DOCTOR_SNAPSHOT_TTL_MS) return;
+  try {
+    const snapshot = await chrome.runtime.sendMessage({ type: 'GET_PET_CONTROL_SNAPSHOT' }) as PetDoctorSnapshot | undefined;
+    if (snapshot) {
+      petDoctorSnapshot = snapshot;
+      petDoctorSnapshotAt = now;
+    }
+  } catch {
+    // Background unavailable — keep stale snapshot
+  }
+}
+
 function setPetControlPanelVisible(visible: boolean) {
   if (!petControlPanelEl) return;
+  if (visible) {
+    void fetchPetControlSnapshot().then(() => updatePetControlPanel());
+  }
   updatePetControlPanel();
   petControlPanelEl.dataset.visible = String(visible);
   petHostEl?.setAttribute('aria-expanded', String(visible));
@@ -6166,10 +6199,37 @@ function updatePetControlPanel() {
   petHostEl.setAttribute('aria-label', contentT('content.petControl.title'));
   const state = petHostEl.dataset.state as PetState | undefined;
   if (petControlStateEl) {
-    petControlStateEl.textContent = formatPetStateLabel(state);
+    const snapshot = petDoctorSnapshot;
+    if (snapshot) {
+      const parts: string[] = [contentT(`content.petControl.states.${state ?? 'idle'}` as LocaleMessageKey)];
+      if (!snapshot.preparing && snapshot.blockers.length > 0) {
+        parts.push(` · ${snapshot.blockers.length} ${contentT('content.petControl.blockerLabel')}`);
+      }
+      petControlStateEl.textContent = parts.join('');
+    } else {
+      petControlStateEl.textContent = formatPetStateLabel(state);
+    }
   }
   if (petControlNextEl) {
     petControlNextEl.textContent = formatPetNextAction(state);
+  }
+  if (petControlTargetEl) {
+    const target = petDoctorSnapshot;
+    const targetText = target?.targetLabel ?? null;
+    petControlTargetEl.textContent = targetText ?? '';
+    petControlTargetEl.parentElement?.classList.toggle('dpp-pet-control-hidden', !targetText);
+  }
+  if (petControlLeakEl) {
+    const leakCount = petDoctorSnapshot?.leakIssueCount ?? 0;
+    const leakText = leakCount > 0 ? `${leakCount}` : '';
+    petControlLeakEl.textContent = leakText;
+    petControlLeakEl.parentElement?.classList.toggle('dpp-pet-control-hidden', leakCount === 0);
+  }
+  if (petControlBlockerEl) {
+    const blockers = petDoctorSnapshot?.blockers ?? [];
+    const blockerText = blockers.length > 0 ? blockers.join(', ') : '';
+    petControlBlockerEl.textContent = blockerText;
+    petControlBlockerEl.parentElement?.classList.toggle('dpp-pet-control-hidden', blockers.length === 0);
   }
 }
 
@@ -6607,6 +6667,10 @@ function injectPetStyles() {
       margin-top: 6px;
     }
 
+    #${PET_HOST_ID} .dpp-pet-control-hidden {
+      display: none;
+    }
+
     #${PET_HOST_ID} .dpp-pet-control-label {
       color: rgba(29, 36, 51, 0.58);
       font-weight: 600;
@@ -6726,6 +6790,18 @@ function createPetMarkup(): string {
       <div class="dpp-pet-control-row">
         <span class="dpp-pet-control-label">${contentT('content.petControl.statusLabel')}</span>
         <span class="dpp-pet-control-value dpp-pet-control-state" aria-live="polite"></span>
+      </div>
+      <div class="dpp-pet-control-row dpp-pet-control-hidden">
+        <span class="dpp-pet-control-label">${contentT('content.petControl.targetLabel')}</span>
+        <span class="dpp-pet-control-value dpp-pet-control-target"></span>
+      </div>
+      <div class="dpp-pet-control-row dpp-pet-control-hidden">
+        <span class="dpp-pet-control-label">${contentT('content.petControl.leakLabel')}</span>
+        <span class="dpp-pet-control-value dpp-pet-control-leak"></span>
+      </div>
+      <div class="dpp-pet-control-row dpp-pet-control-hidden">
+        <span class="dpp-pet-control-label">${contentT('content.petControl.blockerLabel')}</span>
+        <span class="dpp-pet-control-value dpp-pet-control-blocker"></span>
       </div>
       <div class="dpp-pet-control-row">
         <span class="dpp-pet-control-label">${contentT('content.petControl.nextLabel')}</span>

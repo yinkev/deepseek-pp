@@ -1353,6 +1353,9 @@ export const en = {
         error: 'Retry or open diagnostics',
         sleepy: 'Start or resume work',
       },
+      targetLabel: 'Target',
+      blockerLabel: 'Blocked',
+      leakLabel: 'Leaks',
     },
     permission: {
       webFetch: 'DeepSeek++ needs permission to access {origin} so it can fetch that page',

@@ -299,7 +299,7 @@ import {
   watchLocalePreference,
 } from '../core/i18n/store';
 import type { WebSearchToolName } from '../core/tool/web-search';
-import type { BackgroundConfig, ChatToolEvent, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, ProjectContextState, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncCounts, SystemPromptPreset, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
+import type { BackgroundConfig, ChatToolEvent, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, PetDoctorSnapshot, ProjectContextState, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncCounts, SystemPromptPreset, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
 import type { McpServerCreateInput, McpServerUpdateInput } from '../core/mcp/types';
 import type { AutomationCreateInput, AutomationFlightEvent, AutomationFlightRecorder, AutomationRunnerRequest, AutomationRunnerResult, AutomationStatus, AutomationUpdateInput } from '../core/automation/types';
 import type { ConversationExportProgress, ConversationExportResult } from '../core/export/types';
@@ -1361,6 +1361,24 @@ async function handleMessage(
 
     case 'GET_RUNTIME_DOCTOR_REPORT':
       return getRuntimeDoctorReport(sender.tab?.id);
+
+    case 'GET_PET_CONTROL_SNAPSHOT': {
+      const report = await getRuntimeDoctorReport(sender.tab?.id);
+      const targetStatus = report.readiness.targetStatus;
+      const targetLocked = report.browserControl.targetLock.enabled;
+      const targetStale = targetStatus === 'missing' || targetStatus === 'unsupported' || targetStatus === 'not_controllable';
+      const targetLabel = targetStatus === 'missing' ? 'Target missing' : targetStale ? 'Target stale' : targetLocked ? 'Target locked' : null;
+      const snapshot: PetDoctorSnapshot = {
+        readinessStatus: report.readiness.status,
+        blockers: report.readiness.blockers,
+        preparing: report.readiness.preparing,
+        targetLocked,
+        targetLabel,
+        targetStale,
+        leakIssueCount: Math.max(report.leakSentry.issueCount, report.leakQuarantine.issueCount, report.storage.issues.length),
+      };
+      return snapshot;
+    }
 
     case 'REFRESH_DEEPSEEK_WEB_AUTH':
       return refreshDeepSeekWebAuth(sender.tab?.id);

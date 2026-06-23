@@ -1353,6 +1353,9 @@ export const zhCN = {
         error: '重试或打开诊断',
         sleepy: '开始或继续工作',
       },
+      targetLabel: '目标',
+      blockerLabel: '受阻',
+      leakLabel: '泄露',
     },
     permission: {
       webFetch: 'DeepSeek++ 需要访问 {origin} 的权限以获取该页面内容',
