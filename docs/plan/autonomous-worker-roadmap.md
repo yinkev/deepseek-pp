@@ -12,9 +12,9 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 
 - Worktree: this checkout's repository root. Agents should resolve it from their current working directory or an injected `REPO_ROOT`; do not hard-code a personal absolute path into reusable prompts.
 - Branch: `codex/deepseek-pet`.
-- Latest verified autonomous commit before this roadmap: `100eb30 Align review lane gate predicates`.
+- Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
-- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections.
+- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, and worker-level scheduler watchdog preflight.
 
 ## Advisory Fan-Out Synthesis
 
@@ -58,7 +58,7 @@ Every implementation slice must follow this order:
 
 | Step | Slice | How To Accomplish It | Verification | Commit Boundary |
 | --- | --- | --- | --- | --- |
-| 1 | Restartable scheduler/watchdog contract | Add a pure liveness gate around the existing run/orchestrator flow: lease age, evidence age, no-progress count, retry budget, pause/resume flag, and review-lane blocker state. Keep it in `core/run/*`; do not wire runtime. | Unit tests for stale lease, stale evidence, repeated no-progress, review blocker, pause, terminal no-op, and result/durable agreement. | `Add autonomous scheduler watchdog contract` |
+| 1 | Restartable scheduler/watchdog contract | Add a pure liveness gate around the existing run/orchestrator flow: lease age, evidence age, no-progress count, retry budget, pause/resume flag, and review-lane blocker state. Keep it in `core/run/*`; do not wire runtime. Implementation surface: `core/run/scheduler-watchdog.ts` plus worker preflight integration. | Unit tests for stale lease, stale evidence, repeated no-progress, review blocker, pause, terminal no-op, and result/durable agreement. | `Add autonomous scheduler watchdog contract` |
 | 2 | Lease/retry/restart reconciliation | Harden startup reconciliation so interrupted, stale, or expired active work becomes blocked/retryable with durable error metadata before new work is selected. | Store/orchestrator tests proving expired leases reconcile before selection and terminal runs stay terminal. | `Harden autonomous restart reconciliation` |
 | 3 | Repo-visible restart telemetry | Extend telemetry writer/package so restart handoff includes scheduler gate, watchdog verdict, retry posture, unresolved blockers, and last safe checkpoint. | Telemetry writer tests for `.complete.json`, path safety, privacy, and handoff fields agreeing with durable state. | `Add restartable telemetry handoff` |
 | 4 | Projection fidelity auditor | Measure pet cockpit projection fidelity against durable state after each pure cycle. Persist score, drift count, and gate-impact metadata. This is the selected novel feature. | Pet/orchestrator bridge tests where injected projection drift fails the fidelity probe and clean projections pass. | `Add pet projection fidelity audit` |
@@ -76,6 +76,7 @@ Every implementation slice must follow this order:
 - Files: `core/run/orchestrator.ts`, `core/run/worker.ts`, `core/run/target.ts`, `core/run/store.ts`, optionally a new `core/run/scheduler-watchdog.ts`, plus `tests/run-orchestrator.test.ts`, `tests/run-worker.test.ts`, `tests/run-target-store.test.ts`.
 - Contract: pure function derives `canContinue`, `mustBlock`, `mustRetry`, or `terminalNoop` from run status, target lease freshness, evidence freshness, no-progress count, retry budget, pause flag, terminal state, quality gate, and review-lane blocker records.
 - Acceptance: a returned scheduler/watchdog verdict must match the durable run state after apply; an injected mismatch must fail a test.
+- Slice doc: `docs/plan/autonomous-scheduler-watchdog.md`.
 
 ### Step 2: Lease/Retry/Restart Reconciliation
 

@@ -4,7 +4,10 @@ import {
   createAutonomousRun,
   getAutonomousRunById,
   getAutonomousRunSteps,
+  releaseAutonomousTargetLease,
   transitionAutonomousRun,
+  updateAutonomousRun,
+  upsertAutonomousTargetLease,
 } from '../core/run/store';
 import { executeAutonomousRunCycle } from '../core/run/worker';
 import {
@@ -421,6 +424,216 @@ describe('autonomous run worker cycle (non-Chrome)', () => {
     expect(final).toMatchObject({
       status: 'blocked',
       error: { code: 'autonomous_review_lane_gate_blocked' },
+    });
+  });
+
+  it('adversarial probe: expired target lease blocks before executor and durable state agrees', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'expired-lease' });
+
+    const run = await createAutonomousRun({
+      goal: 'Expired lease watchdog probe',
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+    await upsertAutonomousTargetLease({
+      id: 'lease-expired',
+      runId: run.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+      acquiredAt: 0,
+      ttlMs: 10_000,
+    }, 110);
+    await transitionAutonomousRun(run.id, 'running', null, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, { now: 20_000 });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      started: false,
+      advanced: false,
+      applied: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_watchdog_expired_target_lease',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'expired_target_lease',
+        recommendedStatus: 'blocked',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.finalStatus,
+      error: { code: result.errorCode },
+    });
+  });
+
+  it('adversarial probe: missing target lease blocks before executor and durable state agrees', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'missing-lease' });
+
+    const run = await createAutonomousRun({
+      goal: 'Missing lease watchdog probe',
+      targetLeaseId: 'lease-missing',
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, { now: 200 });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_watchdog_missing_target_lease',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'missing_target_lease',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.finalStatus,
+      error: { code: result.errorCode },
+    });
+  });
+
+  it('adversarial probe: inactive target lease blocks before executor and durable state agrees', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'inactive-lease' });
+
+    const run = await createAutonomousRun({
+      goal: 'Inactive lease watchdog probe',
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+    const lease = await upsertAutonomousTargetLease({
+      id: 'lease-inactive',
+      runId: run.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+    }, 110);
+    await releaseAutonomousTargetLease(lease?.id ?? '', 120);
+    await updateAutonomousRun(run.id, { targetLeaseId: lease?.id ?? null }, 130);
+    await transitionAutonomousRun(run.id, 'running', null, 140);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, { now: 200 });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_watchdog_inactive_target_lease',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'inactive_target_lease',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.finalStatus,
+      error: { code: result.errorCode },
+    });
+  });
+
+  it('adversarial probe: exhausted no-progress budget blocks before executor and durable state agrees', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'watchdog-no-progress' });
+
+    const run = await createAutonomousRun({
+      goal: 'No progress watchdog probe',
+      budgets: { maxConsecutiveNoProgress: 2 },
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousRunStep(run.id, { id: 'no-progress-1', phase: 'verification', progressScore: 0 }, 120);
+    await appendAutonomousRunStep(run.id, { id: 'no-progress-2', phase: 'verification', progressScore: 0 }, 130);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, { now: 140 });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'run_no_progress',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'no_progress_exceeded',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.finalStatus,
+      error: { code: result.errorCode },
+    });
+  });
+
+  it('adversarial probe: exhausted same-error budget blocks before executor and durable state agrees', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'watchdog-same-error' });
+
+    const run = await createAutonomousRun({
+      goal: 'Same error watchdog probe',
+      budgets: { maxSameErrorRepeats: 2 },
+      proofContract: {
+        doneCriteria: ['tests pass'],
+        requiredEvidence: [],
+        antiProof: [],
+      },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const error = {
+      code: 'same_error',
+      message: 'same error',
+      phase: 'model_turn' as const,
+      retryable: true,
+      at: 120,
+    };
+    await appendAutonomousRunStep(run.id, { id: 'same-error-1', phase: 'model_turn', status: 'failed', error }, 120);
+    await appendAutonomousRunStep(run.id, { id: 'same-error-2', phase: 'model_turn', status: 'failed', error }, 130);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousRunCycle(run.id, executor, { now: 140 });
+
+    expect(result).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'run_repeated_error',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'same_error_exceeded',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.finalStatus,
+      error: { code: result.errorCode },
     });
   });
 });

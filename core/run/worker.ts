@@ -2,14 +2,15 @@ import {
   appendAutonomousRunStep,
   applyAutonomousRunIterationReview,
   getAutonomousRunById,
+  getAutonomousRunEvidence,
   getAutonomousRunSteps,
+  getAutonomousTargetLeaseById,
   transitionAutonomousRun,
 } from './store';
 import { reviewAutonomousRunAction } from './policy';
-import { isTerminalRunStatus, type AutonomousRunProgressReview } from './kernel';
-import { normalizeReviewLaneGate, type NormalizedReviewLaneGateResult } from './review-lane-gate';
+import { type AutonomousRunProgressReview } from './kernel';
+import { evaluateAutonomousSchedulerWatchdog, type AutonomousSchedulerWatchdogVerdict } from './scheduler-watchdog';
 import type {
-  AutonomousRunError,
   AutonomousRunId,
   AutonomousRunStatus,
 } from './types';
@@ -51,8 +52,6 @@ export interface AutonomousRunReviewLaneGateInput {
   blockingLaneCount?: number | null;
 }
 
-type NormalizedReviewLaneGate = NormalizedReviewLaneGateResult;
-
 export interface AutonomousRunCycleResult {
   action: 'noop' | 'start' | 'advance' | 'block' | 'fail';
   runId: AutonomousRunId;
@@ -62,6 +61,7 @@ export interface AutonomousRunCycleResult {
   policyDecision: AutonomousRunGateDecision | null;
   iterationAction: string | null;
   reviewSummary: AutonomousRunCycleReviewSummary | null;
+  schedulerWatchdogVerdict?: AutonomousSchedulerWatchdogVerdict | null;
   finalStatus: AutonomousRunStatus | null;
   errorCode: string | null;
 }
@@ -88,43 +88,38 @@ export async function executeAutonomousRunCycle(
 
   let run = await getAutonomousRunById(runId);
   if (!run) {
-    return makeResult('noop', runId, false, false, false, null, null, null, null, null);
-  }
-  if (isTerminalRunStatus(run.status)) {
-    return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
+    const schedulerWatchdogVerdict = evaluateAutonomousSchedulerWatchdog({ run: null, now });
+    return makeResult('noop', runId, false, false, false, null, null, null, schedulerWatchdogVerdict, null, null);
   }
 
-  if (run.status === 'paused' || run.status === 'blocked') {
-    return makeResult('noop', runId, false, false, false, null, null, null, run.status, null);
-  }
+  const preflightSteps = await getAutonomousRunSteps(runId);
+  const preflightEvidence = await getAutonomousRunEvidence(runId);
+  const targetLease = run.targetLeaseId ? await getAutonomousTargetLeaseById(run.targetLeaseId) : null;
+  const schedulerWatchdogVerdict = evaluateAutonomousSchedulerWatchdog({
+    run,
+    steps: preflightSteps,
+    evidence: preflightEvidence,
+    targetLease,
+    reviewLaneGate: options.reviewLaneGate,
+    now,
+  });
 
-  const reviewLaneGate = normalizeReviewLaneGate(options.reviewLaneGate);
-  if (reviewLaneGate.blocked) {
-    const error = createReviewLaneGateError(reviewLaneGate, now);
-    await appendAutonomousRunStep(runId, {
-      phase: 'review',
-      status: 'failed',
-      error,
-      progressScore: 0,
-      proofDelta: [],
-      evidenceRefs: [],
-      toolCallIds: [],
-      observationRefs: createReviewLaneGateObservationRefs(reviewLaneGate),
-    }, now);
-    await transitionAutonomousRun(runId, 'blocked', error, now);
-    const iter = await applyAutonomousRunIterationReview({ runId }, now);
-    const final = await getAutonomousRunById(runId);
+  if (schedulerWatchdogVerdict.blocksNextAction) {
+    if (schedulerWatchdogVerdict.recommendedStatus === 'blocked' && schedulerWatchdogVerdict.error) {
+      return blockFromWatchdog(runId, schedulerWatchdogVerdict, now);
+    }
     return makeResult(
-      'block',
+      'noop',
       runId,
       false,
       false,
-      iter.applied,
+      false,
       null,
-      iter.review?.action ?? null,
-      summarizeIterationReview(iter.review),
-      final?.status ?? 'blocked',
-      error.code,
+      null,
+      null,
+      schedulerWatchdogVerdict,
+      run.status,
+      schedulerWatchdogVerdict.error?.code ?? null,
     );
   }
 
@@ -166,6 +161,7 @@ export async function executeAutonomousRunCycle(
       policyReview.decision,
       iter.review?.action ?? null,
       summarizeIterationReview(iter.review),
+      schedulerWatchdogVerdict,
       final?.status ?? 'blocked',
       policyReview.error?.code ?? null,
     );
@@ -211,6 +207,7 @@ export async function executeAutonomousRunCycle(
     'allow',
     iter.review?.action ?? null,
     summarizeIterationReview(iter.review),
+    schedulerWatchdogVerdict,
     final?.status ?? null,
     execErrorCode ?? iter.review?.error?.code ?? null,
   );
@@ -225,6 +222,7 @@ function makeResult(
   policyDecision: AutonomousRunGateDecision | null,
   iterationAction: string | null,
   reviewSummary: AutonomousRunCycleReviewSummary | null,
+  schedulerWatchdogVerdict: AutonomousSchedulerWatchdogVerdict | null,
   finalStatus: AutonomousRunStatus | null,
   errorCode: string | null,
 ): AutonomousRunCycleResult {
@@ -237,28 +235,60 @@ function makeResult(
     policyDecision,
     iterationAction,
     reviewSummary,
+    schedulerWatchdogVerdict,
     finalStatus,
     errorCode,
   };
 }
 
-function createReviewLaneGateError(
-  gate: NormalizedReviewLaneGate,
+async function blockFromWatchdog(
+  runId: AutonomousRunId,
+  verdict: AutonomousSchedulerWatchdogVerdict,
   now: number,
-): AutonomousRunError {
-  return {
-    code: 'autonomous_review_lane_gate_blocked',
-    message: `Autonomous run is blocked by review lane gate (${gate.reason}).`,
-    phase: 'review' as const,
-    retryable: true,
-    at: now,
-  };
+): Promise<AutonomousRunCycleResult> {
+  const error = verdict.error;
+  if (!error) {
+    return makeResult('noop', runId, false, false, false, null, null, null, verdict, null, null);
+  }
+  await appendAutonomousRunStep(runId, {
+    phase: 'review',
+    status: 'failed',
+    error,
+    progressScore: 0,
+    proofDelta: [],
+    evidenceRefs: [],
+    toolCallIds: [],
+    observationRefs: createWatchdogObservationRefs(verdict),
+  }, now);
+  await transitionAutonomousRun(runId, 'blocked', error, now);
+  const iter = await applyAutonomousRunIterationReview({ runId }, now);
+  const final = await getAutonomousRunById(runId);
+  return makeResult(
+    'block',
+    runId,
+    false,
+    false,
+    iter.applied,
+    null,
+    iter.review?.action ?? null,
+    summarizeIterationReview(iter.review),
+    verdict,
+    final?.status ?? 'blocked',
+    error.code,
+  );
 }
 
-function createReviewLaneGateObservationRefs(gate: NormalizedReviewLaneGate): string[] {
-  const refs = [`review_lane_gate:${gate.reason}`];
-  if (gate.blockingPriority) refs.push(`review_lane_gate_priority:${gate.blockingPriority}`);
-  if (gate.blockingLaneCount > 0) refs.push(`review_lane_gate_blocking_lanes:${gate.blockingLaneCount}`);
+function createWatchdogObservationRefs(verdict: AutonomousSchedulerWatchdogVerdict): string[] {
+  if (verdict.reason === 'review_lane_gate_blocked') {
+    const refs = [`review_lane_gate:${verdict.details.reviewLaneReason ?? 'unknown'}`];
+    if (verdict.details.blockingPriority) refs.push(`review_lane_gate_priority:${verdict.details.blockingPriority}`);
+    if ((verdict.details.blockingLaneCount ?? 0) > 0) refs.push(`review_lane_gate_blocking_lanes:${verdict.details.blockingLaneCount}`);
+    return refs;
+  }
+  const refs = [`scheduler_watchdog:${verdict.reason}`];
+  if (verdict.details.targetLeaseExpiresInMs === 0) refs.push('scheduler_watchdog:target_lease_expired');
+  if ((verdict.details.expiredEvidenceCount ?? 0) > 0) refs.push(`scheduler_watchdog_expired_evidence:${verdict.details.expiredEvidenceCount}`);
+  if ((verdict.details.staleEvidenceCount ?? 0) > 0) refs.push(`scheduler_watchdog_stale_evidence:${verdict.details.staleEvidenceCount}`);
   return refs;
 }
 

@@ -7,7 +7,9 @@ import {
   createAutonomousRun,
   DEFAULT_AUTONOMOUS_RUN_POLICY,
   getAutonomousRunById,
+  releaseAutonomousTargetLease,
   transitionAutonomousRun,
+  updateAutonomousRun,
   upsertAutonomousTargetLease,
 } from '../core/run/store';
 import {
@@ -318,6 +320,180 @@ describe('autonomous run orchestrator startup bridge', () => {
     await expect(getAutonomousRunById(blocked.id)).resolves.toMatchObject({ status: 'blocked' });
     await expect(getAutonomousRunById(failed.id)).resolves.toMatchObject({ status: 'failed' });
     await expect(getAutonomousRunById(cancelled.id)).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
+  it('lets worker watchdog block expired target leases before executor and keeps snapshots durable-agreeing', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-expired-lease' });
+
+    const run = await createAutonomousRun({
+      id: 'orchestrator-expired-lease-run',
+      goal: 'Expired lease through orchestrator',
+      proofContract: createProofContract(),
+    }, 100);
+    await upsertAutonomousTargetLease({
+      id: 'lease-expired-orchestrator',
+      runId: run.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+      acquiredAt: 0,
+      ttlMs: 10_000,
+    }, 110);
+    await transitionAutonomousRun(run.id, 'running', null, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 20_000 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_watchdog_expired_target_lease',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'expired_target_lease',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: result.workerResult?.errorCode },
+    });
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: 'blocked',
+      errorCode: result.workerResult?.errorCode,
+    });
+  });
+
+  it('lets worker watchdog block missing target leases before executor and keeps snapshots durable-agreeing', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-missing-lease' });
+
+    const run = await createAutonomousRun({
+      id: 'orchestrator-missing-lease-run',
+      goal: 'Missing lease through orchestrator',
+      targetLeaseId: 'lease-missing-orchestrator',
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 120);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_watchdog_missing_target_lease',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'missing_target_lease',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: result.workerResult?.errorCode },
+    });
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: 'blocked',
+      errorCode: result.workerResult?.errorCode,
+    });
+  });
+
+  it('lets worker watchdog block inactive target leases before executor and keeps snapshots durable-agreeing', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-inactive-lease' });
+
+    const run = await createAutonomousRun({
+      id: 'orchestrator-inactive-lease-run',
+      goal: 'Inactive lease through orchestrator',
+      proofContract: createProofContract(),
+    }, 100);
+    const lease = await upsertAutonomousTargetLease({
+      id: 'lease-inactive-orchestrator',
+      runId: run.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+    }, 110);
+    await releaseAutonomousTargetLease(lease?.id ?? '', 120);
+    await updateAutonomousRun(run.id, { targetLeaseId: lease?.id ?? null }, 130);
+    await transitionAutonomousRun(run.id, 'running', null, 140);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_watchdog_inactive_target_lease',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'inactive_target_lease',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: result.workerResult?.errorCode },
+    });
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: 'blocked',
+      errorCode: result.workerResult?.errorCode,
+    });
+  });
+
+  it('lets worker watchdog block no-progress exhaustion before executor and keeps snapshots durable-agreeing', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-no-progress' });
+
+    const run = await createAutonomousRun({
+      id: 'orchestrator-no-progress-run',
+      goal: 'No progress through orchestrator',
+      budgets: { maxConsecutiveNoProgress: 2 },
+      proofContract: createProofContract(),
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    await appendAutonomousRunStep(run.id, { id: 'orchestrator-no-progress-1', phase: 'verification', progressScore: 0 }, 120);
+    await appendAutonomousRunStep(run.id, { id: 'orchestrator-no-progress-2', phase: 'verification', progressScore: 0 }, 130);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 140 });
+
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      advanced: false,
+      finalStatus: 'blocked',
+      errorCode: 'run_no_progress',
+      schedulerWatchdogVerdict: {
+        decision: 'mustBlock',
+        reason: 'no_progress_exceeded',
+      },
+    });
+    expect(executor).not.toHaveBeenCalled();
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: result.workerResult?.errorCode },
+    });
+    expect(result.afterSnapshot.activeRun).toMatchObject({
+      id: run.id,
+      status: 'blocked',
+      errorCode: result.workerResult?.errorCode,
+    });
   });
 
   it('keeps orchestrator cycle snapshots private', async () => {
