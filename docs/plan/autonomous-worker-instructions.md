@@ -132,9 +132,9 @@ Priority order:
    - Gate: pet surfaces expose safe metadata only and never trigger browser/file mutation by themselves.
 
 9. Controlled runtime resume.
-   - Status: blocked until the user explicitly resumes Chrome/runtime work.
-   - Accomplish by wiring background/runtime only after pure core gates are complete and verified.
-   - Gate: no `entrypoints/background.ts` change until explicit resume; runtime smoke required before claiming live autonomy.
+   - Status: complete for the pure resume guard; runtime wiring remains blocked until the user explicitly resumes Chrome/runtime work.
+   - Implemented by requiring explicit durable `chrome_runtime` authorization, a complete resume checklist, no pre-authorization runtime file changes, and no unresolved independent P1/P2 review findings.
+   - Gate: no `entrypoints/background.ts` change until the resume guard authorizes Step 10; runtime smoke required before claiming live autonomy.
 
 ## Subagent Use
 
