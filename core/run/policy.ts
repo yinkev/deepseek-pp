@@ -264,14 +264,16 @@ function stringifySafetyCandidate(value: unknown): string {
   }
 }
 
-function structuredSafetyRedactionRequired(value: unknown): boolean {
+function structuredSafetyRedactionRequired(value: unknown, seen = new WeakSet<object>()): boolean {
   if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
   if (Array.isArray(value)) {
-    return value.some((item) => structuredSafetyRedactionRequired(item));
+    return value.some((item) => structuredSafetyRedactionRequired(item, seen));
   }
   for (const [key, item] of Object.entries(value)) {
     if (isSafetySensitiveKey(key) && item !== undefined && item !== null && item !== '') return true;
-    if (structuredSafetyRedactionRequired(item)) return true;
+    if (structuredSafetyRedactionRequired(item, seen)) return true;
   }
   return false;
 }
@@ -283,12 +285,6 @@ function isSafetySensitiveKey(key: string): boolean {
     lower.includes('api-key') ||
     lower.includes('api_key') ||
     lower.includes('apikey') ||
-    lower.includes('access-token') ||
-    lower.includes('access_token') ||
-    lower.includes('accesstoken') ||
-    lower.includes('refresh-token') ||
-    lower.includes('refresh_token') ||
-    lower.includes('refreshtoken') ||
     lower === 'token' ||
     lower.endsWith('-token') ||
     lower.endsWith('_token') ||

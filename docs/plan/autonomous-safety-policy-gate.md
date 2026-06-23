@@ -14,6 +14,7 @@ The summary is deliberately metadata-only. It reports whether a surface is safe,
 | Missing metadata-only posture fails closed. | Unsafe export-surface test in `tests/run-policy.test.ts` expects `blocked` and `unsafe_export_surface`. |
 | Secret-like candidates set redaction flags without returning raw source text. | Privacy summary test in `tests/run-policy.test.ts`; JSON-style structured secret/password candidate test in `tests/run-policy.test.ts`; worker prompt future-field privacy test in `tests/run-worker-prompt.test.ts`. |
 | Token-count metrics are not false-positive credentials. | Metric-only safety test in `tests/run-policy.test.ts`. |
+| Cyclic structured candidates do not crash or hide secret-key evidence. | Cyclic metric and cyclic secret tests in `tests/run-policy.test.ts`. |
 | Deny and manual-review policy gates block autonomous summaries. | Policy gate summary test in `tests/run-policy.test.ts`. |
 | Real action-policy reviews can be converted into safe policy summaries. | Action-policy helper test in `tests/run-policy.test.ts`. |
 | Already-sanitized redaction markers cannot report clean. | False-positive probe in `tests/run-policy.test.ts`. |

@@ -96,6 +96,7 @@ describe('autonomous run telemetry package', () => {
         surface: 'telemetry',
         metadataOnly: true,
         redacted: true,
+        issueCount: 1,
         issueCodes: ['redaction_applied'],
         issueCategories: ['privacy'],
         policyGate: 'not_applicable',
@@ -191,6 +192,7 @@ describe('autonomous run telemetry package', () => {
       surface: 'telemetry',
       metadataOnly: true,
       redacted: true,
+      issueCount: 1,
       issueCodes: ['redaction_applied'],
       issueCategories: ['privacy'],
     });
@@ -399,6 +401,7 @@ describe('autonomous run telemetry package', () => {
           surface: 'review_lane',
           metadataOnly: true,
           redacted: true,
+          issueCount: 1,
           issueCodes: ['redaction_applied'],
           issueCategories: ['privacy'],
         }),
@@ -417,6 +420,7 @@ describe('autonomous run telemetry package', () => {
       surface: 'telemetry',
       metadataOnly: true,
       redacted: true,
+      issueCount: 1,
     });
     expect(JSON.stringify(pkg)).not.toMatch(
       /gate-token=secret|lane-token=secret|run-token=secret|Bearer secret|rawOutput|transcript|Cookie|Authorization|sid=secret/,

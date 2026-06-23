@@ -102,6 +102,34 @@ describe('autonomous run policy and budget gate', () => {
     });
   });
 
+  it('handles cyclic structured candidates without stack overflow or false-clean secrets', () => {
+    const metricCycle: Record<string, unknown> = { selectedTokenEstimate: 1200 };
+    metricCycle.self = metricCycle;
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'telemetry',
+      metadataOnly: true,
+      redactionCandidates: [metricCycle],
+    })).toMatchObject({
+      status: 'safe',
+      redacted: false,
+      issueCount: 0,
+    });
+
+    const secretCycle: Record<string, unknown> = { customSecret: 'cycle-secret-value' };
+    secretCycle.self = secretCycle;
+    const summary = createAutonomousSafetyRedactionSummary({
+      surface: 'telemetry',
+      metadataOnly: true,
+      redactionCandidates: [secretCycle],
+    });
+    expect(summary).toMatchObject({
+      status: 'redacted',
+      redacted: true,
+      issueCodes: ['redaction_applied'],
+    });
+    expect(JSON.stringify(summary)).not.toContain('cycle-secret-value');
+  });
+
   it('blocks denied and manual-review policy gates in safety summaries', () => {
     expect(createAutonomousSafetyRedactionSummary({
       surface: 'action_policy',
