@@ -85,6 +85,30 @@ describe('autonomous doc resumption gate', () => {
     ]);
   });
 
+  it('blocks embedded quotes that repeat the contract words while denying current posture', () => {
+    const decision = evaluateAutonomousDocResumptionGate({
+      documents: [{
+        text: [
+          'Step 10 runtime wiring remains blocked is incorrect.',
+          'The runtime slice requires explicit durable chrome_runtime authorization is outdated.',
+          'entrypoints/background.ts is frozen and do not touch entrypoints/background.ts but that is no longer the case.',
+          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
+          'The false-positive probe proves result object and durable stored state agree.',
+          'Self-review assigns a grade before commit.',
+          'Independent P1/P2 review blocks the next step.',
+          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+        ].join('\n'),
+      }],
+    });
+
+    expect(decision.status).toBe('blocked');
+    expect(decision.missingMarkerCodes).toEqual([
+      'runtime_authorization_required',
+      'background_file_frozen',
+      'step_10_blocked',
+    ]);
+  });
+
   it('blocks when no documents are supplied', () => {
     expect(evaluateAutonomousDocResumptionGate()).toMatchObject({
       status: 'blocked',

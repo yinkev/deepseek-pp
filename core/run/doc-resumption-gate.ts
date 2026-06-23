@@ -37,6 +37,7 @@ interface MarkerSpec {
   code: AutonomousDocResumptionMarkerCode;
   patterns: RegExp[];
   rejectPatterns?: RegExp[];
+  scope?: 'segment' | 'document';
 }
 
 const REQUIRED_MARKERS: MarkerSpec[] = [
@@ -88,7 +89,17 @@ const REQUIRED_MARKERS: MarkerSpec[] = [
   {
     code: 'verification_ladder_required',
     patterns: [/npm test/i, /npm run compile/i, /git diff --check/i, /git diff --name-only HEAD -- entrypoints\/background\.ts/i],
+    scope: 'document',
   },
+];
+
+const DENIAL_SEGMENT_PATTERNS = [
+  /\bis incorrect\b/i,
+  /\bis outdated\b/i,
+  /\bno longer the case\b/i,
+  /\bnot current\b/i,
+  /\bnot true\b/i,
+  /\bclaim is false\b|\bfalse statement\b|\bfalse claim\b/i,
 ];
 
 export function evaluateAutonomousDocResumptionGate(
@@ -96,9 +107,9 @@ export function evaluateAutonomousDocResumptionGate(
 ): AutonomousDocResumptionGateDecision {
   const documents = normalizeDocuments(input.documents);
   const text = documents.join('\n\n');
+  const segments = splitDocumentSegments(text);
   const presentMarkerCodes = REQUIRED_MARKERS
-    .filter((marker) => marker.patterns.every((pattern) => pattern.test(text)))
-    .filter((marker) => !(marker.rejectPatterns ?? []).some((pattern) => pattern.test(text)))
+    .filter((marker) => hasMarker(marker, text, segments))
     .map((marker) => marker.code);
   const missingMarkerCodes = REQUIRED_MARKERS
     .map((marker) => marker.code)
@@ -120,6 +131,25 @@ export function evaluateAutonomousDocResumptionGate(
     presentMarkerCodes,
     missingMarkerCodes,
   };
+}
+
+function hasMarker(marker: MarkerSpec, text: string, segments: string[]): boolean {
+  if (marker.scope === 'document') {
+    return marker.patterns.every((pattern) => pattern.test(text)) &&
+      !(marker.rejectPatterns ?? []).some((pattern) => pattern.test(text));
+  }
+  return segments.some((segment) => (
+    marker.patterns.every((pattern) => pattern.test(segment)) &&
+    !(marker.rejectPatterns ?? []).some((pattern) => pattern.test(segment)) &&
+    !DENIAL_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
+  ));
+}
+
+function splitDocumentSegments(text: string): string[] {
+  return text
+    .split(/[\r\n]+|[.!?]\s+/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
 }
 
 function normalizeDocuments(

@@ -14,7 +14,7 @@ This is pure autonomous core and documentation work. It does not touch `entrypoi
 | --- | --- |
 | Repo-visible docs contain the resume contract. | `passes when repo-visible docs contain the autonomous resume contract` reads `docs/plan/autonomous-worker-roadmap.md` and `docs/plan/controlled-runtime-resume-gate.md`. |
 | The gate does not depend only on pre-existing roadmap wording. | `passes a minimal self-contained contract without relying on existing plan wording`. |
-| Keyword-only denial phrasing cannot produce a false pass. | `blocks denial phrasing that contains the right keywords in the wrong claim`. |
+| Keyword-only denial phrasing cannot produce a false pass. | `blocks denial phrasing that contains the right keywords in the wrong claim` and `blocks embedded quotes that repeat the contract words while denying current posture`. |
 | Missing docs fail closed. | `blocks when no documents are supplied`. |
 | Incomplete docs report exact missing markers. | `blocks incomplete docs with exact missing marker codes`. |
 | Runtime resume requires explicit durable `chrome_runtime` authorization. | Covered by `runtime_authorization_required`. |
@@ -37,7 +37,7 @@ git diff --check
 git diff --name-only HEAD -- entrypoints/background.ts
 ```
 
-Results: focused suite passed 29/29; TypeScript compile passed; full suite passed 868/868; diff check passed; `entrypoints/background.ts` diff was empty.
+Results: focused suite passed 30/30; TypeScript compile passed; full suite passed 869/869; diff check passed; `entrypoints/background.ts` diff was empty.
 
 ## Self Review
 
@@ -49,5 +49,6 @@ Iteration applied before fix-up commit:
 - The gate now uses stricter positive assertion patterns for runtime authorization, background freeze, and Step 10 blocked posture.
 - The gate rejects denial phrasing for those critical markers.
 - Tests now include the new doc artifact, a minimal self-contained positive contract, and an adversarial denial-text probe.
+- A second independent review found the denial probe still allowed quoted/embedded stale posture claims. The gate now evaluates critical markers at sentence/line scope, rejects embedded denial terms such as `incorrect`, `outdated`, and `no longer the case`, and includes a regression test for that case.
 
 Reason: the slice makes repo-visible resumption measurable without touching runtime files, fails closed when docs are missing, incomplete, or denial-phrased, uses actual docs and a synthetic minimal contract as positive paths, keeps gate output to safe marker metadata, and leaves the Chrome/runtime freeze intact.
