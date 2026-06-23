@@ -129,9 +129,12 @@ function createReviewLaneInputsFromPlan(
   }
 
   if (plan.action === 'dispatch') {
-    return plan.selectedRoles.map((role) => ({
-      role,
-      status: 'running',
+    const selectedRoles = Array.isArray(plan.selectedRoles)
+      ? plan.selectedRoles.slice(0, MAX_PROJECTED_REVIEW_LANE_PLAN_COUNT)
+      : [];
+    return selectedRoles.map((role) => ({
+      role: normalizeRole(role),
+      status: 'idle',
       grade: null,
       recommendation: 'unknown',
       highestPriority: null,

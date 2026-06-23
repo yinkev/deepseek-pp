@@ -336,7 +336,7 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(JSON.stringify(capsule)).not.toMatch(/SECRET_SELECTED_RUN|SECRET_WORKER_RUN/);
   });
 
-  it('projects dispatch review lane plans as safe running lane summaries', () => {
+  it('projects dispatch review lane plans as safe planned lane summaries', () => {
     const snapshot = createBasePetSnapshot();
     const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, {
       action: 'dispatch',
@@ -350,14 +350,14 @@ describe('pet to orchestrator review lane bridge', () => {
 
     expect(merged.reviewLanes).toMatchObject({
       total: 2,
-      activeCount: 2,
+      activeCount: 0,
       unknownCount: 2,
       highestPriority: null,
     });
     expect(merged.reviewLanes.lanes).toEqual([
       {
         role: 'oracle',
-        status: 'running',
+        status: 'idle',
         grade: null,
         recommendation: 'unknown',
         highestPriority: null,
@@ -366,7 +366,7 @@ describe('pet to orchestrator review lane bridge', () => {
       },
       {
         role: 'grok',
-        status: 'running',
+        status: 'idle',
         grade: null,
         recommendation: 'unknown',
         highestPriority: null,
@@ -375,8 +375,8 @@ describe('pet to orchestrator review lane bridge', () => {
       },
     ]);
     expect(merged.reviewLaneGate).toEqual({
-      status: 'attention',
-      reason: 'active_review',
+      status: 'clear',
+      reason: 'none',
       canProceed: true,
       blockingPriority: null,
       blockingLaneCount: 0,
@@ -419,21 +419,126 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(JSON.stringify(capsule)).not.toMatch(/SECRET_ROLE|SECRET_REASON|SECRET_PROMPT|SECRET_TRANSCRIPT|secret\.invalid|token=secret|PX/);
   });
 
-  it('clears stale projected review lanes when the orchestrator has no pending lane plan', () => {
+  it('bounds and sanitizes malformed dispatch review lane plans', () => {
+    const snapshot = createBasePetSnapshot();
+    const selectedRoles = Array.from({ length: 650 }, (_, index) => index === 0 ? 'SECRET_ROLE' : 'grok');
+    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, {
+      action: 'dispatch',
+      selectedRoles,
+      canRunWorker: true,
+      reason: 'dispatch_lanes',
+      blockingPriority: null,
+      blockingLaneCount: 0,
+      maxParallel: 650,
+      rawPrompt: 'SECRET_DISPATCH_PROMPT',
+    } as any);
+
+    expect(merged.reviewLanes.total).toBe(500);
+    expect(merged.reviewLanes.activeCount).toBe(0);
+    expect(merged.reviewLanes.unknownCount).toBe(500);
+    expect(merged.reviewLanes.lanes[0]).toMatchObject({
+      role: 'other',
+      status: 'idle',
+      recommendation: 'unknown',
+    });
+    expect(merged.reviewLanes.lanes[merged.reviewLanes.lanes.length - 1]).toMatchObject({
+      role: 'grok',
+      status: 'idle',
+      recommendation: 'unknown',
+    });
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'clear',
+      reason: 'none',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    });
+    expect(JSON.stringify(merged)).not.toMatch(/SECRET_ROLE|SECRET_DISPATCH_PROMPT/);
+  });
+
+  it('caps high finite halt review lane counts at the projection bound', () => {
+    const snapshot = createBasePetSnapshot();
+    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, {
+      action: 'halt',
+      selectedRoles: [],
+      canRunWorker: false,
+      reason: 'review_gate_p1',
+      blockingPriority: 'P1',
+      blockingLaneCount: 800,
+      maxParallel: 2,
+    });
+
+    expect(merged.reviewLanes.total).toBe(500);
+    expect(merged.reviewLanes.blockedCount).toBe(500);
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'blocked',
+      reason: 'p1',
+      canProceed: false,
+      blockingPriority: 'P1',
+      blockingLaneCount: 500,
+    });
+  });
+
+  it('clears stale projected review lanes without clearing unrelated cycle projections', () => {
     const snapshot = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
       { role: 'safety', status: 'blocked', recommendation: 'block', highestPriority: 'P1', issueCount: 1 },
     ]);
 
-    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, {
-      action: 'idle',
-      selectedRoles: [],
-      canRunWorker: true,
-      reason: 'no_pending_lanes',
-      blockingPriority: null,
-      blockingLaneCount: 0,
-      maxParallel: 2,
+    const merged = mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, {
+      ...createOrchestratorResult({
+        workerResult: createWorkerResult({
+          advanced: true,
+          applied: true,
+          finalStatus: 'running',
+        }),
+        telemetryResult: {
+          status: 'skipped',
+          runId: null,
+          rootDir: null,
+          fileCount: 0,
+          contentLength: 0,
+          paths: [],
+          errorCode: 'no_selected_run',
+        },
+        qualityGateDecision: {
+          blocked: false,
+          reason: 'gate_warning',
+          latestGateStatus: 'warning',
+          seq: 8,
+          coverageComplete: true,
+          coveredCount: 5,
+          gapCount: 0,
+          conflictCount: 0,
+          notTestableCount: 1,
+          selfReviewGrade: 'B',
+          verificationPassed: false,
+        },
+        reviewLanePlan: {
+          action: 'idle',
+          selectedRoles: [],
+          canRunWorker: true,
+          reason: 'no_pending_lanes',
+          blockingPriority: null,
+          blockingLaneCount: 0,
+          maxParallel: 2,
+        },
+      }),
     });
 
+    expect(merged.workerCycle).toMatchObject({
+      advanced: true,
+      applied: true,
+      finalStatus: 'running',
+    });
+    expect(merged.telemetry).toMatchObject({
+      status: 'skipped',
+      errorCode: 'no_selected_run',
+    });
+    expect(merged.qualityGate).toMatchObject({
+      status: 'warning',
+      reason: 'gate_warning',
+      seq: 8,
+    });
     expect(merged.reviewLanes).toMatchObject({
       total: 0,
       activeCount: 0,

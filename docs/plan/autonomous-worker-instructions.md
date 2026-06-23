@@ -116,7 +116,7 @@ Priority order:
 6. Review-lane worker coordination.
    - Status: partially complete; scheduler metadata and pet bridge fields can describe planned advisor lanes, durable lane records persist compact Oracle/Grok advisor outcomes, the pure orchestrator consumes persisted blockers, and pet handoff now projects safe review-lane plan state. Actual worker dispatch remains runtime-frozen.
    - Implemented so far by formalizing implementer, reviewer, safety, UX, and Oracle/Grok advisor lanes as bounded metadata, durable store records, pure orchestrator gate input, and pet-visible safe plan projection.
-   - Remaining work: dispatch actual review worker lanes and wire runtime callers once Chrome/background work resumes.
+   - Remaining work: dispatch actual review worker lanes once runtime work resumes.
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
 
 7. Autonomous telemetry and repo-visible handoff.
