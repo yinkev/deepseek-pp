@@ -402,7 +402,7 @@ describe('autonomous run orchestrator startup bridge', () => {
       status: 'written',
       runId: 'run-1',
       rootDir: '.runs/run-1',
-      fileCount: 9,
+      fileCount: 11,
       errorCode: null,
     });
     expect(writes.map((write) => write.path)).toEqual(result.telemetryResult?.paths);

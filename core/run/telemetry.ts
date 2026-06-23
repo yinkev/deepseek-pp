@@ -1,6 +1,8 @@
 import { redactDurableToolString } from '../tool/redaction';
 import type {
   AutonomousEvidenceRecord,
+  AutonomousQualityGateRecord,
+  AutonomousReviewLaneRecord,
   AutonomousRun,
   AutonomousRunId,
   AutonomousRunStep,
@@ -50,6 +52,8 @@ interface TelemetryHandles {
   stepIds: Map<string, string>;
   evidenceIds: Map<string, string>;
   targetLeaseIds: Map<string, string>;
+  qualityGateIds: Map<string, string>;
+  reviewLaneIds: Map<string, string>;
   rawIds: string[];
 }
 
@@ -89,6 +93,8 @@ interface RunTelemetryManifest {
     steps: number;
     evidence: number;
     targetLeases: number;
+    qualityGates: number;
+    reviewLanes: number;
     verification: number;
     commits: number;
   };
@@ -139,7 +145,13 @@ export function createAutonomousRunTelemetryPackage(
   const targetLeases = state.targetLeases
     .filter((lease) => lease.runId === run.id)
     .sort(compareTargetLeases);
-  const handles = createTelemetryHandles(run, steps, evidence, targetLeases);
+  const qualityGates = state.qualityGates
+    .filter((record) => record.runId === run.id)
+    .sort(compareQualityGates);
+  const reviewLanes = state.reviewLanes
+    .filter((record) => record.runId === run.id)
+    .sort(compareReviewLanes);
+  const handles = createTelemetryHandles(run, steps, evidence, targetLeases, qualityGates, reviewLanes);
   const verification = sanitizeVerification(options.verification, handles);
   const verificationSummary = createVerificationSummary(run, steps, verification);
   const commits = sanitizeCommits(options.commits, handles);
@@ -149,14 +161,16 @@ export function createAutonomousRunTelemetryPackage(
     runId: handles.runId,
     rootDir: safeRootDir,
     files: [
-      jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, verification, commits, generatedAt, handles, verificationSummary)),
+      jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary)),
       jsonFile(safeRootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
       ndjsonFile(safeRootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
       ndjsonFile(safeRootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
       ndjsonFile(safeRootDir, 'target-leases.ndjson', targetLeases.map((lease) => toTargetLeaseExport(lease, handles))),
+      ndjsonFile(safeRootDir, 'quality-gates.ndjson', qualityGates.map((record) => toQualityGateExport(record, handles))),
+      ndjsonFile(safeRootDir, 'review-lanes.ndjson', reviewLanes.map((record) => toReviewLaneExport(record, handles))),
       jsonFile(safeRootDir, 'verification.json', { schemaVersion: 1, generatedAt, summary: verificationSummary, commands: verification }),
       ndjsonFile(safeRootDir, 'commits.ndjson', commits),
-      markdownFile(safeRootDir, 'report.md', createReport(run, steps, evidence, targetLeases, commits, generatedAt, handles, verificationSummary)),
+      markdownFile(safeRootDir, 'report.md', createReport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, commits, generatedAt, handles, verificationSummary)),
     ],
   };
 }
@@ -166,6 +180,8 @@ function createManifest(
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
+  qualityGates: readonly AutonomousQualityGateRecord[],
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
   verification: readonly SafeVerificationCommand[],
   commits: readonly ReturnType<typeof sanitizeCommits>[number][],
   generatedAt: number,
@@ -191,6 +207,8 @@ function createManifest(
       steps: steps.length,
       evidence: evidence.length,
       targetLeases: targetLeases.length,
+      qualityGates: qualityGates.length,
+      reviewLanes: reviewLanes.length,
       verification: verification.length,
       commits: commits.length,
     },
@@ -282,11 +300,53 @@ function toTargetLeaseExport(lease: AutonomousTargetLease, handles: TelemetryHan
   };
 }
 
+function toQualityGateExport(record: AutonomousQualityGateRecord, handles: TelemetryHandles) {
+  const commands = record.verification.commands;
+  return {
+    id: handles.qualityGateIds.get(record.id) ?? 'quality-gate-unknown',
+    runId: handles.runId,
+    seq: record.seq,
+    createdAt: record.createdAt,
+    status: record.status,
+    contractCoverage: record.contractCoverage,
+    resultStateConsistency: record.resultStateConsistency,
+    selfReviewGrade: record.selfReview.grade,
+    verification: {
+      commandCount: commands.length,
+      passedCommandCount: commands.filter((command) => command.result === 'passed').length,
+      failedCommandCount: commands.filter((command) => command.result === 'failed').length,
+      knownPreexistingFailureCount: commands.filter((command) => command.result === 'known_preexisting_failure').length,
+    },
+    commitPresent: record.commit !== null,
+    independentReview: record.independentReview,
+  };
+}
+
+function toReviewLaneExport(record: AutonomousReviewLaneRecord, handles: TelemetryHandles) {
+  return {
+    id: handles.reviewLaneIds.get(record.id) ?? 'review-lane-unknown',
+    runId: handles.runId,
+    seq: record.seq,
+    createdAt: record.createdAt,
+    role: record.role,
+    status: record.status,
+    grade: record.grade,
+    recommendation: record.recommendation,
+    highestPriority: record.highestPriority,
+    issueCount: record.issueCount,
+    evidenceRefCount: record.evidenceRefCount,
+    summaryPresent: record.summary !== null,
+    summaryCharCount: record.summary?.length ?? 0,
+  };
+}
+
 function createReport(
   run: AutonomousRun,
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
+  qualityGates: readonly AutonomousQualityGateRecord[],
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
   commits: readonly ReturnType<typeof sanitizeCommits>[number][],
   generatedAt: number,
   handles: TelemetryHandles,
@@ -300,6 +360,8 @@ function createReport(
     `- steps: ${steps.length}`,
     `- evidence: ${evidence.length}`,
     `- targetLeases: ${targetLeases.length}`,
+    `- qualityGates: ${qualityGates.length}`,
+    `- reviewLanes: ${reviewLanes.length}`,
     `- verification: ${verificationSummary.status}`,
     `- commits: ${commits.length}`,
     '',
@@ -397,13 +459,17 @@ function createTelemetryHandles(
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
+  qualityGates: readonly AutonomousQualityGateRecord[],
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
 ): TelemetryHandles {
-  const rawIds = collectDurableIds(run, steps, evidence, targetLeases);
+  const rawIds = collectDurableIds(run, steps, evidence, targetLeases, qualityGates, reviewLanes);
   return {
     runId: 'run-1',
     stepIds: createHandleMap(steps.map((step) => step.id), 'step'),
     evidenceIds: createHandleMap(evidence.map((record) => record.id), 'evidence'),
     targetLeaseIds: createHandleMap(targetLeases.map((lease) => lease.id), 'target-lease'),
+    qualityGateIds: createHandleMap(qualityGates.map((record) => record.id), 'quality-gate'),
+    reviewLaneIds: createHandleMap(reviewLanes.map((record) => record.id), 'review-lane'),
     rawIds,
   };
 }
@@ -413,6 +479,8 @@ function collectDurableIds(
   steps: readonly AutonomousRunStep[],
   evidence: readonly AutonomousEvidenceRecord[],
   targetLeases: readonly AutonomousTargetLease[],
+  qualityGates: readonly AutonomousQualityGateRecord[],
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
 ): string[] {
   const ids = new Set<string>([run.id]);
   if (run.targetLeaseId) ids.add(run.targetLeaseId);
@@ -432,6 +500,8 @@ function collectDurableIds(
     for (const id of record.refs) ids.add(id);
   }
   for (const lease of targetLeases) ids.add(lease.id);
+  for (const record of qualityGates) ids.add(record.id);
+  for (const record of reviewLanes) ids.add(record.id);
   return [...ids].filter((id) => id.length > 0).sort((a, b) => b.length - a.length);
 }
 
@@ -490,6 +560,14 @@ function compareEvidence(a: AutonomousEvidenceRecord, b: AutonomousEvidenceRecor
 
 function compareTargetLeases(a: AutonomousTargetLease, b: AutonomousTargetLease): number {
   return compareNumber(a.acquiredAt, b.acquiredAt) || a.id.localeCompare(b.id);
+}
+
+function compareQualityGates(a: AutonomousQualityGateRecord, b: AutonomousQualityGateRecord): number {
+  return compareNumber(a.seq, b.seq) || compareNumber(a.createdAt, b.createdAt) || a.id.localeCompare(b.id);
+}
+
+function compareReviewLanes(a: AutonomousReviewLaneRecord, b: AutonomousReviewLaneRecord): number {
+  return compareNumber(a.seq, b.seq) || compareNumber(a.createdAt, b.createdAt) || a.id.localeCompare(b.id);
 }
 
 function compareNumber(a: number, b: number): number {

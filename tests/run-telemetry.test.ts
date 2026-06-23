@@ -22,6 +22,8 @@ describe('autonomous run telemetry package', () => {
       '.runs/run-1/steps.ndjson',
       '.runs/run-1/evidence.ndjson',
       '.runs/run-1/target-leases.ndjson',
+      '.runs/run-1/quality-gates.ndjson',
+      '.runs/run-1/review-lanes.ndjson',
       '.runs/run-1/verification.json',
       '.runs/run-1/commits.ndjson',
       '.runs/run-1/report.md',
@@ -42,6 +44,8 @@ describe('autonomous run telemetry package', () => {
         steps: 2,
         evidence: 1,
         targetLeases: 1,
+        qualityGates: 0,
+        reviewLanes: 0,
         verification: 1,
         commits: 1,
       },
@@ -142,6 +146,117 @@ describe('autonomous run telemetry package', () => {
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('summary');
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('refs');
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('metadata');
+  });
+
+  it('exports quality gates and review lanes as safe repo-visible metadata', () => {
+    const state = createState({ runId: 'run-token=secret' });
+    state.qualityGates = [
+      {
+        id: 'gate-token=secret',
+        runId: 'run-token=secret',
+        seq: 2,
+        createdAt: 210,
+        status: 'blocked',
+        contractCoverage: {
+          complete: false,
+          coveredCount: 3,
+          gapCount: 1,
+          conflictCount: 0,
+          notTestableCount: 1,
+        },
+        resultStateConsistency: {
+          status: 'inconsistent',
+          ok: false,
+          issueCount: 2,
+          blockingIssueCount: 1,
+        },
+        selfReview: { grade: 'B' },
+        verification: {
+          commands: [
+            { name: 'npm test token=secret', result: 'failed', summary: 'Bearer secret rawOutput' },
+            { name: 'prompt freeze', result: 'known_preexisting_failure', summary: 'Cookie: sid=secret' },
+          ],
+        },
+        commit: { hash: 'abcdef1', message: 'commit token=secret Authorization: Bearer secret' },
+        independentReview: {
+          status: 'blocked',
+          grade: 'C',
+          blockingIssueCount: 1,
+        },
+      },
+    ];
+    state.reviewLanes = [
+      {
+        id: 'lane-token=secret',
+        runId: 'run-token=secret',
+        seq: 1,
+        createdAt: 220,
+        role: 'grok',
+        status: 'blocked',
+        grade: 'C',
+        recommendation: 'block',
+        highestPriority: 'P1',
+        issueCount: 2,
+        evidenceRefCount: 3,
+        summary: 'Bearer secret transcript rawOutput token=secret',
+      },
+    ];
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-token=secret', {
+      generatedAt: 500,
+      rootDir: '.runs/lane-token=secret',
+      verification: [{ command: 'check gate-token=secret lane-token=secret', exitCode: 0 }],
+    });
+
+    const source = JSON.stringify(state);
+    expect(source).toMatch(/gate-token=secret|lane-token=secret|Bearer secret|rawOutput|transcript|Cookie/);
+
+    const manifest = readJson(pkg, 'manifest.json');
+    expect(manifest.counts).toMatchObject({
+      qualityGates: 1,
+      reviewLanes: 1,
+    });
+    expect(readNdjson(pkg, 'quality-gates.ndjson')).toEqual([
+      expect.objectContaining({
+        id: 'quality-gate-1',
+        runId: 'run-1',
+        seq: 2,
+        status: 'blocked',
+        contractCoverage: expect.objectContaining({ coveredCount: 3, gapCount: 1 }),
+        resultStateConsistency: expect.objectContaining({ status: 'inconsistent', blockingIssueCount: 1 }),
+        selfReviewGrade: 'B',
+        verification: {
+          commandCount: 2,
+          passedCommandCount: 0,
+          failedCommandCount: 1,
+          knownPreexistingFailureCount: 1,
+        },
+        commitPresent: true,
+        independentReview: {
+          status: 'blocked',
+          grade: 'C',
+          blockingIssueCount: 1,
+        },
+      }),
+    ]);
+    expect(readNdjson(pkg, 'review-lanes.ndjson')).toEqual([
+      expect.objectContaining({
+        id: 'review-lane-1',
+        runId: 'run-1',
+        role: 'grok',
+        status: 'blocked',
+        grade: 'C',
+        recommendation: 'block',
+        highestPriority: 'P1',
+        issueCount: 2,
+        evidenceRefCount: 3,
+        summaryPresent: true,
+      }),
+    ]);
+    expect(readNdjson(pkg, 'review-lanes.ndjson')[0].summaryCharCount).toBeGreaterThan(0);
+    expect(JSON.stringify(pkg)).not.toMatch(
+      /gate-token=secret|lane-token=secret|run-token=secret|Bearer secret|rawOutput|transcript|Cookie|Authorization|sid=secret/,
+    );
   });
 
   it('uses deterministic generatedAt when omitted', () => {
