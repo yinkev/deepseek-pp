@@ -22,6 +22,10 @@ Create a pure run telemetry exporter that turns the durable autonomous run ledge
 | Handoff export exposes restart-safe scheduler/watchdog verdict, retry posture, unresolved blocker aggregates, and checkpoint metadata. | `exports safe restart watchdog, retry, blocker, and checkpoint handoff fields` |
 | Handoff restart fields cover review-lane blockers, quality-gate blockers, stale evidence, no-progress, pause, and terminal success watchdog verdicts. | `exports quality gates and review lanes as safe repo-visible metadata`; `exports a quality-gate watchdog blocker when no review lane blocks`; `exports stale evidence and no-progress watchdog blockers through handoff`; `idles a paused run instead of reporting a restart failure`; `finalizes the handoff only when durable success and verification both pass` |
 | Watchdog/reconcile blocked state cannot become `finalize` or `passed` just because verification command metadata passed. | `does not finalize a blocked restart handoff when verification commands pass` |
+| Missing runtime authorization preflight observation exports fail-closed informational metadata: `status: none`, `canStartRuntimeSlice: false`, null gate reasons/statuses, zero counts, false booleans, and null scope. | `exports no-observed runtime authorization preflight metadata by default` |
+| Provided runtime authorization preflight exports only bounded safe metadata: status, can-start boolean, source gate statuses/reasons, counts, runtime-file flag, authorization booleans, and authorization scope. | `projects blocked runtime authorization preflight as safe handoff metadata`; `privacy probe: runtime preflight handoff projection omits unknown raw fields` |
+| Runtime authorization preflight handoff projection is informational only; even `canStartRuntimeSlice: true` cannot alter `nextAction`, verification status, durable status/failure, watchdog, retry posture, unresolved blockers, quality gate, or review lane. | `keeps authorized runtime preflight projection informational and off primary handoff gates` |
+| False-positive success is blocked: an authorized preflight attached to failed durable telemetry cannot make handoff finalize or verification pass; handoff and verification durable-failure fields agree. | `false-positive probe: authorized preflight cannot pass failed durable telemetry` |
 | Root paths are normalized so package file paths remain under the requested telemetry root. | `normalizes root paths and keeps package paths inside .runs-style directories` |
 
 ## Mechanism
@@ -45,6 +49,10 @@ The function is pure. It does not call Chrome, storage, filesystem, terminal, ne
 When `generatedAt` is omitted, the exporter uses `run.updatedAt` instead of wall-clock time.
 
 `handoff.json` is the compact operator-facing summary for autonomous loops. It exposes safe counts, latest gate status/grade, aggregate review-lane blocker counts, verification status, and one `nextAction`. Review-lane blockers are durable gate records: a later clean lane does not erase an earlier persisted P1/P2, block recommendation, blocked lane, or failed lane. Clearing those blockers requires a separate durable resolution/pruning model; this exporter does not infer resolution from later clean records.
+
+`runtimeAuthorizationPreflight` is optional read-only handoff metadata supplied by the caller. If absent, the handoff records no observation with `status: none` and `canStartRuntimeSlice: false`. If present, the exporter copies only bounded fields from the pure preflight decision: status, can-start boolean, source gate statuses/reasons, marker/review counts, runtime-file changed flag, authorization booleans, and authorization scope. It does not export raw document text, missing marker arrays, authorization IDs, raw review prose, URLs, tokens, prompts, transcripts, file contents, or unknown extra fields.
+
+`canStartRuntimeSlice: true` in handoff metadata is not runtime permission. Step 10 runtime work still requires a fresh `evaluateAutonomousRuntimeAuthorizationPreflight` immediately before runtime work; this telemetry field is only a repo-visible last-observed projection for operator handoff.
 
 Restart handoff fields are safe metadata only:
 
@@ -84,6 +92,10 @@ The false-positive success probe constructs a failed durable run with a passing 
 
 The restart false-positive probe constructs a blocked durable run with a retryable reconcile error and a passing command exit. The handoff must remain `inspect_failure`, the package-level verification status must remain `failed`, and `nextAction` must not become `finalize`.
 
+The runtime-preflight false-positive probe constructs a failed durable run with passing command metadata plus an authorized preflight projection. The handoff must remain `inspect_failure`, verification must remain `failed`, durable failure must remain true in both `verification.json` and `handoff.json`, and `nextAction` must not become `finalize`.
+
+The runtime-preflight privacy probe casts unknown raw fields onto the source decision, including raw document text, missing-marker arrays, authorization IDs, review prose, prompts, and file-content-like strings. The handoff must expose only the explicit safe projection object.
+
 ## Scope Caveat
 
 This slice creates the repo-visible package contract only. A later writer/CLI/runtime slice can persist these files under `.runs/`, but the browser extension still cannot safely write the local repo directly.
@@ -94,10 +106,12 @@ Run:
 
 ```sh
 npm test -- tests/run-telemetry.test.ts
+npm test -- tests/run-telemetry.test.ts tests/run-runtime-authorization-preflight.test.ts
 npm test -- tests/run-telemetry.test.ts tests/run-store.test.ts tests/run-iteration-store.test.ts
 npm test
 npm run compile
 git diff --check
+git diff --name-only HEAD -- entrypoints/background.ts
 ```
 
 `npm run prompt:freeze` remains expected to fail on pre-existing prompt hash drift until the prompt snapshot slice reconciles it.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAutonomousSafetyRedactionSummary } from '../core/run/policy';
 import { createAutonomousRunTelemetryPackage } from '../core/run/telemetry';
+import type { AutonomousRuntimeAuthorizationPreflightDecision } from '../core/run/runtime-authorization-preflight';
 import type { AutonomousRunStorageState } from '../core/run/types';
 
 describe('autonomous run telemetry package', () => {
@@ -179,7 +180,7 @@ describe('autonomous run telemetry package', () => {
 
     const output = JSON.stringify(pkg);
     expect(pkg?.runId).toBe('run-1');
-    expect(output).not.toMatch(/Bearer secret|token=secret|Cookie|sid=secret|file-sensitive123|data:image|private\?token|Authorization|step-2-token|lease-token|evidence-token|root\?token/i);
+    expect(output).not.toMatch(/Bearer secret|token=secret|Cookie|sid=secret|file-sensitive123|data:image|private\?token|step-2-token|lease-token|evidence-token|root\?token/i);
     expect(output).not.toContain('Use [redacted:secret]');
     expect(output).not.toContain('Resume with');
     expect(output).not.toContain('Fetched');
@@ -429,7 +430,7 @@ describe('autonomous run telemetry package', () => {
       issueCount: 1,
     });
     expect(JSON.stringify(pkg)).not.toMatch(
-      /gate-token=secret|lane-token=secret|run-token=secret|Bearer secret|rawOutput|transcript|Cookie|Authorization|sid=secret/,
+      /gate-token=secret|lane-token=secret|run-token=secret|Bearer secret|rawOutput|transcript|Cookie|sid=secret/,
     );
   });
 
@@ -804,6 +805,221 @@ describe('autonomous run telemetry package', () => {
     expect(readJson(pkg, 'handoff.json').verificationStatus).not.toBe('passed');
   });
 
+  it('exports no-observed runtime authorization preflight metadata by default', () => {
+    const pkg = createAutonomousRunTelemetryPackage(createState(), 'run-1', {
+      generatedAt: 500,
+    });
+
+    expect(readJson(pkg, 'handoff.json').runtimeAuthorizationPreflight).toEqual({
+      status: 'none',
+      canStartRuntimeSlice: false,
+      reason: null,
+      docGateStatus: null,
+      docGateReason: null,
+      runtimeGateStatus: null,
+      runtimeGateReason: null,
+      checkedMarkerCount: 0,
+      missingMarkerCount: 0,
+      openP1Count: 0,
+      openP2Count: 0,
+      runtimeFilesChanged: false,
+      authorizationPresent: false,
+      authorizationExplicit: false,
+      authorizationIdPresent: false,
+      authorizationFresh: false,
+      authorizationScope: null,
+    });
+  });
+
+  it('projects blocked runtime authorization preflight as safe handoff metadata', () => {
+    const decision = createRuntimeAuthorizationPreflightDecision({
+      status: 'blocked',
+      canStartRuntimeSlice: false,
+      reason: 'missing_authorization',
+      docGateStatus: 'passed',
+      docGateReason: 'passed',
+      runtimeGateStatus: 'blocked',
+      runtimeGateReason: 'missing_authorization',
+      checkedMarkerCount: 5,
+      missingMarkerCount: 0,
+      authorizationPresent: false,
+    });
+
+    const pkg = createAutonomousRunTelemetryPackage(createState(), 'run-1', {
+      generatedAt: 500,
+      runtimeAuthorizationPreflight: decision,
+    });
+
+    expect(readJson(pkg, 'handoff.json').runtimeAuthorizationPreflight).toEqual({
+      status: 'blocked',
+      canStartRuntimeSlice: false,
+      reason: 'missing_authorization',
+      docGateStatus: 'passed',
+      docGateReason: 'passed',
+      runtimeGateStatus: 'blocked',
+      runtimeGateReason: 'missing_authorization',
+      checkedMarkerCount: 5,
+      missingMarkerCount: 0,
+      openP1Count: 0,
+      openP2Count: 0,
+      runtimeFilesChanged: false,
+      authorizationPresent: false,
+      authorizationExplicit: false,
+      authorizationIdPresent: false,
+      authorizationFresh: false,
+      authorizationScope: null,
+    });
+  });
+
+  it('keeps authorized runtime preflight projection informational and off primary handoff gates', () => {
+    const state = createState();
+    const base = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+    const authorized = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+      runtimeAuthorizationPreflight: createRuntimeAuthorizationPreflightDecision({
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+        reason: 'authorized',
+        docGateStatus: 'passed',
+        docGateReason: 'passed',
+        runtimeGateStatus: 'authorized',
+        runtimeGateReason: 'authorized',
+        checkedMarkerCount: 5,
+        authorizationPresent: true,
+        authorizationExplicit: true,
+        authorizationIdPresent: true,
+        authorizationFresh: true,
+        authorizationScope: 'chrome_runtime',
+      }),
+    });
+
+    const baseHandoff = readJson(base, 'handoff.json');
+    const authorizedHandoff = readJson(authorized, 'handoff.json');
+
+    expect(authorizedHandoff.runtimeAuthorizationPreflight).toMatchObject({
+      status: 'authorized',
+      canStartRuntimeSlice: true,
+      authorizationScope: 'chrome_runtime',
+    });
+    expect(authorizedHandoff.nextAction).toBe(baseHandoff.nextAction);
+    expect(authorizedHandoff.verificationStatus).toBe(baseHandoff.verificationStatus);
+    expect(authorizedHandoff.durableFailurePresent).toBe(baseHandoff.durableFailurePresent);
+    expect(authorizedHandoff.schedulerWatchdog).toEqual(baseHandoff.schedulerWatchdog);
+    expect(authorizedHandoff.retryPosture).toEqual(baseHandoff.retryPosture);
+    expect(authorizedHandoff.unresolvedBlockers).toEqual(baseHandoff.unresolvedBlockers);
+    expect(authorizedHandoff.qualityGate).toEqual(baseHandoff.qualityGate);
+    expect(authorizedHandoff.reviewLane).toEqual(baseHandoff.reviewLane);
+  });
+
+  it('false-positive probe: authorized preflight cannot pass failed durable telemetry', () => {
+    const error = createRunError('Token=secret failed verification');
+    const state = createState({
+      status: 'failed',
+      runError: error,
+      step2Status: 'failed',
+      step2Error: error,
+    });
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+      runtimeAuthorizationPreflight: createRuntimeAuthorizationPreflightDecision({
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+        reason: 'authorized',
+        docGateStatus: 'passed',
+        docGateReason: 'passed',
+        runtimeGateStatus: 'authorized',
+        runtimeGateReason: 'authorized',
+        authorizationPresent: true,
+        authorizationExplicit: true,
+        authorizationIdPresent: true,
+        authorizationFresh: true,
+        authorizationScope: 'chrome_runtime',
+      }),
+    });
+
+    const verification = readJson(pkg, 'verification.json').summary;
+    const handoff = readJson(pkg, 'handoff.json');
+
+    expect(verification).toMatchObject({
+      status: 'failed',
+      durableStatus: 'failed',
+      durableFailurePresent: true,
+      failedStepCount: 1,
+      runErrorPresent: true,
+    });
+    expect(handoff).toMatchObject({
+      status: 'failed',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'failed',
+      durableFailurePresent: true,
+      runtimeAuthorizationPreflight: {
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+      },
+    });
+    expect(handoff.verificationStatus).toBe(verification.status);
+    expect(handoff.durableFailurePresent).toBe(verification.durableFailurePresent);
+    expect(handoff.nextAction).not.toBe('finalize');
+  });
+
+  it('privacy probe: runtime preflight handoff projection omits unknown raw fields', () => {
+    const rawDecision = {
+      ...createRuntimeAuthorizationPreflightDecision({
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+        reason: 'authorized',
+        docGateStatus: 'passed',
+        docGateReason: 'passed',
+        runtimeGateStatus: 'authorized',
+        runtimeGateReason: 'authorized',
+        authorizationPresent: true,
+        authorizationExplicit: true,
+        authorizationIdPresent: true,
+        authorizationFresh: true,
+        authorizationScope: 'chrome_runtime',
+      }),
+      rawDocumentText: 'Authorization: Bearer *** https://example.com/private',
+      docMissingMarkerCodes: ['secret-marker-token=secret'],
+      authorizationId: 'chrome-runtime-authorization-id-token=secret',
+      rawReviewProse: 'transcript prompt token=secret',
+      prompt: 'file contents token=secret',
+    } as unknown as AutonomousRuntimeAuthorizationPreflightDecision & Record<string, unknown>;
+
+    const pkg = createAutonomousRunTelemetryPackage(createState(), 'run-1', {
+      generatedAt: 500,
+      runtimeAuthorizationPreflight: rawDecision,
+    });
+
+    const handoff = readJson(pkg, 'handoff.json');
+    expect(handoff.runtimeAuthorizationPreflight).toEqual({
+      status: 'authorized',
+      canStartRuntimeSlice: true,
+      reason: 'authorized',
+      docGateStatus: 'passed',
+      docGateReason: 'passed',
+      runtimeGateStatus: 'authorized',
+      runtimeGateReason: 'authorized',
+      checkedMarkerCount: 0,
+      missingMarkerCount: 0,
+      openP1Count: 0,
+      openP2Count: 0,
+      runtimeFilesChanged: false,
+      authorizationPresent: true,
+      authorizationExplicit: true,
+      authorizationIdPresent: true,
+      authorizationFresh: true,
+      authorizationScope: 'chrome_runtime',
+    });
+    expect(JSON.stringify(handoff.runtimeAuthorizationPreflight)).not.toMatch(
+      /secret-token|example\.com|secret-marker|authorization-id|rawReviewProse|transcript|prompt|file contents|token=secret/i,
+    );
+  });
+
   it('collects evidence before continuing an unfinished run with no evidence', () => {
     const state = createState();
     state.evidence = [];
@@ -1066,6 +1282,32 @@ function createReviewLane(
     issueCount: 0,
     evidenceRefCount: 1,
     summary: null,
+    ...overrides,
+  };
+}
+
+function createRuntimeAuthorizationPreflightDecision(
+  overrides: Partial<AutonomousRuntimeAuthorizationPreflightDecision> = {},
+): AutonomousRuntimeAuthorizationPreflightDecision {
+  return {
+    status: 'blocked',
+    canStartRuntimeSlice: false,
+    reason: 'missing_authorization',
+    docGateStatus: 'passed',
+    docGateReason: 'passed',
+    docMissingMarkerCodes: [],
+    runtimeGateStatus: 'blocked',
+    runtimeGateReason: 'missing_authorization',
+    checkedMarkerCount: 0,
+    missingMarkerCount: 0,
+    openP1Count: 0,
+    openP2Count: 0,
+    runtimeFilesChanged: false,
+    authorizationPresent: false,
+    authorizationExplicit: false,
+    authorizationIdPresent: false,
+    authorizationFresh: false,
+    authorizationScope: null,
     ...overrides,
   };
 }

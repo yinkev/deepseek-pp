@@ -8,6 +8,7 @@ import {
   selectReviewLaneBlockingPriority,
   selectReviewLaneGateReason,
 } from './review-lane-gate';
+import type { AutonomousRuntimeAuthorizationPreflightDecision } from './runtime-authorization-preflight';
 import { evaluateAutonomousSchedulerWatchdog } from './scheduler-watchdog';
 import type {
   AutonomousSchedulerQualityGateLike,
@@ -48,6 +49,7 @@ export interface AutonomousRunTelemetryPackageOptions {
   rootDir?: string;
   verification?: readonly AutonomousRunTelemetryVerification[] | null;
   commits?: readonly AutonomousRunTelemetryCommit[] | null;
+  runtimeAuthorizationPreflight?: AutonomousRuntimeAuthorizationPreflightDecision | null;
 }
 
 export interface AutonomousRunTelemetryFile {
@@ -95,6 +97,26 @@ interface VerificationSummary {
   durableFailurePresent: boolean;
   failedStepCount: number;
   runErrorPresent: boolean;
+}
+
+interface SafeRuntimeAuthorizationPreflight {
+  status: 'none' | AutonomousRuntimeAuthorizationPreflightDecision['status'];
+  canStartRuntimeSlice: boolean;
+  reason: AutonomousRuntimeAuthorizationPreflightDecision['reason'] | null;
+  docGateStatus: AutonomousRuntimeAuthorizationPreflightDecision['docGateStatus'] | null;
+  docGateReason: AutonomousRuntimeAuthorizationPreflightDecision['docGateReason'] | null;
+  runtimeGateStatus: AutonomousRuntimeAuthorizationPreflightDecision['runtimeGateStatus'] | null;
+  runtimeGateReason: AutonomousRuntimeAuthorizationPreflightDecision['runtimeGateReason'] | null;
+  checkedMarkerCount: number;
+  missingMarkerCount: number;
+  openP1Count: number;
+  openP2Count: number;
+  runtimeFilesChanged: boolean;
+  authorizationPresent: boolean;
+  authorizationExplicit: boolean;
+  authorizationIdPresent: boolean;
+  authorizationFresh: boolean;
+  authorizationScope: AutonomousRuntimeAuthorizationPreflightDecision['authorizationScope'];
 }
 
 interface RunTelemetryManifest {
@@ -149,6 +171,7 @@ interface RunTelemetryHandoff {
   targetLeasePresent: boolean;
   evidenceCount: number;
   safetyRedaction: AutonomousSafetyRedactionSummary;
+  runtimeAuthorizationPreflight: SafeRuntimeAuthorizationPreflight;
   qualityGate: {
     latestStatus: AutonomousQualityGateRecord['status'] | null;
     latestSeq: number | null;
@@ -299,7 +322,7 @@ export function createAutonomousRunTelemetryPackage(
     rootDir: safeRootDir,
     files: [
       jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary)),
-      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary, watchdogVerdict)),
+      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary, watchdogVerdict, options.runtimeAuthorizationPreflight)),
       jsonFile(safeRootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
       ndjsonFile(safeRootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
       ndjsonFile(safeRootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
@@ -381,6 +404,7 @@ function createHandoffExport(
   handles: TelemetryHandles,
   verificationSummary: VerificationSummary,
   watchdogVerdict: AutonomousSchedulerWatchdogVerdict | null = null,
+  runtimeAuthorizationPreflight: AutonomousRuntimeAuthorizationPreflightDecision | null | undefined = null,
 ): RunTelemetryHandoff {
   const latestGate = qualityGates[qualityGates.length - 1] ?? null;
   const reviewLaneSummary = createReviewLaneHandoffSummary(reviewLanes);
@@ -404,6 +428,7 @@ function createHandoffExport(
     targetLeasePresent: run.targetLeaseId !== null,
     evidenceCount: evidence.length,
     safetyRedaction,
+    runtimeAuthorizationPreflight: toSafeRuntimeAuthorizationPreflight(runtimeAuthorizationPreflight),
     qualityGate: {
       latestStatus: latestGate ? latestGate.status : null,
       latestSeq: latestGate ? latestGate.seq : null,
@@ -448,6 +473,52 @@ function createReviewLaneHandoffSummary(
     p1Count: reviewLanes.filter((lane) => lane.highestPriority === 'P1').length,
     p2Count: reviewLanes.filter((lane) => lane.highestPriority === 'P2').length,
     highestPriority: pickHighestReviewLanePriority(reviewLanes),
+  };
+}
+
+function toSafeRuntimeAuthorizationPreflight(
+  decision: AutonomousRuntimeAuthorizationPreflightDecision | null | undefined,
+): SafeRuntimeAuthorizationPreflight {
+  if (!decision) {
+    return {
+      status: 'none',
+      canStartRuntimeSlice: false,
+      reason: null,
+      docGateStatus: null,
+      docGateReason: null,
+      runtimeGateStatus: null,
+      runtimeGateReason: null,
+      checkedMarkerCount: 0,
+      missingMarkerCount: 0,
+      openP1Count: 0,
+      openP2Count: 0,
+      runtimeFilesChanged: false,
+      authorizationPresent: false,
+      authorizationExplicit: false,
+      authorizationIdPresent: false,
+      authorizationFresh: false,
+      authorizationScope: null,
+    };
+  }
+
+  return {
+    status: decision.status,
+    canStartRuntimeSlice: decision.canStartRuntimeSlice,
+    reason: decision.reason,
+    docGateStatus: decision.docGateStatus,
+    docGateReason: decision.docGateReason,
+    runtimeGateStatus: decision.runtimeGateStatus,
+    runtimeGateReason: decision.runtimeGateReason,
+    checkedMarkerCount: normalizeNonNegativeInteger(decision.checkedMarkerCount) ?? 0,
+    missingMarkerCount: normalizeNonNegativeInteger(decision.missingMarkerCount) ?? 0,
+    openP1Count: normalizeNonNegativeInteger(decision.openP1Count) ?? 0,
+    openP2Count: normalizeNonNegativeInteger(decision.openP2Count) ?? 0,
+    runtimeFilesChanged: decision.runtimeFilesChanged === true,
+    authorizationPresent: decision.authorizationPresent === true,
+    authorizationExplicit: decision.authorizationExplicit === true,
+    authorizationIdPresent: decision.authorizationIdPresent === true,
+    authorizationFresh: decision.authorizationFresh === true,
+    authorizationScope: decision.authorizationScope,
   };
 }
 
