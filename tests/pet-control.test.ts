@@ -204,6 +204,8 @@ describe('pet control snapshot', () => {
         fileCount: 0,
         contentLength: 0,
         errorCode: null,
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
         ...overrides.telemetry,
       },
       qualityGate: {
@@ -2353,10 +2355,12 @@ describe('pet control snapshot', () => {
         status: 'written',
         runId: 'run-secret-raw-id',
         rootDir: '.runs/run-secret-raw-id',
-        fileCount: 9,
+        fileCount: 11,
         contentLength: 1234,
         paths: [
           '.runs/run-secret-raw-id/manifest.json',
+          '.runs/run-secret-raw-id/quality-gates.ndjson',
+          '.runs/run-secret-raw-id/review-lanes.ndjson',
           '.runs/run-secret-raw-id/.complete.json',
         ],
         errorCode: null,
@@ -2372,6 +2376,8 @@ describe('pet control snapshot', () => {
         fileCount: 0,
         contentLength: 0,
         errorCode: null,
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
       });
       const idleCockpit = {
         schemaVersion: 1 as const,
@@ -2397,9 +2403,11 @@ describe('pet control snapshot', () => {
       expect(merged.telemetry).toEqual({
         status: 'written',
         complete: true,
-        fileCount: 9,
+        fileCount: 11,
         contentLength: 1234,
         errorCode: null,
+        qualityGatePackagePresent: true,
+        reviewLanePackagePresent: true,
       });
     });
 
@@ -2408,7 +2416,11 @@ describe('pet control snapshot', () => {
       const merged = mergeOrchestratorTelemetryResultIntoSnapshot(snap, createTelemetryResult({
         fileCount: -9.8,
         contentLength: Number.NaN,
-        paths: ['.runs/run-secret-raw-id/manifest.json'],
+        paths: [
+          '.runs/run-secret-raw-id/manifest.json',
+          '.runs/run-secret-raw-id/quality-gates.ndjson',
+          '.runs/run-secret-raw-id/review-lanes.ndjson',
+        ],
       }));
 
       expect(merged.telemetry).toEqual({
@@ -2417,6 +2429,8 @@ describe('pet control snapshot', () => {
         fileCount: 0,
         contentLength: 0,
         errorCode: null,
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
       });
     });
 
@@ -2428,7 +2442,11 @@ describe('pet control snapshot', () => {
         rootDir: null,
         fileCount: 3,
         contentLength: 500,
-        paths: ['.runs/run-secret-raw-id/.complete.json'],
+        paths: [
+          '.runs/run-secret-raw-id/quality-gates.ndjson',
+          '.runs/run-secret-raw-id/review-lanes.ndjson',
+          '.runs/run-secret-raw-id/.complete.json',
+        ],
         errorCode: 'target_unavailable',
       } as unknown as AutonomousRunOrchestratorTelemetryResult;
 
@@ -2440,6 +2458,8 @@ describe('pet control snapshot', () => {
         fileCount: 3,
         contentLength: 500,
         errorCode: 'target_unavailable',
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
       });
     });
 
@@ -2473,6 +2493,8 @@ describe('pet control snapshot', () => {
         fileCount: 0,
         contentLength: 0,
         errorCode: 'telemetry_write_failed',
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
       });
       expect(skippedPet.telemetry).toEqual({
         status: 'skipped',
@@ -2480,6 +2502,8 @@ describe('pet control snapshot', () => {
         fileCount: 0,
         contentLength: 0,
         errorCode: 'no_selected_run',
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
       });
       expect(JSON.stringify(failedPet)).not.toMatch(/SECRET_FAILED_RUN/);
     });
@@ -2494,6 +2518,8 @@ describe('pet control snapshot', () => {
       expect(capsule.telemetryFileCount).toBe(merged.telemetry.fileCount);
       expect(capsule.telemetryContentLength).toBe(merged.telemetry.contentLength);
       expect(capsule.telemetryErrorCode).toBe(merged.telemetry.errorCode);
+      expect(capsule.telemetryQualityGatePackagePresent).toBe(merged.telemetry.qualityGatePackagePresent);
+      expect(capsule.telemetryReviewLanePackagePresent).toBe(merged.telemetry.reviewLanePackagePresent);
     });
 
     it('telemetry metadata does not alter nextAction priority', () => {
@@ -2532,9 +2558,11 @@ describe('pet control snapshot', () => {
       expect(merged.telemetry).toEqual({
         status: 'written',
         complete: true,
-        fileCount: 9,
+        fileCount: 11,
         contentLength: 1234,
         errorCode: 'unknown_telemetry_error',
+        qualityGatePackagePresent: false,
+        reviewLanePackagePresent: false,
       });
       expect(capsule.telemetryErrorCode).toBe('unknown_telemetry_error');
       expect(petJson).not.toMatch(/SECRET_TELEMETRY_RUN_ID|SECRET_TELEMETRY_ROOT|SECRET_TELEMETRY_ERROR|token=secret|private\?/);

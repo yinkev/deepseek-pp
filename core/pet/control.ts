@@ -148,6 +148,8 @@ export interface PetTelemetryExport {
   fileCount: number;
   contentLength: number;
   errorCode: PetTelemetryExportErrorCode | null;
+  qualityGatePackagePresent: boolean;
+  reviewLanePackagePresent: boolean;
 }
 
 export interface PetQualityGate {
@@ -438,6 +440,8 @@ export function createPetControlSnapshotFromRunCockpit(
     fileCount: 0,
     contentLength: 0,
     errorCode: null,
+    qualityGatePackagePresent: false,
+    reviewLanePackagePresent: false,
   };
   const qualityGate = createDefaultPetQualityGate();
 
@@ -949,6 +953,8 @@ export interface PetHandoffCapsule {
   telemetryFileCount: number;
   telemetryContentLength: number;
   telemetryErrorCode: PetTelemetryExportErrorCode | null;
+  telemetryQualityGatePackagePresent: boolean;
+  telemetryReviewLanePackagePresent: boolean;
   qualityGateStatus: PetQualityGateStatus;
   qualityGateReason: AutonomousRunQualityGateDecision['reason'] | null;
   qualityGateLatestStatus: AutonomousRunQualityGateDecision['latestGateStatus'];
@@ -1093,6 +1099,8 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const telemetryFileCount = tel ? tel.fileCount : 0;
   const telemetryContentLength = tel ? tel.contentLength : 0;
   const telemetryErrorCode = tel ? tel.errorCode : null;
+  const telemetryQualityGatePackagePresent = tel ? tel.qualityGatePackagePresent : false;
+  const telemetryReviewLanePackagePresent = tel ? tel.reviewLanePackagePresent : false;
 
   const allReviewLaneSummaries = rl && Array.isArray(rl.lanes)
     ? rl.lanes.map((lane) => normalizeLane(lane))
@@ -1189,6 +1197,8 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     telemetryFileCount,
     telemetryContentLength,
     telemetryErrorCode,
+    telemetryQualityGatePackagePresent,
+    telemetryReviewLanePackagePresent,
     qualityGateStatus,
     qualityGateReason,
     qualityGateLatestStatus,
@@ -1277,12 +1287,16 @@ export function mergeOrchestratorTelemetryResultIntoSnapshot(
   if (!result) {
     return snapshot;
   }
+  const paths = Array.isArray(result.paths) ? result.paths : [];
+  const complete = result.status === 'written' && hasTelemetryPackageFile(paths, '.complete.json');
   const telemetry: PetTelemetryExport = {
     status: result.status,
-    complete: result.status === 'written' && result.paths.some((path) => path.endsWith('/.complete.json')),
+    complete,
     fileCount: normalizePetTelemetryCount(result.fileCount),
     contentLength: normalizePetTelemetryCount(result.contentLength),
     errorCode: normalizePetTelemetryErrorCode(result.errorCode),
+    qualityGatePackagePresent: complete && hasTelemetryPackageFile(paths, 'quality-gates.ndjson'),
+    reviewLanePackagePresent: complete && hasTelemetryPackageFile(paths, 'review-lanes.ndjson'),
   };
   return {
     ...snapshot,
@@ -1327,6 +1341,10 @@ export function mergeAutonomousQualityGateDecisionIntoSnapshot(
       qualityGateBlocked: next.qualityGate.status === 'blocked',
     }),
   };
+}
+
+function hasTelemetryPackageFile(paths: readonly unknown[], filename: string): boolean {
+  return paths.some((path) => typeof path === 'string' && path.endsWith(`/${filename}`));
 }
 
 function normalizePetTelemetryCount(value: number): number {

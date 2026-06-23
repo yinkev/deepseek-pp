@@ -9,6 +9,7 @@ Project orchestrator telemetry write results into the pet snapshot and handoff c
 | New pet snapshots default to `telemetry.status = none` with no completion, counts, or error. | `createPetControlSnapshotFromRunCockpit and createBase default to no telemetry observed` |
 | Null or undefined telemetry results are a no-op and preserve snapshot identity. | `mergeOrchestratorTelemetryResultIntoSnapshot returns original snapshot object unchanged if result null or undefined` |
 | Written telemetry is marked complete only when both status is `written` and the writer completion marker is present. | `mergeOrchestratorTelemetryResultIntoSnapshot projects completion marker and safe counts only`; `mergeOrchestratorTelemetryResultIntoSnapshot requires completion marker and normalizes counts`; `mergeOrchestratorTelemetryResultIntoSnapshot never trusts a completion marker on non-written telemetry` |
+| Quality-gate and review-lane package presence is exposed only as booleans and only after the completion marker is present. | same completion-marker tests cover positive package files, missing marker, and non-written marker cases |
 | Counts are finite, non-negative integers before reaching the pet. | `mergeOrchestratorTelemetryResultIntoSnapshot requires completion marker and normalizes counts` |
 | Failed and skipped telemetry expose only safe status and whitelisted error codes. | `mergeOrchestratorTelemetryResultIntoSnapshot projects failed and skipped telemetry as safe metadata only` |
 | Unknown telemetry error codes are collapsed to `unknown_telemetry_error`. | `privacy false-positive probe: raw telemetry paths, roots, run ids, and unknown errors stay out of pet and handoff projection` |
@@ -24,6 +25,8 @@ Project orchestrator telemetry write results into the pet snapshot and handoff c
 - completion-marker presence;
 - file count;
 - content length;
+- whether the completed package contains quality-gate metadata;
+- whether the completed package contains review-lane metadata;
 - whitelisted error code.
 
 `createPetHandoffCapsule` mirrors those compact fields so an operator surface can show whether repo-visible telemetry finished without learning where the package was written or which durable run ID produced it.
@@ -37,12 +40,13 @@ The pet is not a telemetry browser. It does not carry:
 - telemetry file paths;
 - writer-private path fragments;
 - unrecognized writer error strings.
+- telemetry package content, command summaries, commit messages, review-lane summaries, or durable gate/lane IDs.
 
 The projection is safe enough for UI handoff and worker coordination. Raw package inspection remains a repo-side/debug action, not a pet snapshot concern.
 
 ## Adversarial Probe
 
-The false-positive probe builds a source telemetry result containing secret run IDs, secret roots, private path query strings, and an unknown error string. The source JSON must contain those secrets. The merged pet snapshot and handoff capsule JSON must omit them while still reporting `written`, `complete`, counts, and `unknown_telemetry_error`.
+The false-positive probe builds a source telemetry result containing secret run IDs, secret roots, private path query strings, and an unknown error string. The source JSON must contain those secrets. The merged pet snapshot and handoff capsule JSON must omit them while still reporting `written`, `complete`, counts, package facet booleans, and `unknown_telemetry_error`.
 
 ## Self Review
 

@@ -606,10 +606,12 @@ describe('pet to orchestrator review lane bridge', () => {
         status: 'written',
         runId: 'SECRET_TELEMETRY_RUN',
         rootDir: '.runs/SECRET_TELEMETRY_RUN',
-        fileCount: 2,
+        fileCount: 4,
         contentLength: 400,
         paths: [
           '.runs/SECRET_TELEMETRY_RUN/manifest.json',
+          '.runs/SECRET_TELEMETRY_RUN/quality-gates.ndjson',
+          '.runs/SECRET_TELEMETRY_RUN/review-lanes.ndjson',
           '.runs/SECRET_TELEMETRY_RUN/.complete.json',
         ],
         errorCode: null,
@@ -646,9 +648,11 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(merged.telemetry).toEqual({
       status: 'written',
       complete: true,
-      fileCount: 2,
+      fileCount: 4,
       contentLength: 400,
       errorCode: null,
+      qualityGatePackagePresent: true,
+      reviewLanePackagePresent: true,
     });
     expect(merged.qualityGate).toMatchObject({
       status: 'warning',
@@ -660,6 +664,8 @@ describe('pet to orchestrator review lane bridge', () => {
     });
     expect(capsule.workerCycleReviewGrade).toBe(merged.workerCycle.reviewGrade);
     expect(capsule.telemetryComplete).toBe(merged.telemetry.complete);
+    expect(capsule.telemetryQualityGatePackagePresent).toBe(merged.telemetry.qualityGatePackagePresent);
+    expect(capsule.telemetryReviewLanePackagePresent).toBe(merged.telemetry.reviewLanePackagePresent);
     expect(capsule.qualityGateStatus).toBe(merged.qualityGate.status);
     expect(JSON.stringify(merged)).not.toMatch(/SECRET_TELEMETRY_RUN/);
     expect(JSON.stringify(capsule)).not.toMatch(/SECRET_TELEMETRY_RUN/);
