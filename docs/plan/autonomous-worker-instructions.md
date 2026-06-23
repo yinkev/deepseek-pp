@@ -122,9 +122,9 @@ Priority order:
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
 
 7. Autonomous telemetry and repo-visible handoff.
-   - Status: partially complete; marker-based telemetry writing, pet telemetry projection, quality-gate projection, and orchestrator-cycle-to-pet bridge are implemented.
-   - Accomplish by exporting complete, marker-based telemetry packages and handoff capsules that reflect post-cycle durable state.
-   - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state.
+   - Status: complete for pure repo-visible telemetry/handoff: marker-based telemetry writing, pet telemetry projection, quality-gate projection, orchestrator-cycle-to-pet bridge, and runtime authorization preflight safe metadata through both direct run telemetry package generation and orchestrator-written telemetry handoff.
+   - Runtime/live dispatch remains frozen; telemetry visibility does not authorize Step 10 or wire Chrome/runtime behavior.
+   - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state, and runtime authorization preflight metadata stays safe/bounded.
 
 8. Pet cockpit projection.
    - Status: complete for the pure projection contract; UI/runtime wiring remains frozen.
@@ -135,6 +135,8 @@ Priority order:
    - Status: complete for the pure resume guard; runtime wiring remains blocked until the user explicitly resumes Chrome/runtime work.
    - Implemented by requiring explicit durable `chrome_runtime` authorization, a complete resume checklist, no pre-authorization runtime file changes, and no unresolved independent P1/P2 review findings.
    - Gate: no `entrypoints/background.ts` change until the resume guard authorizes Step 10; runtime smoke required before claiming live autonomy.
+
+Immediate next worker slice: Step 10 runtime wiring remains blocked until explicit durable `chrome_runtime` authorization exists and the runtime authorization preflight authorizes the slice.
 
 ## Subagent Use
 
