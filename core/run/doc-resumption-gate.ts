@@ -37,8 +37,12 @@ interface MarkerSpec {
   code: AutonomousDocResumptionMarkerCode;
   patterns: RegExp[];
   rejectPatterns?: RegExp[];
+  contextRejectPatterns?: RegExp[];
   scope?: 'segment' | 'document';
 }
+
+const STALE_POSTURE_RETRACTION =
+  '(is incorrect|is outdated|no longer (the case|applies|holds|required|blocked|frozen)|not current|not true|claim is false|false statement|false claim|superseded|obsolete|situation has changed)';
 
 const REQUIRED_MARKERS: MarkerSpec[] = [
   {
@@ -50,6 +54,12 @@ const REQUIRED_MARKERS: MarkerSpec[] = [
       /does not require[^.]{0,120}chrome_runtime[^.]{0,80}authorization/i,
       /chrome_runtime[^.]{0,80}authorization[^.]{0,80}(not required|not needed|optional)/i,
     ],
+    contextRejectPatterns: [
+      new RegExp(
+        `(explicit durable [\`']?chrome_runtime[\`']? authorization|durable, explicit user authorization exists for [\`']?chrome_runtime[\`']?)[\\s\\S]{0,300}${STALE_POSTURE_RETRACTION}`,
+        'i',
+      ),
+    ],
   },
   {
     code: 'background_file_frozen',
@@ -58,6 +68,9 @@ const REQUIRED_MARKERS: MarkerSpec[] = [
     ],
     rejectPatterns: [
       /entrypoints\/background\.ts[^.]{0,120}(not frozen|unfrozen|eligible now)/i,
+    ],
+    contextRejectPatterns: [
+      new RegExp(`entrypoints\\/background\\.ts[\\s\\S]{0,300}${STALE_POSTURE_RETRACTION}`, 'i'),
     ],
   },
   {
@@ -68,6 +81,9 @@ const REQUIRED_MARKERS: MarkerSpec[] = [
     rejectPatterns: [
       /step 10[^.]{0,120}(not blocked|unblocked|can proceed)/i,
       /runtime wiring[^.]{0,120}(not blocked|unblocked|can proceed)/i,
+    ],
+    contextRejectPatterns: [
+      new RegExp(`(step 10|runtime wiring)[\\s\\S]{0,300}(blocked|remains blocked)[\\s\\S]{0,300}${STALE_POSTURE_RETRACTION}`, 'i'),
     ],
   },
   {
@@ -100,6 +116,11 @@ const DENIAL_SEGMENT_PATTERNS = [
   /\bnot current\b/i,
   /\bnot true\b/i,
   /\bclaim is false\b|\bfalse statement\b|\bfalse claim\b/i,
+  /\bpreviously\b/i,
+  /\bprior requirement\b/i,
+  /\bhistorical\b/i,
+  /\bbefore this slice\b/i,
+  /\bused to\b/i,
 ];
 
 export function evaluateAutonomousDocResumptionGate(
@@ -137,6 +158,9 @@ function hasMarker(marker: MarkerSpec, text: string, segments: string[]): boolea
   if (marker.scope === 'document') {
     return marker.patterns.every((pattern) => pattern.test(text)) &&
       !(marker.rejectPatterns ?? []).some((pattern) => pattern.test(text));
+  }
+  if ((marker.contextRejectPatterns ?? []).some((pattern) => pattern.test(text))) {
+    return false;
   }
   return segments.some((segment) => (
     marker.patterns.every((pattern) => pattern.test(segment)) &&
