@@ -375,6 +375,44 @@ describe('autonomous run orchestrator startup bridge', () => {
       goal: 'Write telemetry',
       proofContract: createProofContract(),
     }, 100);
+    await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        complete: true,
+        coveredCount: 4,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 1,
+      },
+      resultStateConsistency: {
+        status: 'consistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      selfReview: { grade: 'A' },
+      verification: {
+        commands: [
+          { name: 'npm test token=secret', result: 'passed', summary: 'Bearer secret rawOutput' },
+        ],
+      },
+      commit: { hash: 'abcdef1', message: 'Telemetry gate token=secret' },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    }, 120);
+    await appendAutonomousReviewLaneRecord(run.id, {
+      role: 'grok',
+      status: 'passed',
+      grade: 'A',
+      recommendation: 'proceed',
+      highestPriority: null,
+      issueCount: 0,
+      evidenceRefCount: 1,
+      summary: 'Grok transcript Bearer secret token=secret',
+    }, 130);
     const writes: Array<{ path: string; content: string }> = [];
     const executor = vi.fn(async ({ runId, now: execNow }) => {
       await appendAutonomousRunStep(runId, {
@@ -410,15 +448,54 @@ describe('autonomous run orchestrator startup bridge', () => {
     const final = await getAutonomousRunById(run.id);
     const manifest = readTelemetryJson(writes, 'manifest.json');
     const verification = readTelemetryJson(writes, 'verification.json');
+    const qualityGates = readTelemetryNdjson(writes, 'quality-gates.ndjson');
+    const reviewLanes = readTelemetryNdjson(writes, 'review-lanes.ndjson');
     expect(manifest.run).toMatchObject({
       id: 'run-1',
       status: final?.status,
       updatedAt: final?.updatedAt,
     });
+    expect(manifest.counts).toMatchObject({
+      qualityGates: 1,
+      reviewLanes: 1,
+    });
+    expect(qualityGates).toEqual([
+      expect.objectContaining({
+        id: 'quality-gate-1',
+        runId: 'run-1',
+        status: 'passed',
+        selfReviewGrade: 'A',
+        verification: {
+          commandCount: 1,
+          passedCommandCount: 1,
+          failedCommandCount: 0,
+          knownPreexistingFailureCount: 0,
+        },
+        commitPresent: true,
+        independentReview: {
+          status: 'passed',
+          grade: 'A',
+          blockingIssueCount: 0,
+        },
+      }),
+    ]);
+    expect(reviewLanes).toEqual([
+      expect.objectContaining({
+        id: 'review-lane-1',
+        runId: 'run-1',
+        role: 'grok',
+        status: 'passed',
+        grade: 'A',
+        recommendation: 'proceed',
+        evidenceRefCount: 1,
+        summaryPresent: true,
+      }),
+    ]);
     expect(verification.summary).toMatchObject({
       commandStatus: 'passed',
       durableStatus: final?.status,
     });
+    expect(JSON.stringify(writes)).not.toMatch(/Bearer secret|token=secret|rawOutput|transcript/i);
     expect(result.afterSnapshot.activeRun).toMatchObject({
       id: run.id,
       status: final?.status,
@@ -1659,6 +1736,13 @@ function readTelemetryJson(writes: Array<{ path: string; content: string }>, nam
   const write = writes.find((item) => item.path.endsWith(`/${name}`));
   expect(write).toBeDefined();
   return JSON.parse(write?.content ?? '{}');
+}
+
+function readTelemetryNdjson(writes: Array<{ path: string; content: string }>, name: string): any[] {
+  const write = writes.find((item) => item.path.endsWith(`/${name}`));
+  expect(write).toBeDefined();
+  const content = write?.content.trim() ?? '';
+  return content ? content.split('\n').map((line) => JSON.parse(line)) : [];
 }
 
 function createChromeStub() {
