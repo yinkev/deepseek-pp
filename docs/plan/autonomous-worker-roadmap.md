@@ -159,7 +159,7 @@ Default worker prompt:
   </objective>
   <quality_gate>
     <item>Evaluate, Review, Grade, Iterate after implementation before committing.</item>
-    <item>Before committing, build a contract coverage table: each required behavior must map to at least one test assertion or be explicitly marked not testable in this slice.</item>
+    <item>Contract coverage gate: before committing, build a contract coverage table where each required behavior maps to at least one test assertion or is explicitly marked not testable in this slice.</item>
     <item>Run one adversarial probe for false-positive success: prove the result object and durable stored state agree.</item>
     <item>Self-review after verification and assign grade A-F.</item>
     <item>If grade is below A, iterate once before committing.</item>
