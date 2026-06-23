@@ -13,6 +13,8 @@ This is pure autonomous core and documentation work. It does not touch `entrypoi
 | Requirement | Coverage |
 | --- | --- |
 | Repo-visible docs contain the resume contract. | `passes when repo-visible docs contain the autonomous resume contract` reads `docs/plan/autonomous-worker-roadmap.md` and `docs/plan/controlled-runtime-resume-gate.md`. |
+| The gate does not depend only on pre-existing roadmap wording. | `passes a minimal self-contained contract without relying on existing plan wording`. |
+| Keyword-only denial phrasing cannot produce a false pass. | `blocks denial phrasing that contains the right keywords in the wrong claim`. |
 | Missing docs fail closed. | `blocks when no documents are supplied`. |
 | Incomplete docs report exact missing markers. | `blocks incomplete docs with exact missing marker codes`. |
 | Runtime resume requires explicit durable `chrome_runtime` authorization. | Covered by `runtime_authorization_required`. |
@@ -35,10 +37,17 @@ git diff --check
 git diff --name-only HEAD -- entrypoints/background.ts
 ```
 
-Results: focused suite passed 27/27; TypeScript compile passed; full suite passed 866/866; diff check passed; `entrypoints/background.ts` diff was empty.
+Results: focused suite passed 29/29; TypeScript compile passed; full suite passed 868/868; diff check passed; `entrypoints/background.ts` diff was empty.
 
 ## Self Review
 
 Grade: A.
 
-Reason: the slice makes repo-visible resumption measurable without touching runtime files, fails closed when docs are missing or incomplete, uses actual docs as the positive path, keeps gate output to safe marker metadata, and leaves the Chrome/runtime freeze intact.
+Iteration applied before fix-up commit:
+
+- Independent review found a P2: keyword-only marker checks could pass denial phrasing, and the positive repo-doc test did not include this slice's new doc artifact.
+- The gate now uses stricter positive assertion patterns for runtime authorization, background freeze, and Step 10 blocked posture.
+- The gate rejects denial phrasing for those critical markers.
+- Tests now include the new doc artifact, a minimal self-contained positive contract, and an adversarial denial-text probe.
+
+Reason: the slice makes repo-visible resumption measurable without touching runtime files, fails closed when docs are missing, incomplete, or denial-phrased, uses actual docs and a synthetic minimal contract as positive paths, keeps gate output to safe marker metadata, and leaves the Chrome/runtime freeze intact.

@@ -36,20 +36,38 @@ export interface AutonomousDocResumptionGateDecision {
 interface MarkerSpec {
   code: AutonomousDocResumptionMarkerCode;
   patterns: RegExp[];
+  rejectPatterns?: RegExp[];
 }
 
 const REQUIRED_MARKERS: MarkerSpec[] = [
   {
     code: 'runtime_authorization_required',
-    patterns: [/explicit durable/i, /chrome_runtime/i, /authorization/i],
+    patterns: [
+      /explicit durable [`']?chrome_runtime[`']? authorization|durable, explicit user authorization exists for [`']?chrome_runtime[`']?/i,
+    ],
+    rejectPatterns: [
+      /does not require[^.]{0,120}chrome_runtime[^.]{0,80}authorization/i,
+      /chrome_runtime[^.]{0,80}authorization[^.]{0,80}(not required|not needed|optional)/i,
+    ],
   },
   {
     code: 'background_file_frozen',
-    patterns: [/entrypoints\/background\.ts/i, /frozen|freeze|forbidden/i],
+    patterns: [
+      /entrypoints\/background\.ts[^.]{0,120}(frozen|freeze|forbidden|do not touch)|frozen[^.]{0,120}entrypoints\/background\.ts/i,
+    ],
+    rejectPatterns: [
+      /entrypoints\/background\.ts[^.]{0,120}(not frozen|unfrozen|eligible now)/i,
+    ],
   },
   {
     code: 'step_10_blocked',
-    patterns: [/step 10/i, /blocked/i, /runtime wiring/i],
+    patterns: [
+      /step 10[^.]{0,120}blocked|runtime wiring remains blocked|blocked[^.]{0,120}step 10/i,
+    ],
+    rejectPatterns: [
+      /step 10[^.]{0,120}(not blocked|unblocked|can proceed)/i,
+      /runtime wiring[^.]{0,120}(not blocked|unblocked|can proceed)/i,
+    ],
   },
   {
     code: 'contract_coverage_required',
@@ -80,6 +98,7 @@ export function evaluateAutonomousDocResumptionGate(
   const text = documents.join('\n\n');
   const presentMarkerCodes = REQUIRED_MARKERS
     .filter((marker) => marker.patterns.every((pattern) => pattern.test(text)))
+    .filter((marker) => !(marker.rejectPatterns ?? []).some((pattern) => pattern.test(text)))
     .map((marker) => marker.code);
   const missingMarkerCodes = REQUIRED_MARKERS
     .map((marker) => marker.code)

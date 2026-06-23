@@ -13,7 +13,7 @@ describe('autonomous doc resumption gate', () => {
       status: 'passed',
       canResumeFromDocs: true,
       reason: 'passed',
-      documentCount: 2,
+      documentCount: 3,
       checkedMarkerCodes: [
         'runtime_authorization_required',
         'background_file_frozen',
@@ -36,6 +36,53 @@ describe('autonomous doc resumption gate', () => {
       ],
       missingMarkerCodes: [],
     });
+  });
+
+  it('passes a minimal self-contained contract without relying on existing plan wording', () => {
+    const decision = evaluateAutonomousDocResumptionGate({
+      documents: [{
+        text: [
+          'Step 10 runtime wiring remains blocked.',
+          'entrypoints/background.ts is frozen and do not touch entrypoints/background.ts.',
+          'The runtime slice requires explicit durable chrome_runtime authorization.',
+          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
+          'The false-positive probe proves result object and durable stored state agree.',
+          'Self-review assigns a grade before commit.',
+          'Independent P1/P2 review blocks the next step.',
+          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+        ].join('\n'),
+      }],
+    });
+
+    expect(decision.status).toBe('passed');
+    expect(decision.missingMarkerCodes).toEqual([]);
+  });
+
+  it('blocks denial phrasing that contains the right keywords in the wrong claim', () => {
+    const decision = evaluateAutonomousDocResumptionGate({
+      documents: [{
+        text: [
+          'Step 10 runtime wiring is not blocked.',
+          'entrypoints/background.ts is not frozen.',
+          'Step 10 does not require explicit durable chrome_runtime authorization.',
+          'The contract coverage table maps each required behavior to a test assertion or marks it not testable.',
+          'The false-positive probe proves result object and durable stored state agree.',
+          'Self-review assigns a grade before commit.',
+          'Independent P1/P2 review blocks the next step.',
+          'Verification ladder: npm test, npm run compile, git diff --check, git diff --name-only HEAD -- entrypoints/background.ts.',
+        ].join('\n'),
+      }],
+    });
+
+    expect(decision).toMatchObject({
+      status: 'blocked',
+      reason: 'missing_required_markers',
+    });
+    expect(decision.missingMarkerCodes).toEqual([
+      'runtime_authorization_required',
+      'background_file_frozen',
+      'step_10_blocked',
+    ]);
   });
 
   it('blocks when no documents are supplied', () => {
@@ -108,6 +155,7 @@ function readResumptionDocs() {
   return [
     'docs/plan/autonomous-worker-roadmap.md',
     'docs/plan/controlled-runtime-resume-gate.md',
+    'docs/plan/autonomous-doc-resumption-gate.md',
   ].map((path) => ({
     text: readFileSync(join(process.cwd(), path), 'utf8'),
   }));
