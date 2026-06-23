@@ -10,17 +10,19 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 
 ## Current State
 
-- Worktree: `/Users/kyin/Projects/deepseek-pp-pet`.
+- Worktree: this checkout's repository root. Agents should resolve it from their current working directory or an injected `REPO_ROOT`; do not hard-code a personal absolute path into reusable prompts.
 - Branch: `codex/deepseek-pet`.
 - Latest verified autonomous commit before this roadmap: `100eb30 Align review lane gate predicates`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
 - Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections.
 
-## Grok Fan-Out Synthesis
+## Advisory Fan-Out Synthesis
 
 Codex launched twelve Grok CLI advisory workers across roadmap, orchestration, worker queue, review lanes, pet cockpit, telemetry/restart, safety, tests, failure modes, integration, novel features, and sequencing.
 
-Consensus:
+Their output is not authority. Codex accepted only the parts that matched committed repo state, existing plan docs, and local code inspection.
+
+Accepted findings:
 
 - Do not keep adding standalone gate abstractions.
 - The next meaningful layer is restartable scheduler/watchdog behavior in pure core.
@@ -67,6 +69,68 @@ Every implementation slice must follow this order:
 | 9 | Controlled runtime resume checklist | Write the explicit resume gate: required commands, runtime smoke, Chrome safety checks, manual user instruction record, rollback path, and P1/P2 review requirements. | Documentation plus pure guard tests where resume remains blocked without explicit durable authorization. | `Document controlled runtime resume gate` |
 | 10 | Runtime wiring after explicit resume | Only after user resumes Chrome/runtime work, connect the proven pure loop to background/runtime dispatch. This is where `entrypoints/background.ts` becomes eligible. | Runtime smoke, Chrome extension build, live sidepanel/pet verification, full relevant suite, independent review. | `Wire autonomous runtime dispatch` |
 
+## Step Execution Specs
+
+### Step 1: Restartable Scheduler/Watchdog Contract
+
+- Files: `core/run/orchestrator.ts`, `core/run/worker.ts`, `core/run/target.ts`, `core/run/store.ts`, optionally a new `core/run/scheduler-watchdog.ts`, plus `tests/run-orchestrator.test.ts`, `tests/run-worker.test.ts`, `tests/run-target-store.test.ts`.
+- Contract: pure function derives `canContinue`, `mustBlock`, `mustRetry`, or `terminalNoop` from run status, target lease freshness, evidence freshness, no-progress count, retry budget, pause flag, terminal state, quality gate, and review-lane blocker records.
+- Acceptance: a returned scheduler/watchdog verdict must match the durable run state after apply; an injected mismatch must fail a test.
+
+### Step 2: Lease/Retry/Restart Reconciliation
+
+- Files: `core/run/store.ts`, `core/run/orchestrator.ts`, `tests/run-store.test.ts`, `tests/run-orchestrator.test.ts`, `tests/run-target-store.test.ts`.
+- Contract: startup reconciliation converts interrupted or stale running state into explicit blocked/retryable durable records before any new run is selected.
+- Acceptance: expired leases reconcile before selection; terminal runs never reacquire leases; retry exhaustion becomes a durable blocker.
+
+### Step 3: Repo-Visible Restart Telemetry
+
+- Files: `core/run/telemetry.ts`, `core/run/telemetry-writer.ts`, `tests/run-telemetry.test.ts`, `tests/run-telemetry-writer.test.ts`, `docs/plan/run-telemetry-package.md`.
+- Contract: `handoff.json` and `.complete.json` expose scheduler/watchdog state, retry posture, unresolved blockers, and latest safe checkpoint through safe package-local handles only.
+- Acceptance: package summary fails if durable state is failed or blocked even when command metadata says pass; no raw durable IDs, prompts, target labels, URLs, or transcripts leak.
+
+### Step 4: Projection Fidelity Auditor
+
+- Files: `core/pet/control.ts`, `core/run/orchestrator.ts`, `tests/pet-control.test.ts`, `tests/pet-orchestrator-bridge.test.ts`.
+- Contract: compare pet cockpit projections against durable run state and persist a compact fidelity verdict, drift count, and gate-impact signal.
+- Acceptance: injected projection drift fails; clean projection passes; handoff projection agrees with stored fidelity state.
+
+### Step 5: Safety Policy And Redaction Gate
+
+- Files: `core/run/policy.ts`, `core/run/telemetry.ts`, `core/pet/control.ts`, relevant tests under `tests/run-policy.test.ts`, `tests/run-telemetry.test.ts`, `tests/pet-control.test.ts`.
+- Contract: deny-by-default autonomous action summaries and privacy redaction flags are enforced before telemetry, review lanes, worker prompts, or pet handoff export raw state.
+- Acceptance: secret-like text and raw user content are present in source fixtures and absent from exported telemetry/pet/review records.
+
+### Step 6: Pure Review Dispatch Contract
+
+- Files: `core/run/review-scheduler.ts`, `core/run/review-lane-gate.ts`, `core/run/worker-prompt.ts`, `tests/run-review-scheduler.test.ts`, `tests/run-worker-prompt.test.ts`, `tests/run-review-lane-store.test.ts`.
+- Contract: describe planned implementer/reviewer/safety/UX/Grok/Oracle lanes, their allowed outputs, and their blocker semantics without invoking live workers.
+- Acceptance: lane plans persist compact metadata, raw transcripts do not leak, and P1/P2 or failed/blocked lanes prevent advancement.
+
+### Step 7: Contract Coverage Automation
+
+- Files: `core/run/contract-coverage.ts`, `core/run/result-consistency.ts`, `core/run/store.ts`, `tests/run-contract-coverage.test.ts`, `tests/run-result-consistency.test.ts`, `tests/run-quality-gate-store.test.ts`.
+- Contract: every slice quality gate stores coverage rows, result-state consistency, self-grade, verification summary, commit hash, and independent review status.
+- Acceptance: missing coverage rows, conflicts, result-state mismatch, failed review, or P1/P2 review blocks advancement.
+
+### Step 8: Pet Cockpit Projection Contract
+
+- Files: `core/pet/control.ts`, `tests/pet-control.test.ts`, `tests/pet-orchestrator-bridge.test.ts`.
+- Contract: pet snapshot exposes only safe metadata for run posture, scheduler/watchdog gate, telemetry handoff, quality gate, review lane gate, fidelity score, and stop-line state.
+- Acceptance: projection tests prove no raw labels, prompts, URLs, transcripts, target IDs, or secret-like strings leak.
+
+### Step 9: Controlled Runtime Resume Gate
+
+- Files: docs plus pure guard tests if a guard type is added.
+- Contract: the current Chrome/runtime freeze is a user-imposed active blocker, not permanent supervision. Pure-core work continues autonomously. Runtime wiring begins only after the user explicitly lifts this current freeze.
+- Acceptance: any resume state without an explicit durable resume authorization remains blocked.
+
+### Step 10: Runtime Wiring After Freeze Is Lifted
+
+- Files: `entrypoints/background.ts` and Chrome/runtime surfaces become eligible only in this step.
+- Contract: connect the proven pure scheduler, gates, telemetry, and review lanes to live runtime dispatch.
+- Acceptance: extension build, runtime smoke, live pet/sidepanel verification, full relevant tests, contract coverage, false-positive probe, and independent P1/P2 review all pass.
+
 ## Immediate Next Worker Slice
 
 Step 1 is the next implementation slice.
@@ -75,7 +139,7 @@ Default worker prompt:
 
 ```xml
 <worker_task>
-  <repo>/Users/kyin/Projects/deepseek-pp-pet</repo>
+  <repo_root>resolve from current checkout or injected REPO_ROOT</repo_root>
   <branch>codex/deepseek-pet</branch>
   <slice>restartable-scheduler-watchdog-contract</slice>
   <scope>
@@ -107,7 +171,7 @@ Default worker prompt:
 
 | Required Behavior | Coverage |
 | --- | --- |
-| Use multiple Grok workers as advisory lanes. | Tool run evidence in this Codex session; not repo-testable. |
+| Use multiple Grok workers as advisory lanes. | Session evidence only; not a repo behavior and not used as proof of correctness. |
 | Preserve runtime/background freeze. | Roadmap states freeze and marks runtime wiring as Step 10 only. |
 | Choose one next default implementation slice. | `Immediate Next Worker Slice` selects restartable scheduler/watchdog. |
 | Include every major step and how to accomplish it. | `Roadmap` table lists ten steps with implementation method, verification, and commit boundary. |
@@ -124,5 +188,7 @@ Iteration applied before commit:
 - Initial grade was A- because Grok fan-out evidence and future implementation behavior are not repo-testable inside this documentation slice.
 - The contract coverage table now marks those items explicitly as not repo-testable instead of implying test proof.
 - The roadmap avoids code claims and makes Step 1 responsible for turning the next behavior into executable tests before implementation.
+- Independent review then found P1/P2 issues: hardcoded path, advisory wording that sounded authoritative, runtime freeze wording that implied permanent user supervision, and underspecified later steps.
+- This revision removes the reusable hardcoded path, reframes Grok as advisory only, clarifies that the runtime freeze is the current user-imposed blocker while pure-core autonomy continues, and adds file-level execution specs for every roadmap step.
 
 Reason: the roadmap is concrete, repo-shaped, respects the frozen runtime boundary, chooses one default next implementation slice, includes the required quality gate, and separates established repo state from advisory model output. No P1/P2 blocker remains in this documentation slice.
