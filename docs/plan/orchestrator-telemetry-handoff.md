@@ -10,6 +10,10 @@ Let `executeAutonomousOrchestratorCycle` optionally export the selected run's po
 | Omitting telemetry options returns `telemetryResult: null`. | `selects the newest queued run and advances it through the worker cycle` |
 | Written telemetry is generated after the worker cycle and agrees with durable final run state. | `writes selected run telemetry after the worker cycle using post-cycle durable state` |
 | Written telemetry includes safe persisted quality-gate and review-lane metadata from the post-cycle ledger. | same post-cycle telemetry test reads `quality-gates.ndjson` and `review-lanes.ndjson` from the injected write target |
+| Provided runtime authorization preflight metadata is passed through as bounded safe handoff metadata only. | `passes provided blocked runtime authorization preflight into written handoff safe metadata` |
+| Omitting runtime authorization preflight metadata preserves the fail-closed no-observation handoff default. | `writes selected run telemetry after the worker cycle using post-cycle durable state` asserts `runtimeAuthorizationPreflight.status: none` and default null/false/zero fields |
+| Runtime authorization preflight metadata cannot authorize or reclassify a blocked durable run. | `does not let authorized preflight metadata turn blocked durable telemetry into success` asserts result/durable/handoff failure semantics still agree |
+| Runtime authorization preflight handoff projection omits raw/unknown preflight fields. | `omits raw unknown runtime preflight fields from orchestrator-written handoff telemetry` |
 | No selected runnable run skips telemetry without calling the target. | `skips telemetry when no runnable run is selected` |
 | Writer failures do not throw from the orchestrator and expose only safe error metadata. | `returns safe telemetry failure metadata without leaking writer errors` |
 | Partial writer failures do not produce the final `.complete.json` marker. | `returns safe telemetry failure metadata without leaking writer errors` |
@@ -20,11 +24,11 @@ Let `executeAutonomousOrchestratorCycle` optionally export the selected run's po
 `AutonomousRunOrchestratorCycleOptions.telemetry` accepts:
 
 - `target`: an injected `writeTextFile(path, content)` sink;
-- optional `rootDir`, `verification`, and `commits` metadata passed into `createAutonomousRunTelemetryPackage`.
+- optional `rootDir`, `verification`, `commits`, and `runtimeAuthorizationPreflight` metadata passed into `createAutonomousRunTelemetryPackage`.
 
 The orchestrator reads the ledger again after the worker cycle, builds a telemetry package for the selected run, and writes it through `writeAutonomousRunTelemetryPackage`.
 
-The package includes safe quality-gate and review-lane NDJSON files when those durable records exist. The orchestrator does not read package content back or treat that metadata as new authority; it only writes the repo-visible package from the same post-cycle ledger snapshot.
+The package includes safe quality-gate and review-lane NDJSON files when those durable records exist. When a caller supplies a runtime authorization preflight decision, the orchestrator forwards it unchanged to the telemetry package builder; it does not evaluate authorization, start runtime work, change worker selection, or treat the metadata as authority. The package builder emits only the existing bounded `runtimeAuthorizationPreflight` handoff projection.
 
 ## Failure Semantics
 
@@ -40,7 +44,9 @@ Writer exception messages are intentionally not surfaced. Consumers must only tr
 
 ## Adversarial Probe
 
-The privacy probe stores secret evidence refs, summaries, metadata URLs, raw durable IDs, quality-gate command summaries, commit messages, and review-lane summaries, then enables telemetry writes. The orchestrator result and written telemetry JSON must omit those strings while still reporting safe package metadata.
+The privacy probe stores secret evidence refs, summaries, metadata URLs, raw durable IDs, quality-gate command summaries, commit messages, review-lane summaries, and raw/unknown runtime preflight fields, then enables telemetry writes. The orchestrator result and written telemetry JSON must omit those strings while still reporting safe package metadata.
+
+The false-positive success probe supplies authorized runtime preflight metadata while a durable run is blocked by the review-lane gate. The written handoff must still report the durable blocked status, failed verification semantics, and inspect-failure next action; the metadata projection is informational only.
 
 ## Self Review
 

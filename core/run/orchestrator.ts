@@ -20,6 +20,7 @@ import {
   type AutonomousRunTelemetryCommit,
   type AutonomousRunTelemetryVerification,
 } from './telemetry';
+import type { AutonomousRuntimeAuthorizationPreflightDecision } from './runtime-authorization-preflight';
 import {
   writeAutonomousRunTelemetryPackage,
   type AutonomousRunTelemetryWriteResult,
@@ -118,6 +119,7 @@ export interface AutonomousRunOrchestratorTelemetryInput {
   rootDir?: string;
   verification?: readonly AutonomousRunTelemetryVerification[] | null;
   commits?: readonly AutonomousRunTelemetryCommit[] | null;
+  runtimeAuthorizationPreflight?: AutonomousRuntimeAuthorizationPreflightDecision | null;
 }
 
 export type AutonomousRunOrchestratorTelemetryResult =
@@ -531,6 +533,7 @@ async function writeOrchestratorTelemetry(
     rootDir: input.rootDir,
     verification: input.verification,
     commits: input.commits,
+    runtimeAuthorizationPreflight: input.runtimeAuthorizationPreflight,
   });
   if (!pkg) return createSkippedTelemetryResult('package_unavailable');
 

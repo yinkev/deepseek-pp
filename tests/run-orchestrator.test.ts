@@ -20,6 +20,7 @@ import {
   getAutonomousRunCockpitSnapshot,
   initializeAutonomousRunOrchestrator,
 } from '../core/run/orchestrator';
+import type { AutonomousRuntimeAuthorizationPreflightDecision } from '../core/run/runtime-authorization-preflight';
 import type { AutonomousQualityGateRecord, AutonomousReviewLaneRecord } from '../core/run/types';
 
 afterEach(() => {
@@ -661,6 +662,25 @@ describe('autonomous run orchestrator startup bridge', () => {
       status: final?.status,
       nextAction: 'collect_evidence',
       evidenceCount: 0,
+      runtimeAuthorizationPreflight: {
+        status: 'none',
+        canStartRuntimeSlice: false,
+        reason: null,
+        docGateStatus: null,
+        docGateReason: null,
+        runtimeGateStatus: null,
+        runtimeGateReason: null,
+        checkedMarkerCount: 0,
+        missingMarkerCount: 0,
+        openP1Count: 0,
+        openP2Count: 0,
+        runtimeFilesChanged: false,
+        authorizationPresent: false,
+        authorizationExplicit: false,
+        authorizationIdPresent: false,
+        authorizationFresh: false,
+        authorizationScope: null,
+      },
       qualityGate: {
         latestStatus: 'passed',
         selfReviewGrade: 'A',
@@ -724,6 +744,193 @@ describe('autonomous run orchestrator startup bridge', () => {
       id: run.id,
       status: final?.status,
     });
+  });
+
+  it('passes provided blocked runtime authorization preflight into written handoff safe metadata', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'telemetry-preflight-blocked' });
+
+    const run = await createAutonomousRun({
+      id: 'telemetry-preflight-blocked',
+      goal: 'Write blocked runtime preflight telemetry',
+      proofContract: createProofContract(),
+    }, 100);
+    const writes: Array<{ path: string; content: string }> = [];
+
+    const preflight = createRuntimeAuthorizationPreflightDecision({
+      checkedMarkerCount: 7,
+      missingMarkerCount: 2,
+      openP1Count: 1,
+      openP2Count: 3,
+      runtimeFilesChanged: true,
+      authorizationPresent: true,
+      authorizationExplicit: false,
+      authorizationIdPresent: true,
+      authorizationFresh: false,
+      authorizationScope: 'chrome_runtime',
+    });
+
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 120,
+      telemetry: {
+        target: {
+          writeTextFile(path, content) {
+            writes.push({ path, content });
+          },
+        },
+        runtimeAuthorizationPreflight: preflight,
+      },
+    });
+
+    const handoff = readTelemetryJson(writes, 'handoff.json');
+    expect(result.selectedRunId).toBe(run.id);
+    expect(result.telemetryResult).toMatchObject({ status: 'written', runId: 'run-1', errorCode: null });
+    expect(handoff.runtimeAuthorizationPreflight).toEqual({
+      status: 'blocked',
+      canStartRuntimeSlice: false,
+      reason: 'missing_authorization',
+      docGateStatus: 'passed',
+      docGateReason: 'passed',
+      runtimeGateStatus: 'blocked',
+      runtimeGateReason: 'missing_authorization',
+      checkedMarkerCount: 7,
+      missingMarkerCount: 2,
+      openP1Count: 1,
+      openP2Count: 3,
+      runtimeFilesChanged: true,
+      authorizationPresent: true,
+      authorizationExplicit: false,
+      authorizationIdPresent: true,
+      authorizationFresh: false,
+      authorizationScope: 'chrome_runtime',
+    });
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: result.workerResult?.finalStatus,
+    });
+  });
+
+  it('does not let authorized preflight metadata turn blocked durable telemetry into success', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'telemetry-preflight-false-positive' });
+
+    const run = await createAutonomousRun({
+      id: 'telemetry-preflight-false-positive',
+      goal: 'Blocked durable run with authorized metadata',
+      proofContract: createProofContract(),
+    }, 100);
+    const writes: Array<{ path: string; content: string }> = [];
+
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 120,
+      reviewLaneGate: {
+        status: 'blocked',
+        reason: 'p1',
+        canProceed: false,
+        blockingPriority: 'P1',
+        blockingLaneCount: 1,
+      },
+      telemetry: {
+        target: {
+          writeTextFile(path, content) {
+            writes.push({ path, content });
+          },
+        },
+        verification: [{ command: 'npm test -- tests/run-orchestrator.test.ts', exitCode: 0 }],
+        runtimeAuthorizationPreflight: createRuntimeAuthorizationPreflightDecision({
+          status: 'authorized',
+          canStartRuntimeSlice: true,
+          reason: 'authorized',
+          runtimeGateStatus: 'authorized',
+          runtimeGateReason: 'authorized',
+          authorizationPresent: true,
+          authorizationExplicit: true,
+          authorizationIdPresent: true,
+          authorizationFresh: true,
+          authorizationScope: 'chrome_runtime',
+        }),
+      },
+    });
+
+    const durable = await getAutonomousRunById(run.id);
+    const handoff = readTelemetryJson(writes, 'handoff.json');
+    const verification = readTelemetryJson(writes, 'verification.json');
+
+    expect(result.workerResult).toMatchObject({
+      action: 'block',
+      finalStatus: 'blocked',
+      errorCode: 'autonomous_review_lane_gate_blocked',
+    });
+    expect(durable).toMatchObject({ status: 'blocked', error: { code: 'autonomous_review_lane_gate_blocked' } });
+    expect(handoff.runtimeAuthorizationPreflight).toMatchObject({ status: 'authorized', canStartRuntimeSlice: true });
+    expect(handoff).toMatchObject({
+      status: 'blocked',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'failed',
+      durableFailurePresent: true,
+      unresolvedBlockers: {
+        watchdog: {
+          blocksNextAction: true,
+          reason: 'already_blocked',
+        },
+      },
+    });
+    expect(verification.summary).toMatchObject({
+      status: 'failed',
+      commandStatus: 'passed',
+      durableStatus: durable?.status,
+      durableFailurePresent: true,
+    });
+  });
+
+  it('omits raw unknown runtime preflight fields from orchestrator-written handoff telemetry', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'telemetry-preflight-privacy' });
+
+    const run = await createAutonomousRun({
+      id: 'telemetry-preflight-privacy',
+      goal: 'Write preflight privacy telemetry',
+      proofContract: createProofContract(),
+    }, 100);
+    const writes: Array<{ path: string; content: string }> = [];
+    const preflightWithUnknowns = {
+      ...createRuntimeAuthorizationPreflightDecision({
+        checkedMarkerCount: 1,
+        missingMarkerCount: 1,
+      }),
+      rawDocumentText: 'runtime-preflight-private-doc',
+      authorizationId: 'chrome_runtime_approval_secret_id',
+      docMissingMarkerCodes: ['durable_chrome_runtime_authorization'],
+      nested: { token: 'secret-preflight-token' },
+    } as unknown as AutonomousRuntimeAuthorizationPreflightDecision;
+
+    const result = await executeAutonomousOrchestratorCycle(vi.fn(), {
+      now: 120,
+      telemetry: {
+        target: {
+          writeTextFile(path, content) {
+            writes.push({ path, content });
+          },
+        },
+        runtimeAuthorizationPreflight: preflightWithUnknowns,
+      },
+    });
+
+    const handoff = readTelemetryJson(writes, 'handoff.json');
+    const output = JSON.stringify(writes);
+    expect(result.selectedRunId).toBe(run.id);
+    expect(handoff.runtimeAuthorizationPreflight).toMatchObject({
+      status: 'blocked',
+      checkedMarkerCount: 1,
+      missingMarkerCount: 1,
+    });
+    expect(handoff.runtimeAuthorizationPreflight).not.toHaveProperty('docMissingMarkerCodes');
+    expect(handoff.runtimeAuthorizationPreflight).not.toHaveProperty('rawDocumentText');
+    expect(handoff.runtimeAuthorizationPreflight).not.toHaveProperty('authorizationId');
+    expect(handoff.runtimeAuthorizationPreflight).not.toHaveProperty('nested');
+    expect(output).not.toMatch(/runtime-preflight-private-doc|chrome_runtime_approval_secret_id|durable_chrome_runtime_authorization|secret-preflight-token/);
   });
 
   it('skips telemetry when no runnable run is selected', async () => {
@@ -1343,6 +1550,32 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
   });
 });
+
+function createRuntimeAuthorizationPreflightDecision(
+  overrides: Partial<AutonomousRuntimeAuthorizationPreflightDecision> = {},
+): AutonomousRuntimeAuthorizationPreflightDecision {
+  return {
+    status: 'blocked',
+    canStartRuntimeSlice: false,
+    reason: 'missing_authorization',
+    docGateStatus: 'passed',
+    docGateReason: 'passed',
+    docMissingMarkerCodes: [],
+    runtimeGateStatus: 'blocked',
+    runtimeGateReason: 'missing_authorization',
+    checkedMarkerCount: 0,
+    missingMarkerCount: 0,
+    openP1Count: 0,
+    openP2Count: 0,
+    runtimeFilesChanged: false,
+    authorizationPresent: false,
+    authorizationExplicit: false,
+    authorizationIdPresent: false,
+    authorizationFresh: false,
+    authorizationScope: null,
+    ...overrides,
+  };
+}
 
 describe('autonomous run orchestrator quality gate enforcement', () => {
   it('allows worker execution when no quality gate exists (first cycle compatibility)', async () => {
