@@ -141,7 +141,7 @@ Every implementation slice must follow this order:
 
 Step 10 is the next implementation slice, but it is blocked until the user explicitly resumes Chrome/runtime work.
 
-Before any Step 10 implementation starts, run `evaluateAutonomousRuntimeAuthorizationPreflight` from `core/run/runtime-authorization-preflight.ts` against the repo-visible doc contract and the runtime resume input. The pet snapshot field `runtimeAuthorizationPreflight` and handoff fields prefixed `runtimeAuthorizationPreflight*` expose only the safe decision metadata. The current default decision must be blocked with `missing_authorization` because no explicit durable `chrome_runtime` authorization exists.
+Before any Step 10 implementation starts, run `evaluateAutonomousRuntimeAuthorizationPreflight` from `core/run/runtime-authorization-preflight.ts` against the repo-visible doc contract and the runtime resume input. The pet snapshot field `runtimeAuthorizationPreflight` and handoff fields prefixed `runtimeAuthorizationPreflight*` expose only the safe decision metadata. The current default decision must be blocked with `missing_authorization` because no explicit durable `chrome_runtime` authorization exists. The pet projection is read-only; Step 10 still requires a fresh runtime authorization preflight immediately before runtime work.
 
 Default worker prompt:
 

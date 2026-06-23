@@ -21,6 +21,7 @@ import {
   createPetReviewLaneGate,
   createPetRunQueue,
   mergePetReviewLanesIntoSnapshot,
+  mergeCockpitProjectionIntoPetSnapshot,
   mergeRuntimeAuthorizationPreflightIntoSnapshot,
   createUncheckedPetProjectionFidelity,
   attachPetProjectionFidelity,
@@ -1668,7 +1669,12 @@ describe('pet control snapshot', () => {
 
       expect(pet.runtimeAuthorizationPreflight).toEqual(defaultProjection);
       expect(createBasePetSnapshot().runtimeAuthorizationPreflight).toEqual(defaultProjection);
-      expect(createPetHandoffCapsule(pet)).toMatchObject({
+      const defaultCapsule = createPetHandoffCapsule(createBasePetSnapshot());
+      const cockpitCapsule = createPetHandoffCapsule(pet);
+
+      expect(defaultCapsule.runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(false);
+      expect(cockpitCapsule.runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(false);
+      expect(cockpitCapsule).toMatchObject({
         runtimeAuthorizationPreflightStatus: defaultProjection.status,
         runtimeAuthorizationPreflightCanStartRuntimeSlice: defaultProjection.canStartRuntimeSlice,
         runtimeAuthorizationPreflightReason: defaultProjection.reason,
@@ -1766,6 +1772,55 @@ describe('pet control snapshot', () => {
       expect(merged.projectionFidelity).toBe(snap.projectionFidelity);
     });
 
+    it('authorized runtime preflight remains read-only metadata and does not change primary gates or handoff nextAction', () => {
+      const snap = createBaseForHandoff({
+        readiness: { status: 'ready', blockers: [], preparing: false },
+        run: { active: true, phase: 'working', nextAction: 'Continue autonomous cycle' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 4, canFinalize: true },
+        projectionFidelity: { status: 'passed', score: 1, driftCount: 0, gateImpact: false, source: 'cockpit', checkedAt: 123, driftKeys: [] },
+      });
+      const baselineCapsule = createPetHandoffCapsule(snap);
+      const decision = createRuntimeAuthorizationPreflightDecision({
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+        reason: 'authorized',
+        docGateStatus: 'passed',
+        docGateReason: 'passed',
+        runtimeGateStatus: 'authorized',
+        runtimeGateReason: 'authorized',
+        checkedMarkerCount: 8,
+        missingMarkerCount: 0,
+        openP1Count: 0,
+        openP2Count: 0,
+        runtimeFilesChanged: false,
+        authorizationPresent: true,
+        authorizationExplicit: true,
+        authorizationIdPresent: true,
+        authorizationFresh: true,
+        authorizationScope: 'chrome_runtime',
+      });
+
+      const merged = mergeRuntimeAuthorizationPreflightIntoSnapshot(snap, decision);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(merged.runtimeAuthorizationPreflight.canStartRuntimeSlice).toBe(true);
+      expect(capsule.runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(true);
+      expect(merged.readiness).toBe(snap.readiness);
+      expect(merged.blockerLens).toBe(snap.blockerLens);
+      expect(merged.stopLine).toBe(snap.stopLine);
+      expect(merged.review).toBe(snap.review);
+      expect(merged.reviewHeat).toBe(snap.reviewHeat);
+      expect(merged.workerCycle).toBe(snap.workerCycle);
+      expect(merged.schedulerWatchdog).toBe(snap.schedulerWatchdog);
+      expect(merged.qualityGate).toBe(snap.qualityGate);
+      expect(merged.reviewLaneGate).toBe(snap.reviewLaneGate);
+      expect(merged.telemetry).toBe(snap.telemetry);
+      expect(merged.memoryPressure).toBe(snap.memoryPressure);
+      expect(merged.projectionFidelity).toBe(snap.projectionFidelity);
+      expect(capsule.nextAction).toBe(baselineCapsule.nextAction);
+      expect(capsule.nextAction).not.toBe('continue_run');
+    });
+
     it('projects authorized runtime preflight only when both source gates pass', () => {
       const decision = createRuntimeAuthorizationPreflightDecision({
         status: 'authorized',
@@ -1796,6 +1851,76 @@ describe('pet control snapshot', () => {
         authorizationScope: 'chrome_runtime',
       });
       expect(createPetHandoffCapsule(merged).runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(true);
+    });
+
+    it('mergeCockpitProjectionIntoPetSnapshot preserves the last observed runtime preflight as read-only metadata', () => {
+      const observed = mergeRuntimeAuthorizationPreflightIntoSnapshot(
+        createBasePetSnapshot({ readiness: { status: 'blocked', blockers: ['old_blocker'] } }),
+        createRuntimeAuthorizationPreflightDecision({
+          status: 'authorized',
+          canStartRuntimeSlice: true,
+          reason: 'authorized',
+          docGateStatus: 'passed',
+          runtimeGateStatus: 'authorized',
+          runtimeGateReason: 'authorized',
+          authorizationPresent: true,
+          authorizationExplicit: true,
+          authorizationIdPresent: true,
+          authorizationFresh: true,
+          authorizationScope: 'chrome_runtime',
+        }),
+      );
+      const cockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 456,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+
+      const merged = mergeCockpitProjectionIntoPetSnapshot(observed, cockpit);
+
+      expect(merged.generatedAt).toBe(456);
+      expect(merged.readiness).toEqual({ status: 'ready', blockers: [], preparing: false });
+      expect(merged.runtimeAuthorizationPreflight).toBe(observed.runtimeAuthorizationPreflight);
+      expect(createPetHandoffCapsule(merged).runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(true);
+    });
+
+    it('projection fidelity ignores runtime authorization preflight because it is an independent observed gate result', () => {
+      const cockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 789,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      const pet = createPetControlSnapshotFromRunCockpit(cockpit);
+      const observed = mergeRuntimeAuthorizationPreflightIntoSnapshot(
+        pet,
+        createRuntimeAuthorizationPreflightDecision({
+          status: 'authorized',
+          canStartRuntimeSlice: true,
+          reason: 'authorized',
+          runtimeGateStatus: 'authorized',
+          runtimeGateReason: 'authorized',
+          authorizationPresent: true,
+          authorizationExplicit: true,
+          authorizationIdPresent: true,
+          authorizationFresh: true,
+          authorizationScope: 'chrome_runtime',
+        }),
+      );
+
+      const audited = attachPetProjectionFidelity(observed, cockpit, 'cockpit');
+
+      expect(audited.runtimeAuthorizationPreflight.canStartRuntimeSlice).toBe(true);
+      expect(audited.projectionFidelity).toMatchObject({
+        status: 'passed',
+        score: 1,
+        driftCount: 0,
+        gateImpact: false,
+        driftKeys: [],
+      });
     });
 
     it('false-positive probe: secret-looking source extras stay out of pet snapshot and handoff while handoff equals stored projection', () => {
