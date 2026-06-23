@@ -52,19 +52,7 @@ export function buildAutonomousWorkerPrompt(input: AutonomousWorkerPromptInput):
   const safetyRedaction = createAutonomousSafetyRedactionSummary({
     surface: 'worker_prompt',
     metadataOnly: true,
-    redactionCandidates: [
-      input.title,
-      input.objective,
-      input.worktree,
-      input.branch,
-      ...(input.scope ?? []),
-      ...(input.likelyFiles ?? []),
-      ...(input.forbiddenFiles ?? []),
-      ...(input.verificationCommands ?? []),
-      input.reviewerGate,
-      input.stopCondition,
-      ...(input.extraInstructions ?? []),
-    ],
+    redactionCandidates: [input],
   });
   const forbiddenFiles = uniqueNonEmpty([
     ...DEFAULT_FORBIDDEN_FILES,

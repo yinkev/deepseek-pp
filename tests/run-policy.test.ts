@@ -75,7 +75,10 @@ describe('autonomous run policy and budget gate', () => {
     expect(createAutonomousSafetyRedactionSummary({
       surface: 'telemetry',
       metadataOnly: true,
-      redactionCandidates: [{ token: 'structured-secret-only' }],
+      redactionCandidates: [{
+        customSecret: 'structured-secret-only',
+        nested: { password: 'structured-password-only' },
+      }],
     })).toMatchObject({
       status: 'redacted',
       redacted: true,

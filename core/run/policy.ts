@@ -117,7 +117,7 @@ const BROWSER_MUTATION_TOOLS = new Set<string>([
 ]);
 const SAFETY_REDACTION_ISSUE_LIMIT = 8;
 const GENERIC_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]+/i;
-const SECRET_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*["']?\s*[:=]\s*["']?[^\s"' ,;}]+/i;
+const SECRET_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|password|credential|credentials|signed[_-]?path|signedPath)\s*["']?\s*[:=]\s*["']?[^\s"' ,;}]+/i;
 const REDACTION_MARKER_PATTERN = /\[(?:REDACTED|redacted)[^\]]*\]|_redacted(?::|_)/i;
 
 export function createAutonomousSafetyRedactionSummary(
@@ -242,6 +242,7 @@ function redactionRequired(candidates: readonly unknown[] | null | undefined): b
     if (!text) continue;
     const redacted = redactDurableToolString(text) ?? text;
     if (
+      structuredSafetyRedactionRequired(candidate) ||
       redacted !== text ||
       REDACTION_MARKER_PATTERN.test(text) ||
       GENERIC_URL_PATTERN.test(text) ||
@@ -261,6 +262,42 @@ function stringifySafetyCandidate(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function structuredSafetyRedactionRequired(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => structuredSafetyRedactionRequired(item));
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (isSafetySensitiveKey(key) && item !== undefined && item !== null && item !== '') return true;
+    if (structuredSafetyRedactionRequired(item)) return true;
+  }
+  return false;
+}
+
+function isSafetySensitiveKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return lower.includes('authorization') ||
+    lower.includes('cookie') ||
+    lower.includes('api-key') ||
+    lower.includes('api_key') ||
+    lower.includes('apikey') ||
+    lower.includes('access-token') ||
+    lower.includes('access_token') ||
+    lower.includes('accesstoken') ||
+    lower.includes('refresh-token') ||
+    lower.includes('refresh_token') ||
+    lower.includes('refreshtoken') ||
+    lower === 'token' ||
+    lower.endsWith('-token') ||
+    lower.endsWith('_token') ||
+    lower === 'accesstoken' ||
+    lower === 'refreshtoken' ||
+    lower.includes('secret') ||
+    lower.includes('signed') ||
+    lower.includes('password') ||
+    lower.includes('credential');
 }
 
 function normalizeSafetySurface(surface: unknown): AutonomousSafetyRedactionSurface {

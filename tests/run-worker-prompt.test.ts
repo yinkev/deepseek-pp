@@ -4,6 +4,7 @@ import {
   AUTONOMOUS_WORKER_QUALITY_GATE_XML,
   buildAutonomousWorkerPrompt,
   reviewAutonomousWorkerPromptContract,
+  type AutonomousWorkerPromptInput,
 } from '../core/run/worker-prompt';
 
 const EXPECTED_QUALITY_GATE_XML = `<quality_gate>
@@ -101,7 +102,7 @@ describe('autonomous worker prompt contract', () => {
   });
 
   it('adversarial privacy probe: redacts sensitive prompt inputs without weakening required contract markers', () => {
-    const prompt = buildAutonomousWorkerPrompt({
+    const input: AutonomousWorkerPromptInput & Record<string, unknown> = {
       stepNumber: Number.POSITIVE_INFINITY,
       title: 'Use Authorization: Bearer secret-token',
       objective: 'Inspect https://example.com/file?X-Amz-Signature=abc123 and sk-proj-1234567890abcdef1234567890abcdef.',
@@ -111,7 +112,9 @@ describe('autonomous worker prompt contract', () => {
       likelyFiles: ['core/run/worker-prompt.ts?secret=path-token'],
       verificationCommands: ['npm test -- token=secret'],
       extraInstructions: ['Set-Cookie: auth=secret-value', 'Bearer bearer-only-secret'],
-    });
+      futureWorkerField: { customSecret: 'future-secret-value' },
+    };
+    const prompt = buildAutonomousWorkerPrompt(input);
 
     expect(prompt).toContain('step 0');
     expect(prompt).toContain('Bearer [REDACTED]');
@@ -131,7 +134,7 @@ describe('autonomous worker prompt contract', () => {
     expect(prompt).toContain('<code>redaction_applied</code>');
     expect(prompt).toContain('<category>privacy</category>');
     expect(extractSafetyRedactionBlock(prompt)).toContain('<policy_gate>not_applicable</policy_gate>');
-    expect(prompt).not.toMatch(/secret-token|abc123|1234567890abcdef|secret-session|AAAA|path-token|secret-value/);
+    expect(prompt).not.toMatch(/secret-token|abc123|1234567890abcdef|secret-session|AAAA|path-token|secret-value|future-secret-value/);
     expect(reviewAutonomousWorkerPromptContract(prompt)).toEqual({
       ok: true,
       missingMarkers: [],
