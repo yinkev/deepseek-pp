@@ -38,6 +38,22 @@ export function selectReviewLaneGateReason(
   return records.some((record) => record.status === 'running') ? 'active_review' : 'unknown';
 }
 
+/**
+ * Pure boolean check: is this review-lane gate input blocking?
+ * Operates directly on raw input fields — no normalization.
+ */
+export function isBlockingGateInput(
+  gate: AutonomousRunReviewLaneGateInput | null | undefined,
+): boolean {
+  return gate?.canProceed === false ||
+    gate?.status === 'blocked' ||
+    gate?.blockingPriority === 'P1' ||
+    gate?.blockingPriority === 'P2' ||
+    gate?.reason === 'p1' ||
+    gate?.reason === 'p2' ||
+    gate?.reason === 'block_recommendation';
+}
+
 export interface NormalizedReviewLaneGateResult {
   blocked: boolean;
   reason: AutonomousRunReviewLaneGateReason;
@@ -63,22 +79,11 @@ export function normalizeReviewLaneGate(
     };
   }
 
-  const reason = normalizeGateReasonUnknown(gate.reason);
-  const blockingPriority = normalizeGateBlockingPriority(gate.blockingPriority);
-  const blockingLaneCount = normalizeNonNegativeCount(gate.blockingLaneCount);
-  const blocked = gate.canProceed === false ||
-    gate.status === 'blocked' ||
-    blockingPriority === 'P1' ||
-    blockingPriority === 'P2' ||
-    reason === 'p1' ||
-    reason === 'p2' ||
-    reason === 'block_recommendation';
-
   return {
-    blocked,
-    reason,
-    blockingPriority,
-    blockingLaneCount,
+    blocked: isBlockingGateInput(gate),
+    reason: normalizeGateReasonUnknown(gate.reason),
+    blockingPriority: normalizeGateBlockingPriority(gate.blockingPriority),
+    blockingLaneCount: normalizeNonNegativeCount(gate.blockingLaneCount),
   };
 }
 

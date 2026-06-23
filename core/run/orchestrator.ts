@@ -13,6 +13,7 @@ import {
   isBlockingReviewLaneRecord,
   selectReviewLaneBlockingPriority,
   selectReviewLaneGateReason,
+  isBlockingGateInput,
 } from './review-lane-gate';
 import {
   createAutonomousRunTelemetryPackage,
@@ -369,19 +370,9 @@ function mergeReviewLaneGates(
   explicitGate: AutonomousRunReviewLaneGateInput | null | undefined,
   persistedGate: AutonomousRunReviewLaneGateInput | null | undefined,
 ): AutonomousRunReviewLaneGateInput | null {
-  if (isBlockingReviewLaneGate(persistedGate)) return persistedGate ?? null;
-  if (isBlockingReviewLaneGate(explicitGate)) return explicitGate ?? null;
+  if (isBlockingGateInput(persistedGate)) return persistedGate ?? null;
+  if (isBlockingGateInput(explicitGate)) return explicitGate ?? null;
   return explicitGate ?? persistedGate ?? null;
-}
-
-function isBlockingReviewLaneGate(gate: AutonomousRunReviewLaneGateInput | null | undefined): boolean {
-  return gate?.canProceed === false ||
-    gate?.status === 'blocked' ||
-    gate?.blockingPriority === 'P1' ||
-    gate?.blockingPriority === 'P2' ||
-    gate?.reason === 'p1' ||
-    gate?.reason === 'p2' ||
-    gate?.reason === 'block_recommendation';
 }
 
 export async function getAutonomousRunCockpitSnapshot(
