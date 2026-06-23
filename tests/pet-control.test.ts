@@ -21,6 +21,7 @@ import {
   createPetReviewLaneGate,
   createPetRunQueue,
   mergePetReviewLanesIntoSnapshot,
+  mergeRuntimeAuthorizationPreflightIntoSnapshot,
   createUncheckedPetProjectionFidelity,
   attachPetProjectionFidelity,
   type PetControlSnapshot,
@@ -35,6 +36,7 @@ import type {
   AutonomousRunOrchestratorTelemetryResult,
   AutonomousRunQualityGateDecision,
 } from '../core/run/orchestrator';
+import type { AutonomousRuntimeAuthorizationPreflightDecision } from '../core/run/runtime-authorization-preflight';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -85,6 +87,7 @@ describe('pet control snapshot', () => {
     qualityGate?: Partial<PetControlSnapshot['qualityGate']>;
     reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
     reviewLaneGate?: Partial<PetControlSnapshot['reviewLaneGate']>;
+    runtimeAuthorizationPreflight?: Partial<PetControlSnapshot['runtimeAuthorizationPreflight']>;
     projectionFidelity?: Partial<PetControlSnapshot['projectionFidelity']>;
   } = {}): PetControlSnapshot {
     return {
@@ -268,6 +271,26 @@ describe('pet control snapshot', () => {
         blockingLaneCount: 0,
         ...overrides.reviewLaneGate,
       },
+      runtimeAuthorizationPreflight: {
+        status: 'none',
+        canStartRuntimeSlice: false,
+        reason: null,
+        docGateStatus: null,
+        docGateReason: null,
+        runtimeGateStatus: null,
+        runtimeGateReason: null,
+        checkedMarkerCount: 0,
+        missingMarkerCount: 0,
+        openP1Count: 0,
+        openP2Count: 0,
+        runtimeFilesChanged: false,
+        authorizationPresent: false,
+        authorizationExplicit: false,
+        authorizationIdPresent: false,
+        authorizationFresh: false,
+        authorizationScope: null,
+        ...overrides.runtimeAuthorizationPreflight,
+      },
       projectionFidelity: {
         ...createUncheckedPetProjectionFidelity(),
         ...overrides.projectionFidelity,
@@ -422,6 +445,32 @@ describe('pet control snapshot', () => {
         ok: storageIssues.length === 0,
         issues: storageIssues,
       },
+    };
+  }
+
+  function createRuntimeAuthorizationPreflightDecision(
+    overrides: Partial<AutonomousRuntimeAuthorizationPreflightDecision> = {},
+  ): AutonomousRuntimeAuthorizationPreflightDecision {
+    return {
+      status: 'blocked',
+      canStartRuntimeSlice: false,
+      reason: 'missing_authorization',
+      docGateStatus: 'passed',
+      docGateReason: 'passed',
+      docMissingMarkerCodes: [],
+      runtimeGateStatus: 'blocked',
+      runtimeGateReason: 'missing_authorization',
+      checkedMarkerCount: 8,
+      missingMarkerCount: 0,
+      openP1Count: 0,
+      openP2Count: 0,
+      runtimeFilesChanged: false,
+      authorizationPresent: false,
+      authorizationExplicit: false,
+      authorizationIdPresent: false,
+      authorizationFresh: true,
+      authorizationScope: null,
+      ...overrides,
     };
   }
 
@@ -1584,6 +1633,196 @@ describe('pet control snapshot', () => {
 
     expect(mergeRuntimeDoctorReportIntoSnapshot(base, null)).toBe(base);
     expect(mergeRuntimeDoctorReportIntoSnapshot(base, undefined)).toBe(base);
+  });
+
+  describe('runtime authorization preflight projection', () => {
+    const defaultProjection = {
+      status: 'none',
+      canStartRuntimeSlice: false,
+      reason: null,
+      docGateStatus: null,
+      docGateReason: null,
+      runtimeGateStatus: null,
+      runtimeGateReason: null,
+      checkedMarkerCount: 0,
+      missingMarkerCount: 0,
+      openP1Count: 0,
+      openP2Count: 0,
+      runtimeFilesChanged: false,
+      authorizationPresent: false,
+      authorizationExplicit: false,
+      authorizationIdPresent: false,
+      authorizationFresh: false,
+      authorizationScope: null,
+    } as const;
+
+    it('createPetControlSnapshotFromRunCockpit and handoff default to no observed runtime preflight', () => {
+      const idleCockpit = {
+        schemaVersion: 1 as const,
+        generatedAt: 123,
+        status: 'idle' as const,
+        totals: { queued: 0, running: 0, paused: 0, blocked: 0, succeeded: 0, failed: 0, cancelled: 0 },
+        activeRun: null,
+      };
+      const pet = createPetControlSnapshotFromRunCockpit(idleCockpit);
+
+      expect(pet.runtimeAuthorizationPreflight).toEqual(defaultProjection);
+      expect(createBasePetSnapshot().runtimeAuthorizationPreflight).toEqual(defaultProjection);
+      expect(createPetHandoffCapsule(pet)).toMatchObject({
+        runtimeAuthorizationPreflightStatus: defaultProjection.status,
+        runtimeAuthorizationPreflightCanStartRuntimeSlice: defaultProjection.canStartRuntimeSlice,
+        runtimeAuthorizationPreflightReason: defaultProjection.reason,
+        runtimeAuthorizationPreflightDocGateStatus: defaultProjection.docGateStatus,
+        runtimeAuthorizationPreflightDocGateReason: defaultProjection.docGateReason,
+        runtimeAuthorizationPreflightRuntimeGateStatus: defaultProjection.runtimeGateStatus,
+        runtimeAuthorizationPreflightRuntimeGateReason: defaultProjection.runtimeGateReason,
+        runtimeAuthorizationPreflightCheckedMarkerCount: defaultProjection.checkedMarkerCount,
+        runtimeAuthorizationPreflightMissingMarkerCount: defaultProjection.missingMarkerCount,
+        runtimeAuthorizationPreflightOpenP1Count: defaultProjection.openP1Count,
+        runtimeAuthorizationPreflightOpenP2Count: defaultProjection.openP2Count,
+        runtimeAuthorizationPreflightRuntimeFilesChanged: defaultProjection.runtimeFilesChanged,
+        runtimeAuthorizationPreflightAuthorizationPresent: defaultProjection.authorizationPresent,
+        runtimeAuthorizationPreflightAuthorizationExplicit: defaultProjection.authorizationExplicit,
+        runtimeAuthorizationPreflightAuthorizationIdPresent: defaultProjection.authorizationIdPresent,
+        runtimeAuthorizationPreflightAuthorizationFresh: defaultProjection.authorizationFresh,
+        runtimeAuthorizationPreflightAuthorizationScope: defaultProjection.authorizationScope,
+      });
+    });
+
+    it('mergeRuntimeAuthorizationPreflightIntoSnapshot returns original snapshot object unchanged if decision null or undefined', () => {
+      const snap = createBasePetSnapshot();
+      expect(mergeRuntimeAuthorizationPreflightIntoSnapshot(snap, null)).toBe(snap);
+      expect(mergeRuntimeAuthorizationPreflightIntoSnapshot(snap, undefined)).toBe(snap);
+    });
+
+    it('projects default blocked runtime preflight as safe metadata without changing adjacent pet lanes', () => {
+      const snap = createBaseForHandoff({
+        run: { active: true, phase: 'working' },
+        review: { grade: 'A', decision: 'pass', proofDebtCount: 0, issueCount: 0, acceptedEvidenceCount: 4, canFinalize: true },
+      });
+      const baselineCapsule = createPetHandoffCapsule(snap);
+      const decision = createRuntimeAuthorizationPreflightDecision({
+        openP1Count: 1,
+        openP2Count: 2,
+        runtimeFilesChanged: true,
+        authorizationPresent: true,
+        authorizationExplicit: false,
+        authorizationIdPresent: true,
+        authorizationFresh: false,
+        authorizationScope: 'chrome_runtime',
+      });
+
+      const merged = mergeRuntimeAuthorizationPreflightIntoSnapshot(snap, decision);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(merged).not.toBe(snap);
+      expect(merged.runtimeAuthorizationPreflight).toEqual({
+        status: 'blocked',
+        canStartRuntimeSlice: false,
+        reason: 'missing_authorization',
+        docGateStatus: 'passed',
+        docGateReason: 'passed',
+        runtimeGateStatus: 'blocked',
+        runtimeGateReason: 'missing_authorization',
+        checkedMarkerCount: 8,
+        missingMarkerCount: 0,
+        openP1Count: 1,
+        openP2Count: 2,
+        runtimeFilesChanged: true,
+        authorizationPresent: true,
+        authorizationExplicit: false,
+        authorizationIdPresent: true,
+        authorizationFresh: false,
+        authorizationScope: 'chrome_runtime',
+      });
+      expect(capsule.runtimeAuthorizationPreflightStatus).toBe(merged.runtimeAuthorizationPreflight.status);
+      expect(capsule.runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(merged.runtimeAuthorizationPreflight.canStartRuntimeSlice);
+      expect(capsule.runtimeAuthorizationPreflightReason).toBe(merged.runtimeAuthorizationPreflight.reason);
+      expect(capsule.runtimeAuthorizationPreflightDocGateStatus).toBe(merged.runtimeAuthorizationPreflight.docGateStatus);
+      expect(capsule.runtimeAuthorizationPreflightDocGateReason).toBe(merged.runtimeAuthorizationPreflight.docGateReason);
+      expect(capsule.runtimeAuthorizationPreflightRuntimeGateStatus).toBe(merged.runtimeAuthorizationPreflight.runtimeGateStatus);
+      expect(capsule.runtimeAuthorizationPreflightRuntimeGateReason).toBe(merged.runtimeAuthorizationPreflight.runtimeGateReason);
+      expect(capsule.runtimeAuthorizationPreflightCheckedMarkerCount).toBe(merged.runtimeAuthorizationPreflight.checkedMarkerCount);
+      expect(capsule.runtimeAuthorizationPreflightMissingMarkerCount).toBe(merged.runtimeAuthorizationPreflight.missingMarkerCount);
+      expect(capsule.runtimeAuthorizationPreflightOpenP1Count).toBe(merged.runtimeAuthorizationPreflight.openP1Count);
+      expect(capsule.runtimeAuthorizationPreflightOpenP2Count).toBe(merged.runtimeAuthorizationPreflight.openP2Count);
+      expect(capsule.runtimeAuthorizationPreflightRuntimeFilesChanged).toBe(merged.runtimeAuthorizationPreflight.runtimeFilesChanged);
+      expect(capsule.runtimeAuthorizationPreflightAuthorizationPresent).toBe(merged.runtimeAuthorizationPreflight.authorizationPresent);
+      expect(capsule.runtimeAuthorizationPreflightAuthorizationExplicit).toBe(merged.runtimeAuthorizationPreflight.authorizationExplicit);
+      expect(capsule.runtimeAuthorizationPreflightAuthorizationIdPresent).toBe(merged.runtimeAuthorizationPreflight.authorizationIdPresent);
+      expect(capsule.runtimeAuthorizationPreflightAuthorizationFresh).toBe(merged.runtimeAuthorizationPreflight.authorizationFresh);
+      expect(capsule.runtimeAuthorizationPreflightAuthorizationScope).toBe(merged.runtimeAuthorizationPreflight.authorizationScope);
+      expect(capsule.nextAction).toBe(baselineCapsule.nextAction);
+      expect(merged.stopLine).toBe(snap.stopLine);
+      expect(merged.review).toBe(snap.review);
+      expect(merged.reviewHeat).toBe(snap.reviewHeat);
+      expect(merged.blockerLens).toBe(snap.blockerLens);
+      expect(merged.workerCycle).toBe(snap.workerCycle);
+      expect(merged.schedulerWatchdog).toBe(snap.schedulerWatchdog);
+      expect(merged.qualityGate).toBe(snap.qualityGate);
+      expect(merged.reviewLaneGate).toBe(snap.reviewLaneGate);
+      expect(merged.telemetry).toBe(snap.telemetry);
+      expect(merged.memoryPressure).toBe(snap.memoryPressure);
+      expect(merged.projectionFidelity).toBe(snap.projectionFidelity);
+    });
+
+    it('projects authorized runtime preflight only when both source gates pass', () => {
+      const decision = createRuntimeAuthorizationPreflightDecision({
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+        reason: 'authorized',
+        docGateStatus: 'passed',
+        docGateReason: 'passed',
+        runtimeGateStatus: 'authorized',
+        runtimeGateReason: 'authorized',
+        authorizationPresent: true,
+        authorizationExplicit: true,
+        authorizationIdPresent: true,
+        authorizationFresh: true,
+        authorizationScope: 'chrome_runtime',
+      });
+      const merged = mergeRuntimeAuthorizationPreflightIntoSnapshot(createBasePetSnapshot(), decision);
+
+      expect(merged.runtimeAuthorizationPreflight).toMatchObject({
+        status: 'authorized',
+        canStartRuntimeSlice: true,
+        reason: 'authorized',
+        docGateStatus: 'passed',
+        runtimeGateStatus: 'authorized',
+        authorizationPresent: true,
+        authorizationExplicit: true,
+        authorizationIdPresent: true,
+        authorizationFresh: true,
+        authorizationScope: 'chrome_runtime',
+      });
+      expect(createPetHandoffCapsule(merged).runtimeAuthorizationPreflightCanStartRuntimeSlice).toBe(true);
+    });
+
+    it('false-positive probe: secret-looking source extras stay out of pet snapshot and handoff while handoff equals stored projection', () => {
+      const source = createRuntimeAuthorizationPreflightDecision({
+        docMissingMarkerCodes: ['step_10_blocked', 'background_file_frozen'],
+      }) as AutonomousRuntimeAuthorizationPreflightDecision & Record<string, unknown>;
+      source.authorizationId = 'SECRET_AUTHORIZATION_ID_123';
+      source.rawDocumentText = 'raw doc token=SECRET_DOC_TOKEN https://secret.example.com';
+      source.rawReviewProse = 'SECRET_REVIEW_PROSE';
+      source.missingMarkerCodes = ['SECRET_MARKER_ARRAY'];
+      source.prompt = 'SECRET_PROMPT_TRANSCRIPT';
+
+      expect(JSON.stringify(source)).toMatch(/SECRET_AUTHORIZATION_ID_123|SECRET_DOC_TOKEN|secret\.example|SECRET_REVIEW_PROSE|SECRET_MARKER_ARRAY|SECRET_PROMPT_TRANSCRIPT|step_10_blocked/);
+
+      const merged = mergeRuntimeAuthorizationPreflightIntoSnapshot(createBaseForHandoff(), source);
+      const capsule = createPetHandoffCapsule(merged);
+      const petJson = JSON.stringify(merged);
+      const capsuleJson = JSON.stringify(capsule);
+
+      expect(merged.runtimeAuthorizationPreflight.missingMarkerCount).toBe(0);
+      expect(petJson).not.toMatch(/SECRET_AUTHORIZATION_ID_123|SECRET_DOC_TOKEN|secret\.example|SECRET_REVIEW_PROSE|SECRET_MARKER_ARRAY|SECRET_PROMPT_TRANSCRIPT|step_10_blocked|background_file_frozen|docMissingMarkerCodes|missingMarkerCodes/);
+      expect(capsuleJson).not.toMatch(/SECRET_AUTHORIZATION_ID_123|SECRET_DOC_TOKEN|secret\.example|SECRET_REVIEW_PROSE|SECRET_MARKER_ARRAY|SECRET_PROMPT_TRANSCRIPT|step_10_blocked|background_file_frozen|docMissingMarkerCodes|missingMarkerCodes/);
+      expect(capsule.runtimeAuthorizationPreflightStatus).toBe(merged.runtimeAuthorizationPreflight.status);
+      expect(capsule.runtimeAuthorizationPreflightReason).toBe(merged.runtimeAuthorizationPreflight.reason);
+      expect(capsule.runtimeAuthorizationPreflightRuntimeGateReason).toBe(merged.runtimeAuthorizationPreflight.runtimeGateReason);
+      expect(capsule.runtimeAuthorizationPreflightAuthorizationScope).toBe(merged.runtimeAuthorizationPreflight.authorizationScope);
+    });
   });
 
   describe('createPetHandoffCapsule', () => {

@@ -16,7 +16,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
 - Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, pure review dispatch planning, first-class contract coverage automation, pure pet cockpit projection contract, and controlled runtime resume gate.
 - Post-Step-9 hardening adds a pure doc-resumption gate so a fresh agent can verify the current blocked runtime posture from repo docs without reading chat history.
-- The runtime authorization preflight combines the doc-resumption gate with the controlled runtime resume gate, so Step 10 has one pure decision object and remains blocked by default without explicit durable `chrome_runtime` authorization.
+- The runtime authorization preflight combines the doc-resumption gate with the controlled runtime resume gate, and the pet cockpit/handoff now project that decision as safe metadata, so Step 10 is visible as blocked by default without explicit durable `chrome_runtime` authorization.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -122,7 +122,7 @@ Every implementation slice must follow this order:
 ### Step 8: Pet Cockpit Projection Contract
 
 - Files: `core/pet/control.ts`, `tests/pet-control.test.ts`, `tests/pet-orchestrator-bridge.test.ts`, plus `docs/plan/pet-cockpit-projection-contract.md`.
-- Contract: pet snapshot exposes only safe metadata for run posture, scheduler/watchdog gate, telemetry handoff, quality gate, review lane gate, fidelity score, and stop-line state.
+- Contract: pet snapshot exposes only safe metadata for run posture, scheduler/watchdog gate, telemetry handoff, quality gate, review lane gate, runtime authorization preflight, fidelity score, and stop-line state.
 - Acceptance: projection tests prove no raw labels, prompts, URLs, transcripts, target IDs, or secret-like strings leak.
 
 ### Step 9: Controlled Runtime Resume Gate
@@ -141,7 +141,7 @@ Every implementation slice must follow this order:
 
 Step 10 is the next implementation slice, but it is blocked until the user explicitly resumes Chrome/runtime work.
 
-Before any Step 10 implementation starts, run `evaluateAutonomousRuntimeAuthorizationPreflight` from `core/run/runtime-authorization-preflight.ts` against the repo-visible doc contract and the runtime resume input. The current default decision must be blocked with `missing_authorization` because no explicit durable `chrome_runtime` authorization exists.
+Before any Step 10 implementation starts, run `evaluateAutonomousRuntimeAuthorizationPreflight` from `core/run/runtime-authorization-preflight.ts` against the repo-visible doc contract and the runtime resume input. The pet snapshot field `runtimeAuthorizationPreflight` and handoff fields prefixed `runtimeAuthorizationPreflight*` expose only the safe decision metadata. The current default decision must be blocked with `missing_authorization` because no explicit durable `chrome_runtime` authorization exists.
 
 Default worker prompt:
 

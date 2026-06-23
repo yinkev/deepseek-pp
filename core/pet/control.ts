@@ -34,6 +34,7 @@ import type {
   AutonomousRunCycleResult,
   AutonomousRunCycleReviewSummary,
 } from '../run/worker';
+import type { AutonomousRuntimeAuthorizationPreflightDecision } from '../run/runtime-authorization-preflight';
 
 export type PetBlockerCategory =
   | 'auth'
@@ -123,6 +124,7 @@ export type PetQualityGateStatus = 'none' | 'clear' | 'warning' | 'blocked';
 export type PetSchedulerWatchdogStatus = 'none' | 'clear' | 'blocked' | 'retry' | 'paused' | 'terminal';
 export type PetProjectionFidelityStatus = 'unchecked' | 'passed' | 'drifted';
 export type PetProjectionFidelitySource = 'none' | 'cockpit' | 'orchestrator_cycle';
+export type PetRuntimeAuthorizationPreflightStatus = 'none' | AutonomousRuntimeAuthorizationPreflightDecision['status'];
 export type PetProjectionFidelityDriftKey =
   | 'generated_at'
   | 'readiness_status'
@@ -226,6 +228,26 @@ export interface PetSchedulerWatchdog {
   qualityGateConflictCount: number | null;
 }
 
+export interface PetRuntimeAuthorizationPreflight {
+  status: PetRuntimeAuthorizationPreflightStatus;
+  canStartRuntimeSlice: boolean;
+  reason: AutonomousRuntimeAuthorizationPreflightDecision['reason'] | null;
+  docGateStatus: AutonomousRuntimeAuthorizationPreflightDecision['docGateStatus'] | null;
+  docGateReason: AutonomousRuntimeAuthorizationPreflightDecision['docGateReason'] | null;
+  runtimeGateStatus: AutonomousRuntimeAuthorizationPreflightDecision['runtimeGateStatus'] | null;
+  runtimeGateReason: AutonomousRuntimeAuthorizationPreflightDecision['runtimeGateReason'] | null;
+  checkedMarkerCount: number;
+  missingMarkerCount: number;
+  openP1Count: number;
+  openP2Count: number;
+  runtimeFilesChanged: boolean;
+  authorizationPresent: boolean;
+  authorizationExplicit: boolean;
+  authorizationIdPresent: boolean;
+  authorizationFresh: boolean;
+  authorizationScope: AutonomousRuntimeAuthorizationPreflightDecision['authorizationScope'];
+}
+
 export interface PetControlSnapshot {
   schemaVersion: 1;
   generatedAt: number;
@@ -314,6 +336,7 @@ export interface PetControlSnapshot {
     lanes: PetReviewLaneSummary[];
   };
   reviewLaneGate: PetReviewLaneGate;
+  runtimeAuthorizationPreflight: PetRuntimeAuthorizationPreflight;
   projectionFidelity: PetProjectionFidelity;
 }
 
@@ -547,6 +570,7 @@ function createUnauditedPetControlSnapshotFromRunCockpit(
   };
   const reviewLaneGate = createPetReviewLaneGate(reviewLanes);
   const runQueue = createPetRunQueue(snapshot.totals);
+  const runtimeAuthorizationPreflight = createDefaultPetRuntimeAuthorizationPreflight();
 
   return {
     schemaVersion: 1,
@@ -595,6 +619,7 @@ function createUnauditedPetControlSnapshotFromRunCockpit(
     qualityGate,
     reviewLanes,
     reviewLaneGate,
+    runtimeAuthorizationPreflight,
     projectionFidelity: createUncheckedPetProjectionFidelity(),
   };
 }
@@ -1241,6 +1266,23 @@ export interface PetHandoffCapsule {
   reviewLaneGateCanProceed: boolean;
   reviewLaneGateBlockingPriority: PetReviewLanePriority | null;
   reviewLaneGateBlockingLaneCount: number;
+  runtimeAuthorizationPreflightStatus: PetRuntimeAuthorizationPreflightStatus;
+  runtimeAuthorizationPreflightCanStartRuntimeSlice: boolean;
+  runtimeAuthorizationPreflightReason: PetRuntimeAuthorizationPreflight['reason'];
+  runtimeAuthorizationPreflightDocGateStatus: PetRuntimeAuthorizationPreflight['docGateStatus'];
+  runtimeAuthorizationPreflightDocGateReason: PetRuntimeAuthorizationPreflight['docGateReason'];
+  runtimeAuthorizationPreflightRuntimeGateStatus: PetRuntimeAuthorizationPreflight['runtimeGateStatus'];
+  runtimeAuthorizationPreflightRuntimeGateReason: PetRuntimeAuthorizationPreflight['runtimeGateReason'];
+  runtimeAuthorizationPreflightCheckedMarkerCount: number;
+  runtimeAuthorizationPreflightMissingMarkerCount: number;
+  runtimeAuthorizationPreflightOpenP1Count: number;
+  runtimeAuthorizationPreflightOpenP2Count: number;
+  runtimeAuthorizationPreflightRuntimeFilesChanged: boolean;
+  runtimeAuthorizationPreflightAuthorizationPresent: boolean;
+  runtimeAuthorizationPreflightAuthorizationExplicit: boolean;
+  runtimeAuthorizationPreflightAuthorizationIdPresent: boolean;
+  runtimeAuthorizationPreflightAuthorizationFresh: boolean;
+  runtimeAuthorizationPreflightAuthorizationScope: PetRuntimeAuthorizationPreflight['authorizationScope'];
   projectionFidelityStatus: PetProjectionFidelityStatus;
   projectionFidelityScore: number;
   projectionFidelityDriftCount: number;
@@ -1265,6 +1307,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     qualityGate: qg,
     reviewLanes: rl,
     runQueue: rq,
+    runtimeAuthorizationPreflight: rap,
   } = snapshot;
 
   let targetState: PetHandoffCapsule['targetState'] = 'none';
@@ -1382,11 +1425,15 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const telemetryErrorCode = tel ? tel.errorCode : null;
   const telemetryQualityGatePackagePresent = tel ? tel.qualityGatePackagePresent : false;
   const telemetryReviewLanePackagePresent = tel ? tel.reviewLanePackagePresent : false;
+  const redactionCandidate = {
+    ...snapshot,
+    runtimeAuthorizationPreflight: undefined,
+  };
   const safetyRedaction = createAutonomousSafetyRedactionSummary({
     surface: 'pet_handoff',
     metadataOnly: true,
     policyDecision: workerCyclePolicyDecision,
-    redactionCandidates: [snapshot],
+    redactionCandidates: [redactionCandidate],
   });
 
   const allReviewLaneSummaries = rl && Array.isArray(rl.lanes)
@@ -1423,6 +1470,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const reviewLaneGateCanProceed = reviewLaneGate.canProceed;
   const reviewLaneGateBlockingPriority = reviewLaneGate.blockingPriority;
   const reviewLaneGateBlockingLaneCount = reviewLaneGate.blockingLaneCount;
+  const runtimeAuthorizationPreflight = rap ?? createDefaultPetRuntimeAuthorizationPreflight();
 
   return {
     schemaVersion: 1,
@@ -1535,6 +1583,23 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     reviewLaneGateCanProceed,
     reviewLaneGateBlockingPriority,
     reviewLaneGateBlockingLaneCount,
+    runtimeAuthorizationPreflightStatus: runtimeAuthorizationPreflight.status,
+    runtimeAuthorizationPreflightCanStartRuntimeSlice: runtimeAuthorizationPreflight.canStartRuntimeSlice,
+    runtimeAuthorizationPreflightReason: runtimeAuthorizationPreflight.reason,
+    runtimeAuthorizationPreflightDocGateStatus: runtimeAuthorizationPreflight.docGateStatus,
+    runtimeAuthorizationPreflightDocGateReason: runtimeAuthorizationPreflight.docGateReason,
+    runtimeAuthorizationPreflightRuntimeGateStatus: runtimeAuthorizationPreflight.runtimeGateStatus,
+    runtimeAuthorizationPreflightRuntimeGateReason: runtimeAuthorizationPreflight.runtimeGateReason,
+    runtimeAuthorizationPreflightCheckedMarkerCount: runtimeAuthorizationPreflight.checkedMarkerCount,
+    runtimeAuthorizationPreflightMissingMarkerCount: runtimeAuthorizationPreflight.missingMarkerCount,
+    runtimeAuthorizationPreflightOpenP1Count: runtimeAuthorizationPreflight.openP1Count,
+    runtimeAuthorizationPreflightOpenP2Count: runtimeAuthorizationPreflight.openP2Count,
+    runtimeAuthorizationPreflightRuntimeFilesChanged: runtimeAuthorizationPreflight.runtimeFilesChanged,
+    runtimeAuthorizationPreflightAuthorizationPresent: runtimeAuthorizationPreflight.authorizationPresent,
+    runtimeAuthorizationPreflightAuthorizationExplicit: runtimeAuthorizationPreflight.authorizationExplicit,
+    runtimeAuthorizationPreflightAuthorizationIdPresent: runtimeAuthorizationPreflight.authorizationIdPresent,
+    runtimeAuthorizationPreflightAuthorizationFresh: runtimeAuthorizationPreflight.authorizationFresh,
+    runtimeAuthorizationPreflightAuthorizationScope: runtimeAuthorizationPreflight.authorizationScope,
     projectionFidelityStatus: normalizeProjectionStatus(snapshot.projectionFidelity?.status),
     projectionFidelityScore: normalizeProjectionScore(snapshot.projectionFidelity?.score),
     projectionFidelityDriftCount: normalizeProjectionCount(snapshot.projectionFidelity?.driftCount),
@@ -1561,6 +1626,37 @@ export function mergePromptMemoryPressureIntoSnapshot(
       availableCount: pressure.availableCount,
       selectedTokenEstimate: pressure.selectedTokenEstimate,
       budgetTokens: pressure.budgetTokens,
+    },
+  };
+}
+
+export function mergeRuntimeAuthorizationPreflightIntoSnapshot(
+  snapshot: PetControlSnapshot,
+  decision: AutonomousRuntimeAuthorizationPreflightDecision | null | undefined,
+): PetControlSnapshot {
+  if (!decision) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    runtimeAuthorizationPreflight: {
+      status: decision.status,
+      canStartRuntimeSlice: decision.canStartRuntimeSlice,
+      reason: decision.reason,
+      docGateStatus: decision.docGateStatus,
+      docGateReason: decision.docGateReason,
+      runtimeGateStatus: decision.runtimeGateStatus,
+      runtimeGateReason: decision.runtimeGateReason,
+      checkedMarkerCount: decision.checkedMarkerCount,
+      missingMarkerCount: decision.missingMarkerCount,
+      openP1Count: decision.openP1Count,
+      openP2Count: decision.openP2Count,
+      runtimeFilesChanged: decision.runtimeFilesChanged,
+      authorizationPresent: decision.authorizationPresent,
+      authorizationExplicit: decision.authorizationExplicit,
+      authorizationIdPresent: decision.authorizationIdPresent,
+      authorizationFresh: decision.authorizationFresh,
+      authorizationScope: decision.authorizationScope,
     },
   };
 }
@@ -1748,6 +1844,28 @@ function createDefaultPetSchedulerWatchdog(): PetSchedulerWatchdog {
     expiredEvidenceCount: 0,
     blockingLaneCount: 0,
     qualityGateConflictCount: null,
+  };
+}
+
+function createDefaultPetRuntimeAuthorizationPreflight(): PetRuntimeAuthorizationPreflight {
+  return {
+    status: 'none',
+    canStartRuntimeSlice: false,
+    reason: null,
+    docGateStatus: null,
+    docGateReason: null,
+    runtimeGateStatus: null,
+    runtimeGateReason: null,
+    checkedMarkerCount: 0,
+    missingMarkerCount: 0,
+    openP1Count: 0,
+    openP2Count: 0,
+    runtimeFilesChanged: false,
+    authorizationPresent: false,
+    authorizationExplicit: false,
+    authorizationIdPresent: false,
+    authorizationFresh: false,
+    authorizationScope: null,
   };
 }
 
