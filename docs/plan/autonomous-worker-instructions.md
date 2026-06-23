@@ -45,6 +45,8 @@ Build DeepSeek++ into a self-governing autonomous worker control plane:
 
 The operating default is autonomy, not supervision. The user should not be the relay, evaluator, or babysitter. Agents and workers should continue through safe, scoped, verifiable slices until a real blocker appears.
 
+The active execution roadmap is maintained in `docs/plan/autonomous-worker-roadmap.md`. That roadmap is the source of truth for step order, commit boundaries, quality gates, and the next worker prompt.
+
 ## Execution Loop
 
 For each autonomous work cycle:
