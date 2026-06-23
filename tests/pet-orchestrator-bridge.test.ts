@@ -419,6 +419,33 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(JSON.stringify(capsule)).not.toMatch(/SECRET_ROLE|SECRET_REASON|SECRET_PROMPT|SECRET_TRANSCRIPT|secret\.invalid|token=secret|PX/);
   });
 
+  it('ignores primitive malformed orchestrator review lane plans without leaking raw values', () => {
+    const snapshot = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
+      { role: 'safety', status: 'blocked', recommendation: 'block', highestPriority: 'P1', issueCount: 1 },
+    ]);
+
+    const merged = mergeAutonomousReviewLanePlanIntoSnapshot(snapshot, 'SECRET_PRIMITIVE_PLAN' as any);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.reviewLanes).toMatchObject({
+      total: 0,
+      activeCount: 0,
+      blockedCount: 0,
+      blockCount: 0,
+      highestPriority: null,
+      lanes: [],
+    });
+    expect(merged.reviewLaneGate).toEqual({
+      status: 'clear',
+      reason: 'none',
+      canProceed: true,
+      blockingPriority: null,
+      blockingLaneCount: 0,
+    });
+    expect(JSON.stringify(merged)).not.toMatch(/SECRET_PRIMITIVE_PLAN/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_PRIMITIVE_PLAN/);
+  });
+
   it('bounds and sanitizes malformed dispatch review lane plans', () => {
     const snapshot = createBasePetSnapshot();
     const selectedRoles = Array.from({ length: 650 }, (_, index) => index === 0 ? 'SECRET_ROLE' : 'grok');

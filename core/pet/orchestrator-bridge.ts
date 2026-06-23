@@ -115,22 +115,24 @@ function isMemoryRisk(snapshot: PetControlSnapshot): boolean {
 function createReviewLaneInputsFromPlan(
   plan: AutonomousRunOrchestratorCycleResult['reviewLanePlan'],
 ): PetReviewLaneInput[] {
-  if (plan.action === 'halt') {
-    const count = normalizeProjectedLaneCount(plan.blockingLaneCount) || 1;
+  const record = toRecord(plan);
+
+  if (record.action === 'halt') {
+    const count = normalizeProjectedLaneCount(record.blockingLaneCount) || 1;
     return Array.from({ length: count }, () => ({
       role: 'other',
       status: 'blocked',
       grade: null,
       recommendation: 'block',
-      highestPriority: normalizePriority(plan.blockingPriority),
+      highestPriority: normalizePriority(record.blockingPriority),
       issueCount: 0,
       updatedAt: null,
     }));
   }
 
-  if (plan.action === 'dispatch') {
-    const selectedRoles = Array.isArray(plan.selectedRoles)
-      ? plan.selectedRoles.slice(0, MAX_PROJECTED_REVIEW_LANE_PLAN_COUNT)
+  if (record.action === 'dispatch') {
+    const selectedRoles = Array.isArray(record.selectedRoles)
+      ? record.selectedRoles.slice(0, MAX_PROJECTED_REVIEW_LANE_PLAN_COUNT)
       : [];
     return selectedRoles.map((role) => ({
       role: normalizeRole(role),
@@ -154,7 +156,7 @@ function normalizeProjectedLaneCount(count: unknown): number {
 function sanitizeReviewLanes(lanes: readonly unknown[] | null | undefined): PetReviewLaneSummary[] {
   if (!Array.isArray(lanes)) return [];
   return lanes.map((lane) => {
-    const record = (lane ?? {}) as Record<string, unknown>;
+    const record = toRecord(lane);
     return {
       role: normalizeRole(record.role),
       status: normalizeStatus(record.status),
@@ -165,6 +167,10 @@ function sanitizeReviewLanes(lanes: readonly unknown[] | null | undefined): PetR
       updatedAt: null,
     };
   });
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
 }
 
 function createReviewLaneAggregate(
