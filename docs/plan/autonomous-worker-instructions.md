@@ -122,7 +122,7 @@ Priority order:
    - Gate: lane outputs are summarized as verdict/evidence only; no raw transcripts or advisor authority leaks.
 
 7. Autonomous telemetry and repo-visible handoff.
-   - Status: complete for pure repo-visible telemetry/handoff: marker-based telemetry writing, pet telemetry projection, quality-gate projection, orchestrator-cycle-to-pet bridge, and runtime authorization preflight safe metadata through both direct run telemetry package generation and orchestrator-written telemetry handoff.
+   - Status: complete for pure repo-visible telemetry/handoff: marker-based telemetry writing, pet telemetry projection, quality-gate projection, orchestrator-cycle-to-pet bridge, and runtime authorization preflight safe metadata through direct run telemetry package generation plus orchestrator-written telemetry handoff. The pure orchestrator cycle treats `telemetry.runtimeAuthorizationPreflight` as caller-supplied/pass-through metadata; it does not auto-evaluate, auto-inject, or synthesize runtime authorization preflight state.
    - Runtime/live dispatch remains frozen; telemetry visibility does not authorize Step 10 or wire Chrome/runtime behavior.
    - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state, and runtime authorization preflight metadata stays safe/bounded.
 
@@ -136,7 +136,7 @@ Priority order:
    - Implemented by requiring explicit durable `chrome_runtime` authorization, a complete resume checklist, no pre-authorization runtime file changes, and no unresolved independent P1/P2 review findings.
    - Gate: no `entrypoints/background.ts` change until the resume guard authorizes Step 10; runtime smoke required before claiming live autonomy.
 
-Immediate next worker slice: Step 10 runtime wiring remains blocked until explicit durable `chrome_runtime` authorization exists and the runtime authorization preflight authorizes the slice.
+Immediate next worker slice: Step 10 runtime wiring remains blocked until explicit durable `chrome_runtime` authorization exists and the runtime authorization preflight reports authorized / `canStartRuntimeSlice` true.
 
 ## Subagent Use
 

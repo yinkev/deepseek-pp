@@ -16,7 +16,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
 - Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, pure review dispatch planning, first-class contract coverage automation, pure pet cockpit projection contract, and controlled runtime resume gate.
 - Post-Step-9 hardening adds a pure doc-resumption gate so a fresh agent can verify the current blocked runtime posture from repo docs without reading chat history.
-- The runtime authorization preflight combines the doc-resumption gate with the controlled runtime resume gate. Its safe metadata is now repo-visible through the pet cockpit/handoff, direct run telemetry package generation, and orchestrator-written telemetry handoff; Step 10 remains blocked by default without explicit durable `chrome_runtime` authorization.
+- The runtime authorization preflight combines the doc-resumption gate with the controlled runtime resume gate. Its safe metadata is now repo-visible through the pet cockpit/handoff, direct run telemetry package generation, and orchestrator-written telemetry handoff; orchestrator-written telemetry only forwards caller-supplied/pass-through `telemetry.runtimeAuthorizationPreflight` metadata and does not auto-evaluate or auto-inject runtime authorization preflight state. Step 10 remains blocked by default without explicit durable `chrome_runtime` authorization.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -139,9 +139,9 @@ Every implementation slice must follow this order:
 
 ## Immediate Next Worker Slice
 
-Step 10 is the next implementation slice, but it is blocked until the user explicitly resumes Chrome/runtime work.
+Step 10 is the next implementation slice, but it remains blocked until explicit durable `chrome_runtime` authorization exists and the runtime authorization preflight reports authorized / `canStartRuntimeSlice` true.
 
-Before any Step 10 implementation starts, run `evaluateAutonomousRuntimeAuthorizationPreflight` from `core/run/runtime-authorization-preflight.ts` against the repo-visible doc contract and the runtime resume input. The pet snapshot field `runtimeAuthorizationPreflight` and handoff fields prefixed `runtimeAuthorizationPreflight*` expose only the safe decision metadata. The current default decision must be blocked with `missing_authorization` because no explicit durable `chrome_runtime` authorization exists. The pet projection is read-only; Step 10 still requires a fresh runtime authorization preflight immediately before runtime work.
+Before any Step 10 implementation starts, run `evaluateAutonomousRuntimeAuthorizationPreflight` from `core/run/runtime-authorization-preflight.ts` against the repo-visible doc contract and the runtime resume input. The pet snapshot field `runtimeAuthorizationPreflight` and handoff fields prefixed `runtimeAuthorizationPreflight*` expose only the safe decision metadata. Orchestrator-written telemetry can carry that field only when the caller supplies it; the pure orchestrator cycle does not auto-evaluate or auto-inject it. The current default decision must be blocked with `missing_authorization` because no explicit durable `chrome_runtime` authorization exists. The pet projection is read-only; telemetry visibility does not authorize Step 10 or wire Chrome/runtime behavior, and Step 10 still requires a fresh runtime authorization preflight immediately before runtime work.
 
 Default worker prompt:
 
