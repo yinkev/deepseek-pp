@@ -1,3 +1,5 @@
+import { createAutonomousSafetyRedactionSummary } from './policy';
+
 export interface AutonomousWorkerPromptInput {
   stepNumber: number;
   title: string;
@@ -42,10 +44,28 @@ export const AUTONOMOUS_WORKER_PROMPT_REQUIRED_MARKERS = [
   'commit after implementation',
   'P1/P2',
   'entrypoints/background.ts',
+  '<safety_redaction>',
   '<step_report>',
 ] as const;
 
 export function buildAutonomousWorkerPrompt(input: AutonomousWorkerPromptInput): string {
+  const safetyRedaction = createAutonomousSafetyRedactionSummary({
+    surface: 'worker_prompt',
+    metadataOnly: true,
+    redactionCandidates: [
+      input.title,
+      input.objective,
+      input.worktree,
+      input.branch,
+      ...(input.scope ?? []),
+      ...(input.likelyFiles ?? []),
+      ...(input.forbiddenFiles ?? []),
+      ...(input.verificationCommands ?? []),
+      input.reviewerGate,
+      input.stopCondition,
+      ...(input.extraInstructions ?? []),
+    ],
+  });
   const forbiddenFiles = uniqueNonEmpty([
     ...DEFAULT_FORBIDDEN_FILES,
     ...(input.forbiddenFiles ?? []),
@@ -66,6 +86,21 @@ export function buildAutonomousWorkerPrompt(input: AutonomousWorkerPromptInput):
     `  <worktree>${sanitizePromptText(input.worktree)}</worktree>`,
     `  <branch>${sanitizePromptText(input.branch ?? 'current')}</branch>`,
     '</slice>',
+    '',
+    '<safety_redaction>',
+    `  <status>${safetyRedaction.status}</status>`,
+    `  <surface>${safetyRedaction.surface}</surface>`,
+    `  <metadata_only>${formatBoolean(safetyRedaction.metadataOnly)}</metadata_only>`,
+    `  <redacted>${formatBoolean(safetyRedaction.redacted)}</redacted>`,
+    `  <issue_count>${formatNumber(safetyRedaction.issueCount)}</issue_count>`,
+    '  <issue_codes>',
+    ...listSafetyValues(safetyRedaction.issueCodes, 'code'),
+    '  </issue_codes>',
+    '  <issue_categories>',
+    ...listSafetyValues(safetyRedaction.issueCategories, 'category'),
+    '  </issue_categories>',
+    `  <policy_gate>${safetyRedaction.policyGate}</policy_gate>`,
+    '</safety_redaction>',
     '',
     '<operating_contract>',
     '  <item>Evaluate, Review, Grade, Iterate after implementation.</item>',
@@ -151,6 +186,17 @@ function listOrNone(values: readonly string[], tag: 'item' | 'file'): string[] {
     return [`  <${tag}>none</${tag}>`];
   }
   return values.map((value) => `  <${tag}>${value}</${tag}>`);
+}
+
+function listSafetyValues(values: readonly string[], tag: 'code' | 'category'): string[] {
+  if (values.length === 0) {
+    return [`    <${tag}>none</${tag}>`];
+  }
+  return values.map((value) => `    <${tag}>${value}</${tag}>`);
+}
+
+function formatBoolean(value: boolean): 'true' | 'false' {
+  return value ? 'true' : 'false';
 }
 
 function formatNumber(value: number): string {

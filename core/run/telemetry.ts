@@ -1,5 +1,9 @@
 import { redactDurableToolString } from '../tool/redaction';
 import {
+  createAutonomousSafetyRedactionSummary,
+  type AutonomousSafetyRedactionSummary,
+} from './policy';
+import {
   isBlockingReviewLaneRecord,
   selectReviewLaneBlockingPriority,
   selectReviewLaneGateReason,
@@ -144,6 +148,7 @@ interface RunTelemetryHandoff {
   durableFailurePresent: boolean;
   targetLeasePresent: boolean;
   evidenceCount: number;
+  safetyRedaction: AutonomousSafetyRedactionSummary;
   qualityGate: {
     latestStatus: AutonomousQualityGateRecord['status'] | null;
     latestSeq: number | null;
@@ -292,7 +297,7 @@ export function createAutonomousRunTelemetryPackage(
     rootDir: safeRootDir,
     files: [
       jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary)),
-      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, commits, generatedAt, handles, verificationSummary, watchdogVerdict)),
+      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary, watchdogVerdict)),
       jsonFile(safeRootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
       ndjsonFile(safeRootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
       ndjsonFile(safeRootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
@@ -368,6 +373,7 @@ function createHandoffExport(
   targetLeases: readonly AutonomousTargetLease[],
   qualityGates: readonly AutonomousQualityGateRecord[],
   reviewLanes: readonly AutonomousReviewLaneRecord[],
+  verification: readonly SafeVerificationCommand[],
   commits: readonly ReturnType<typeof sanitizeCommits>[number][],
   generatedAt: number,
   handles: TelemetryHandles,
@@ -380,6 +386,11 @@ function createHandoffExport(
   const unresolvedBlockers = computeUnresolvedBlockers(reviewLaneSummary, latestGate, run, steps, evidence, targetLeases, generatedAt, watchdogVerdict, verificationSummary, handles);
   const safeCheckpoint = createCheckpointExport(run, handles);
   const nextAction = chooseTelemetryHandoffNextAction(run, evidence, latestGate, reviewLaneSummary, verificationSummary, watchdogVerdict);
+  const safetyRedaction = createAutonomousSafetyRedactionSummary({
+    surface: 'telemetry',
+    metadataOnly: true,
+    redactionCandidates: [run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits],
+  });
   return {
     schemaVersion: 1,
     generatedAt,
@@ -390,6 +401,7 @@ function createHandoffExport(
     durableFailurePresent: verificationSummary.durableFailurePresent,
     targetLeasePresent: run.targetLeaseId !== null,
     evidenceCount: evidence.length,
+    safetyRedaction,
     qualityGate: {
       latestStatus: latestGate ? latestGate.status : null,
       latestSeq: latestGate ? latestGate.seq : null,
@@ -597,6 +609,11 @@ function toReviewLaneExport(record: AutonomousReviewLaneRecord, handles: Telemet
     evidenceRefCount: record.evidenceRefCount,
     summaryPresent: record.summary !== null,
     summaryCharCount: record.summary?.length ?? 0,
+    safetyRedaction: createAutonomousSafetyRedactionSummary({
+      surface: 'review_lane',
+      metadataOnly: true,
+      redactionCandidates: [record],
+    }),
   };
 }
 

@@ -27,6 +27,7 @@ import {
   type PetReviewLaneInput,
 } from '../core/pet/control';
 import { getAutonomousRunCockpitSnapshot } from '../core/run/orchestrator';
+import { createAutonomousSafetyRedactionSummary } from '../core/run/policy';
 import type { RuntimeDoctorReport } from '../core/chat/runtime-doctor';
 import type { AutonomousRunCompletionReview } from '../core/run/review';
 import type { AutonomousRunCycleResult } from '../core/run/worker';
@@ -1670,6 +1671,12 @@ describe('pet control snapshot', () => {
         reviewLaneGateCanProceed: true,
         reviewLaneGateBlockingPriority: null,
         reviewLaneGateBlockingLaneCount: 0,
+        safetyRedactionStatus: 'safe',
+        safetyRedactionRedacted: false,
+        safetyRedactionIssueCount: 0,
+        safetyRedactionIssueCodes: [],
+        safetyRedactionIssueCategories: [],
+        safetyRedactionPolicyGate: 'not_applicable',
         nextAction: 'idle',
       });
       const json = JSON.stringify(capsule);
@@ -1881,6 +1888,19 @@ describe('pet control snapshot', () => {
       expect(capsule.evidenceCount).toBe(3);
       expect(capsule.latestEvidenceAgeMs).toBe(12);
       expect(capsule.nextAction).toBe('review_blocker');
+      expect(capsule.safetyRedactionStatus).toBe('redacted');
+      expect(capsule.safetyRedactionRedacted).toBe(true);
+      expect(capsule.safetyRedactionIssueCodes).toEqual(['redaction_applied']);
+      expect(capsule.safetyRedactionIssueCategories).toEqual(['privacy']);
+      expect(capsule.safetyRedactionPolicyGate).toBe('not_applicable');
+      expect(extractCapsuleSafetyRedaction(capsule)).toEqual(
+        createAutonomousSafetyRedactionSummary({
+          surface: 'pet_handoff',
+          metadataOnly: true,
+          policyDecision: snap.workerCycle.policyDecision,
+          redactionCandidates: [snap],
+        }),
+      );
       // no secrets leaked
       expect(capsuleJson).not.toMatch(/SECRET_LEAK_TOKEN_777|ultra secret|supersecret|SECRET_999|secret-target-title|ultra-secret|password=|https:\/\/leak/);
       // but does reflect the safe structure
@@ -2414,6 +2434,13 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         reviewErrorCode: null,
       });
+
+      const capsule = createPetHandoffCapsule(merged);
+      expect(capsule.safetyRedactionStatus).toBe('blocked');
+      expect(capsule.safetyRedactionRedacted).toBe(false);
+      expect(capsule.safetyRedactionIssueCodes).toEqual(['policy_denied']);
+      expect(capsule.safetyRedactionIssueCategories).toEqual(['policy']);
+      expect(capsule.safetyRedactionPolicyGate).toBe('deny');
     });
 
     it('createPetHandoffCapsule projects worker cycle fields that agree with the merged snapshot', () => {
@@ -2450,6 +2477,8 @@ describe('pet control snapshot', () => {
       expect(capsule.workerCycleReviewProofDebtCount).toBe(merged.workerCycle.reviewProofDebtCount);
       expect(capsule.workerCycleAcceptedEvidenceCount).toBe(merged.workerCycle.acceptedEvidenceCount);
       expect(capsule.workerCycleReviewErrorCode).toBe(merged.workerCycle.reviewErrorCode);
+      expect(capsule.safetyRedactionStatus).toBe('safe');
+      expect(capsule.safetyRedactionPolicyGate).toBe('allow');
     });
 
     it('worker cycle metadata does not alter nextAction priority', () => {
@@ -3508,3 +3537,16 @@ describe('pet control snapshot', () => {
     });
   });
 });
+
+function extractCapsuleSafetyRedaction(capsule: ReturnType<typeof createPetHandoffCapsule>) {
+  return {
+    status: capsule.safetyRedactionStatus,
+    surface: 'pet_handoff' as const,
+    metadataOnly: true,
+    redacted: capsule.safetyRedactionRedacted,
+    issueCount: capsule.safetyRedactionIssueCount,
+    issueCodes: capsule.safetyRedactionIssueCodes,
+    issueCategories: capsule.safetyRedactionIssueCategories,
+    policyGate: capsule.safetyRedactionPolicyGate,
+  };
+}

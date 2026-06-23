@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createAutonomousSafetyRedactionSummary } from '../core/run/policy';
 import { createAutonomousRunTelemetryPackage } from '../core/run/telemetry';
 import type { AutonomousRunStorageState } from '../core/run/types';
 
@@ -90,6 +91,15 @@ describe('autonomous run telemetry package', () => {
       durableFailurePresent: false,
       targetLeasePresent: true,
       evidenceCount: 1,
+      safetyRedaction: {
+        status: 'redacted',
+        surface: 'telemetry',
+        metadataOnly: true,
+        redacted: true,
+        issueCodes: ['redaction_applied'],
+        issueCategories: ['privacy'],
+        policyGate: 'not_applicable',
+      },
       counts: {
         steps: 2,
         evidence: 1,
@@ -176,6 +186,15 @@ describe('autonomous run telemetry package', () => {
       exitCode: 1,
       passed: false,
     });
+    expect(readJson(pkg, 'handoff.json').safetyRedaction).toMatchObject({
+      status: 'redacted',
+      surface: 'telemetry',
+      metadataOnly: true,
+      redacted: true,
+      issueCodes: ['redaction_applied'],
+      issueCategories: ['privacy'],
+    });
+    expect(JSON.stringify(readJson(pkg, 'handoff.json').safetyRedaction)).not.toMatch(/secret-token|token=secret|secret-session|example\.com|Bearer secret/i);
 
     const checkpoint = readJson(pkg, 'checkpoint.json');
     expect(checkpoint).toMatchObject({
@@ -188,6 +207,32 @@ describe('autonomous run telemetry package', () => {
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('summary');
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('refs');
     expect(readNdjson(pkg, 'evidence.ndjson')[0]).not.toHaveProperty('metadata');
+  });
+
+  it('false-positive probe: telemetry safety result equals the stored handoff safety object', () => {
+    const state = createState();
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', { generatedAt: 500 });
+    const expectedSafety = createAutonomousSafetyRedactionSummary({
+      surface: 'telemetry',
+      metadataOnly: true,
+      redactionCandidates: [
+        state.runs[0],
+        state.steps,
+        state.evidence,
+        state.targetLeases,
+        state.qualityGates,
+        state.reviewLanes,
+        [],
+        [],
+      ],
+    });
+
+    expect(readJson(pkg, 'handoff.json').safetyRedaction).toEqual(expectedSafety);
+    expect(readJson(pkg, 'handoff.json').safetyRedaction).toMatchObject({
+      status: 'redacted',
+      redacted: true,
+      policyGate: 'not_applicable',
+    });
   });
 
   it('exports quality gates and review lanes as safe repo-visible metadata', () => {
@@ -349,9 +394,30 @@ describe('autonomous run telemetry package', () => {
         issueCount: 2,
         evidenceRefCount: 3,
         summaryPresent: true,
+        safetyRedaction: expect.objectContaining({
+          status: 'redacted',
+          surface: 'review_lane',
+          metadataOnly: true,
+          redacted: true,
+          issueCodes: ['redaction_applied'],
+          issueCategories: ['privacy'],
+        }),
       }),
     ]);
     expect(readNdjson(pkg, 'review-lanes.ndjson')[0].summaryCharCount).toBeGreaterThan(0);
+    expect(readNdjson(pkg, 'review-lanes.ndjson')[0].safetyRedaction).toEqual(
+      createAutonomousSafetyRedactionSummary({
+        surface: 'review_lane',
+        metadataOnly: true,
+        redactionCandidates: [state.reviewLanes[0]],
+      }),
+    );
+    expect(readJson(pkg, 'handoff.json').safetyRedaction).toMatchObject({
+      status: 'redacted',
+      surface: 'telemetry',
+      metadataOnly: true,
+      redacted: true,
+    });
     expect(JSON.stringify(pkg)).not.toMatch(
       /gate-token=secret|lane-token=secret|run-token=secret|Bearer secret|rawOutput|transcript|Cookie|Authorization|sid=secret/,
     );

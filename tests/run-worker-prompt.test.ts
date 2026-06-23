@@ -51,6 +51,15 @@ describe('autonomous worker prompt contract', () => {
     expect(prompt).toContain(AUTONOMOUS_WORKER_QUALITY_GATE_XML);
     expect(AUTONOMOUS_WORKER_QUALITY_GATE_XML).toBe(EXPECTED_QUALITY_GATE_XML);
     expect(prompt).toContain('commit after implementation');
+    expect(prompt).toContain('<safety_redaction>');
+    expect(prompt).toContain('<status>safe</status>');
+    expect(prompt).toContain('<surface>worker_prompt</surface>');
+    expect(prompt).toContain('<metadata_only>true</metadata_only>');
+    expect(prompt).toContain('<redacted>false</redacted>');
+    expect(prompt).toContain('<issue_count>0</issue_count>');
+    expect(extractSafetyRedactionBlock(prompt)).toContain('<code>none</code>');
+    expect(extractSafetyRedactionBlock(prompt)).toContain('<category>none</category>');
+    expect(extractSafetyRedactionBlock(prompt)).toContain('<policy_gate>not_applicable</policy_gate>');
     expect(prompt).toContain('Do not touch Chrome/runtime work unless explicitly resumed.');
     expect(prompt).toContain('Do not touch entrypoints/background.ts.');
     expect(prompt).toContain('<step_report>');
@@ -110,6 +119,13 @@ describe('autonomous worker prompt contract', () => {
     expect(prompt).toContain('token=[REDACTED]');
     expect(prompt).toContain('secret=[REDACTED]');
     expect(prompt).toContain('[REDACTED_INLINE_MEDIA]');
+    expect(prompt).toContain('<safety_redaction>');
+    expect(prompt).toContain('<status>redacted</status>');
+    expect(prompt).toContain('<redacted>true</redacted>');
+    expect(prompt).toContain('<issue_count>1</issue_count>');
+    expect(prompt).toContain('<code>redaction_applied</code>');
+    expect(prompt).toContain('<category>privacy</category>');
+    expect(extractSafetyRedactionBlock(prompt)).toContain('<policy_gate>not_applicable</policy_gate>');
     expect(prompt).not.toMatch(/secret-token|abc123|1234567890abcdef|secret-session|AAAA|path-token|secret-value/);
     expect(reviewAutonomousWorkerPromptContract(prompt)).toEqual({
       ok: true,
@@ -137,3 +153,9 @@ describe('autonomous worker prompt contract', () => {
     expect(prompt).toContain('Do not touch core/runtime.ts.');
   });
 });
+
+function extractSafetyRedactionBlock(prompt: string): string {
+  const match = prompt.match(/<safety_redaction>[\s\S]*?<\/safety_redaction>/);
+  expect(match).not.toBeNull();
+  return match?.[0] ?? '';
+}

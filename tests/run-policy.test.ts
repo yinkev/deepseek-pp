@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { reviewAutonomousRunAction } from '../core/run/policy';
+import {
+  createAutonomousSafetyRedactionSummary,
+  reviewAutonomousRunAction,
+} from '../core/run/policy';
 import type { AutonomousRun, AutonomousRunStep } from '../core/run/types';
 import {
   DEFAULT_AUTONOMOUS_PROOF_CONTRACT,
@@ -11,6 +14,134 @@ import type { ToolDescriptor } from '../core/tool/types';
 const NOW = 10_000;
 
 describe('autonomous run policy and budget gate', () => {
+  it('summarizes clean metadata-only safety export surfaces as safe', () => {
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'telemetry',
+      metadataOnly: true,
+      redactionCandidates: ['status=running', { issueCount: 0 }],
+    })).toEqual({
+      status: 'safe',
+      surface: 'telemetry',
+      metadataOnly: true,
+      redacted: false,
+      issueCount: 0,
+      issueCodes: [],
+      issueCategories: [],
+      policyGate: 'not_applicable',
+    });
+  });
+
+  it('blocks unsafe export surfaces by default when metadata-only posture is absent', () => {
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'pet_handoff',
+      redactionCandidates: ['safe-looking aggregate'],
+    })).toMatchObject({
+      status: 'blocked',
+      surface: 'pet_handoff',
+      metadataOnly: false,
+      redacted: false,
+      issueCount: 1,
+      issueCodes: ['unsafe_export_surface'],
+      issueCategories: ['metadata'],
+    });
+  });
+
+  it('flags redaction without returning raw secret candidates', () => {
+    const summary = createAutonomousSafetyRedactionSummary({
+      surface: 'worker_prompt',
+      metadataOnly: true,
+      redactionCandidates: [
+        'Authorization: Bearer secret-token',
+        'https://example.com/private?token=secret',
+        { Cookie: 'sid=secret-session' },
+      ],
+    });
+
+    expect(summary).toMatchObject({
+      status: 'redacted',
+      surface: 'worker_prompt',
+      metadataOnly: true,
+      redacted: true,
+      issueCodes: ['redaction_applied'],
+      issueCategories: ['privacy'],
+      policyGate: 'not_applicable',
+    });
+    expect(JSON.stringify(summary)).not.toMatch(/secret-token|token=secret|secret-session|example\.com/);
+  });
+
+  it('blocks denied and manual-review policy gates in safety summaries', () => {
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'action_policy',
+      metadataOnly: true,
+      policyDecision: 'deny',
+    })).toMatchObject({
+      status: 'blocked',
+      redacted: false,
+      issueCodes: ['policy_denied'],
+      issueCategories: ['policy'],
+      policyGate: 'deny',
+    });
+
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'action_policy',
+      metadataOnly: true,
+      policyDecision: 'manual_review',
+    })).toMatchObject({
+      status: 'blocked',
+      redacted: false,
+      issueCodes: ['manual_review_required'],
+      issueCategories: ['policy'],
+      policyGate: 'manual_review',
+    });
+  });
+
+  it('false-positive probe: already-redacted candidates still cannot report clean', () => {
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'telemetry',
+      metadataOnly: true,
+      redactionCandidates: ['command [redacted:secret] _redacted:id_'],
+    })).toMatchObject({
+      status: 'redacted',
+      redacted: true,
+      issueCodes: ['redaction_applied'],
+    });
+  });
+
+  it('blocks declared raw-content presence and bounds issue codes to the known safety vocabulary', () => {
+    const summary = createAutonomousSafetyRedactionSummary({
+      surface: 'review_lane',
+      metadataOnly: true,
+      rawContentPresent: true,
+      issueCodes: [
+        'raw_content_present',
+        'unsafe_export_surface',
+        'policy_denied',
+        'manual_review_required',
+        'redaction_applied',
+        'redaction_applied',
+        'not_a_real_issue_code',
+      ],
+    });
+
+    expect(summary).toEqual({
+      status: 'blocked',
+      surface: 'review_lane',
+      metadataOnly: true,
+      redacted: true,
+      issueCount: 5,
+      issueCodes: [
+        'raw_content_present',
+        'unsafe_export_surface',
+        'policy_denied',
+        'manual_review_required',
+        'redaction_applied',
+      ],
+      issueCategories: ['privacy', 'metadata', 'policy'],
+      policyGate: 'not_applicable',
+    });
+    expect(summary.issueCodes).not.toContain('not_a_real_issue_code');
+  });
+
   it('allows low-risk allowlisted tools inside budgets', () => {
     const run = createRun({
       policy: {

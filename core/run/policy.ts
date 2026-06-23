@@ -1,6 +1,7 @@
 import { BROWSER_CONTROL_TOOL_SET, type BrowserControlToolName } from '../browser-control/types';
 import { SHELL_TOOL_NAMES } from '../shell/contracts';
 import { MEMORY_TOOL_NAMES } from '../tool/memory';
+import { redactDurableToolString } from '../tool/redaction';
 import type { ToolDescriptor } from '../tool/types';
 import type {
   AutonomousRun,
@@ -10,6 +11,41 @@ import type {
 import { isTerminalRunStatus } from './kernel';
 
 export type AutonomousRunGateDecision = 'allow' | 'manual_review' | 'deny';
+export type AutonomousSafetyRedactionSurface =
+  | 'action_policy'
+  | 'telemetry'
+  | 'review_lane'
+  | 'pet_handoff'
+  | 'worker_prompt'
+  | 'unknown';
+export type AutonomousSafetyRedactionStatus = 'safe' | 'redacted' | 'blocked';
+export type AutonomousSafetyRedactionIssueCode =
+  | 'unsafe_export_surface'
+  | 'raw_content_present'
+  | 'redaction_applied'
+  | 'policy_denied'
+  | 'manual_review_required';
+export type AutonomousSafetyRedactionIssueCategory = 'privacy' | 'policy' | 'metadata';
+
+export interface AutonomousSafetyRedactionSummaryInput {
+  surface?: AutonomousSafetyRedactionSurface | null;
+  metadataOnly?: boolean | null;
+  policyDecision?: AutonomousRunGateDecision | 'not_applicable' | null;
+  redactionCandidates?: readonly unknown[] | null;
+  rawContentPresent?: boolean | null;
+  issueCodes?: readonly unknown[] | null;
+}
+
+export interface AutonomousSafetyRedactionSummary {
+  status: AutonomousSafetyRedactionStatus;
+  surface: AutonomousSafetyRedactionSurface;
+  metadataOnly: boolean;
+  redacted: boolean;
+  issueCount: number;
+  issueCodes: AutonomousSafetyRedactionIssueCode[];
+  issueCategories: AutonomousSafetyRedactionIssueCategory[];
+  policyGate: AutonomousRunGateDecision | 'not_applicable';
+}
 
 export interface AutonomousRunActionReviewInput {
   kind: 'model_turn' | 'tool_call' | 'finish';
@@ -65,6 +101,54 @@ const BROWSER_MUTATION_TOOLS = new Set<string>([
   'browser_handle_dialog',
   'browser_evaluate_script',
 ]);
+const SAFETY_REDACTION_ISSUE_LIMIT = 8;
+const GENERIC_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]+/i;
+const SECRET_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*[:=]\s*[^\s"' ,;}]+/i;
+const REDACTION_MARKER_PATTERN = /\[(?:REDACTED|redacted)[^\]]*\]|_redacted(?::|_)/i;
+
+export function createAutonomousSafetyRedactionSummary(
+  input: AutonomousSafetyRedactionSummaryInput = {},
+): AutonomousSafetyRedactionSummary {
+  const surface = normalizeSafetySurface(input.surface);
+  const metadataOnly = input.metadataOnly === true;
+  const policyGate = normalizePolicyGate(input.policyDecision);
+  const issues: AutonomousSafetyRedactionIssueCode[] = [];
+  if (!metadataOnly) {
+    issues.push('unsafe_export_surface');
+  }
+  if (input.rawContentPresent === true) {
+    issues.push('raw_content_present');
+  }
+  if (redactionRequired(input.redactionCandidates)) {
+    issues.push('redaction_applied');
+  }
+  if (policyGate === 'deny') {
+    issues.push('policy_denied');
+  } else if (policyGate === 'manual_review') {
+    issues.push('manual_review_required');
+  }
+  for (const code of input.issueCodes ?? []) {
+    const normalized = normalizeSafetyIssueCode(code);
+    if (normalized) issues.push(normalized);
+  }
+  const issueCodes = uniqueIssueCodes(issues);
+  const redacted = issueCodes.includes('redaction_applied') || issueCodes.includes('raw_content_present');
+  const blocked = !metadataOnly ||
+    issueCodes.includes('policy_denied') ||
+    issueCodes.includes('manual_review_required') ||
+    issueCodes.includes('unsafe_export_surface') ||
+    issueCodes.includes('raw_content_present');
+  return {
+    status: blocked ? 'blocked' : redacted ? 'redacted' : 'safe',
+    surface,
+    metadataOnly,
+    redacted,
+    issueCount: issueCodes.length,
+    issueCodes,
+    issueCategories: categoriesForIssueCodes(issueCodes),
+    policyGate,
+  };
+}
 
 export function reviewAutonomousRunAction(
   run: AutonomousRun,
@@ -135,6 +219,99 @@ export function reviewAutonomousRunAction(
     return manual('risk_requires_review', `Non-low-risk tool ${toolName} requires manual review.`, 'tool_selection', now);
   }
   return allow();
+}
+
+function redactionRequired(candidates: readonly unknown[] | null | undefined): boolean {
+  if (!Array.isArray(candidates) || candidates.length === 0) return false;
+  for (const candidate of candidates) {
+    const text = stringifySafetyCandidate(candidate);
+    if (!text) continue;
+    const redacted = redactDurableToolString(text) ?? text;
+    if (
+      redacted !== text ||
+      REDACTION_MARKER_PATTERN.test(text) ||
+      GENERIC_URL_PATTERN.test(text) ||
+      SECRET_ASSIGNMENT_PATTERN.test(text)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stringifySafetyCandidate(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeSafetySurface(surface: unknown): AutonomousSafetyRedactionSurface {
+  if (
+    surface === 'action_policy' ||
+    surface === 'telemetry' ||
+    surface === 'review_lane' ||
+    surface === 'pet_handoff' ||
+    surface === 'worker_prompt'
+  ) {
+    return surface;
+  }
+  return 'unknown';
+}
+
+function normalizePolicyGate(
+  decision: AutonomousSafetyRedactionSummaryInput['policyDecision'],
+): AutonomousSafetyRedactionSummary['policyGate'] {
+  if (decision === 'allow' || decision === 'manual_review' || decision === 'deny') {
+    return decision;
+  }
+  return 'not_applicable';
+}
+
+function normalizeSafetyIssueCode(code: unknown): AutonomousSafetyRedactionIssueCode | null {
+  if (
+    code === 'unsafe_export_surface' ||
+    code === 'raw_content_present' ||
+    code === 'redaction_applied' ||
+    code === 'policy_denied' ||
+    code === 'manual_review_required'
+  ) {
+    return code;
+  }
+  return null;
+}
+
+function uniqueIssueCodes(
+  codes: readonly AutonomousSafetyRedactionIssueCode[],
+): AutonomousSafetyRedactionIssueCode[] {
+  const out: AutonomousSafetyRedactionIssueCode[] = [];
+  for (const code of codes) {
+    if (!out.includes(code)) out.push(code);
+    if (out.length >= SAFETY_REDACTION_ISSUE_LIMIT) break;
+  }
+  return out;
+}
+
+function categoriesForIssueCodes(
+  codes: readonly AutonomousSafetyRedactionIssueCode[],
+): AutonomousSafetyRedactionIssueCategory[] {
+  const categories: AutonomousSafetyRedactionIssueCategory[] = [];
+  for (const code of codes) {
+    const category = categoryForIssueCode(code);
+    if (!categories.includes(category)) categories.push(category);
+  }
+  return categories;
+}
+
+function categoryForIssueCode(
+  code: AutonomousSafetyRedactionIssueCode,
+): AutonomousSafetyRedactionIssueCategory {
+  if (code === 'policy_denied' || code === 'manual_review_required') return 'policy';
+  if (code === 'unsafe_export_surface') return 'metadata';
+  return 'privacy';
 }
 
 function reviewShellPolicy(

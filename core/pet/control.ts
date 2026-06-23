@@ -6,6 +6,13 @@ import {
   getAutonomousRunCockpitSnapshot,
 } from '../run/orchestrator';
 import {
+  createAutonomousSafetyRedactionSummary,
+  type AutonomousRunGateDecision,
+  type AutonomousSafetyRedactionIssueCategory,
+  type AutonomousSafetyRedactionIssueCode,
+  type AutonomousSafetyRedactionStatus,
+} from '../run/policy';
+import {
   isBlockingReviewLaneRecord,
   selectReviewLaneBlockingPriority,
   selectReviewLaneGateReason,
@@ -1131,6 +1138,12 @@ export interface PetHandoffCapsule {
   grade: PetControlSnapshot['review']['grade'];
   canFinalize: boolean;
   nextAction: PetHandoffNextAction;
+  safetyRedactionStatus: AutonomousSafetyRedactionStatus;
+  safetyRedactionRedacted: boolean;
+  safetyRedactionIssueCount: number;
+  safetyRedactionIssueCodes: AutonomousSafetyRedactionIssueCode[];
+  safetyRedactionIssueCategories: AutonomousSafetyRedactionIssueCategory[];
+  safetyRedactionPolicyGate: AutonomousRunGateDecision | 'not_applicable';
   memoryPressureEnabled: boolean;
   memoryPressureLevel: 'none' | 'low' | 'medium' | 'high';
   memoryPressureTruncated: boolean;
@@ -1310,6 +1323,12 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const telemetryErrorCode = tel ? tel.errorCode : null;
   const telemetryQualityGatePackagePresent = tel ? tel.qualityGatePackagePresent : false;
   const telemetryReviewLanePackagePresent = tel ? tel.reviewLanePackagePresent : false;
+  const safetyRedaction = createAutonomousSafetyRedactionSummary({
+    surface: 'pet_handoff',
+    metadataOnly: true,
+    policyDecision: workerCyclePolicyDecision,
+    redactionCandidates: [snapshot],
+  });
 
   const allReviewLaneSummaries = rl && Array.isArray(rl.lanes)
     ? rl.lanes.map((lane) => normalizeLane(lane))
@@ -1381,6 +1400,12 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     grade,
     canFinalize,
     nextAction,
+    safetyRedactionStatus: safetyRedaction.status,
+    safetyRedactionRedacted: safetyRedaction.redacted,
+    safetyRedactionIssueCount: safetyRedaction.issueCount,
+    safetyRedactionIssueCodes: safetyRedaction.issueCodes,
+    safetyRedactionIssueCategories: safetyRedaction.issueCategories,
+    safetyRedactionPolicyGate: safetyRedaction.policyGate,
     memoryPressureEnabled,
     memoryPressureLevel,
     memoryPressureTruncated,
