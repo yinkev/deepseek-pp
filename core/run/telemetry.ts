@@ -1,5 +1,15 @@
 import { redactDurableToolString } from '../tool/redaction';
-import { isBlockingReviewLaneRecord } from './review-lane-gate';
+import {
+  isBlockingReviewLaneRecord,
+  selectReviewLaneBlockingPriority,
+  selectReviewLaneGateReason,
+} from './review-lane-gate';
+import { evaluateAutonomousSchedulerWatchdog } from './scheduler-watchdog';
+import type {
+  AutonomousSchedulerQualityGateLike,
+  AutonomousSchedulerWatchdogDetails,
+  AutonomousSchedulerWatchdogVerdict,
+} from './scheduler-watchdog';
 import type {
   AutonomousEvidenceRecord,
   AutonomousQualityGateRecord,
@@ -10,9 +20,10 @@ import type {
   AutonomousRunStorageState,
   AutonomousTargetLease,
 } from './types';
+import type { AutonomousRunReviewLaneGateInput } from './worker';
 
 const GENERIC_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]+/gi;
-const SENSITIVE_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*[:=]\s*[^"'\s,;}]+/gi;
+const SENSITIVE_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*[:=]\s*[^\s"' ,;}]+/gi;
 
 export interface AutonomousRunTelemetryVerification {
   command: string;
@@ -159,6 +170,77 @@ interface RunTelemetryHandoff {
     reviewLanes: number;
     commits: number;
   };
+  schedulerWatchdog: {
+    decision: AutonomousSchedulerWatchdogVerdict['decision'];
+    reason: AutonomousSchedulerWatchdogVerdict['reason'];
+    retryable: boolean;
+    blocksNextAction: boolean;
+    recommendedStatus: AutonomousRun['status'] | null;
+    errorCode: string | null;
+    details: {
+      stepCount: number;
+      evidenceCount: number;
+      freshEvidenceCount: number;
+      staleEvidenceCount: number;
+      expiredEvidenceCount: number;
+      targetLeaseAgeMs: number | null;
+      targetLeaseExpiresInMs: number | null;
+      blockingPriority: string | null;
+      blockingLaneCount: number;
+      qualityGateSeq: number | null;
+      qualityGateConflictCount: number | null;
+    };
+  } | null;
+  retryPosture: {
+    retryable: boolean;
+    durableStatusAllowsContinue: boolean;
+    hasRetryableError: boolean;
+    totalBlockers: number;
+  };
+  unresolvedBlockers: {
+    review: {
+      blockingCount: number;
+      p1Count: number;
+      p2Count: number;
+      failedCount: number;
+      blockRecommendationCount: number;
+    };
+    qualityGate: {
+      blockingPresent: boolean;
+      latestStatus: string | null;
+      blockingIssueCount: number;
+    };
+    run: {
+      errorPresent: boolean;
+      errorCode: string | null;
+      errorRetryable: boolean | null;
+    };
+    steps: {
+      failedCount: number;
+    };
+    targetLease: {
+      required: boolean;
+      recordPresent: boolean;
+      inactiveCount: number;
+      expiredCount: number;
+      staleCount: number;
+    };
+    evidence: {
+      staleCount: number;
+      expiredCount: number;
+    };
+    watchdog: {
+      blocksNextAction: boolean;
+      reason: AutonomousSchedulerWatchdogVerdict['reason'] | null;
+    };
+  };
+  checkpoint: {
+    latestStepHandle: string | null;
+    providerConversationPresent: boolean;
+    parentMessagePresent: boolean;
+    resumableSummaryCharCount: number;
+    unresolvedQuestionCount: number;
+  };
 }
 
 interface SafeError {
@@ -203,12 +285,14 @@ export function createAutonomousRunTelemetryPackage(
   const commits = sanitizeCommits(options.commits, handles);
   const safeRootDir = normalizeRootDir(options.rootDir, handles.runId, handles);
 
+  const watchdogVerdict = deriveSchedulerWatchdogVerdictForTelemetry(run, steps, evidence, targetLeases, qualityGates, reviewLanes, generatedAt);
+
   return {
     runId: handles.runId,
     rootDir: safeRootDir,
     files: [
       jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary)),
-      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, commits, generatedAt, handles, verificationSummary)),
+      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, commits, generatedAt, handles, verificationSummary, watchdogVerdict)),
       jsonFile(safeRootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
       ndjsonFile(safeRootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
       ndjsonFile(safeRootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
@@ -288,15 +372,20 @@ function createHandoffExport(
   generatedAt: number,
   handles: TelemetryHandles,
   verificationSummary: VerificationSummary,
+  watchdogVerdict: AutonomousSchedulerWatchdogVerdict | null = null,
 ): RunTelemetryHandoff {
   const latestGate = qualityGates[qualityGates.length - 1] ?? null;
   const reviewLaneSummary = createReviewLaneHandoffSummary(reviewLanes);
+  const retryPosture = computeRetryPosture(run, verificationSummary, reviewLaneSummary, watchdogVerdict);
+  const unresolvedBlockers = computeUnresolvedBlockers(reviewLaneSummary, latestGate, run, steps, evidence, targetLeases, generatedAt, watchdogVerdict, verificationSummary, handles);
+  const safeCheckpoint = createCheckpointExport(run, handles);
+  const nextAction = chooseTelemetryHandoffNextAction(run, evidence, latestGate, reviewLaneSummary, verificationSummary, watchdogVerdict);
   return {
     schemaVersion: 1,
     generatedAt,
     runId: handles.runId,
     status: run.status,
-    nextAction: chooseTelemetryHandoffNextAction(run, evidence, latestGate, reviewLaneSummary, verificationSummary),
+    nextAction,
     verificationStatus: verificationSummary.status,
     durableFailurePresent: verificationSummary.durableFailurePresent,
     targetLeasePresent: run.targetLeaseId !== null,
@@ -316,6 +405,16 @@ function createHandoffExport(
       qualityGates: qualityGates.length,
       reviewLanes: reviewLanes.length,
       commits: commits.length,
+    },
+    schedulerWatchdog: watchdogVerdict ? toSafeSchedulerWatchdogExport(watchdogVerdict, handles) : null,
+    retryPosture,
+    unresolvedBlockers,
+    checkpoint: {
+      latestStepHandle: safeCheckpoint.latestStepId,
+      providerConversationPresent: safeCheckpoint.providerConversationPresent,
+      parentMessagePresent: safeCheckpoint.parentMessagePresent,
+      resumableSummaryCharCount: safeCheckpoint.resumableSummaryCharCount,
+      unresolvedQuestionCount: safeCheckpoint.unresolvedQuestionCount,
     },
   };
 }
@@ -342,6 +441,7 @@ function chooseTelemetryHandoffNextAction(
   latestGate: AutonomousQualityGateRecord | null,
   reviewLane: RunTelemetryHandoff['reviewLane'],
   verificationSummary: VerificationSummary,
+  watchdogVerdict: AutonomousSchedulerWatchdogVerdict | null = null,
 ): TelemetryHandoffNextAction {
   if (
     latestGate?.status === 'blocked' ||
@@ -351,6 +451,20 @@ function chooseTelemetryHandoffNextAction(
     reviewLane.blockingCount > 0
   ) {
     return 'review_blocker';
+  }
+  const isTerminal = run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled';
+  if (!isTerminal) {
+    if (watchdogVerdict?.decision === 'paused') {
+      return 'idle';
+    }
+    const errCode = run.error?.code || '';
+    const isWatchdogReconcileError = errCode.includes('watchdog') || errCode.includes('reconcile') || errCode === 'run_no_progress' || errCode === 'run_repeated_error';
+    if (isWatchdogReconcileError || (watchdogVerdict && watchdogVerdict.blocksNextAction && watchdogVerdict.decision !== 'canContinue' && watchdogVerdict.decision !== 'terminalNoop')) {
+      if (watchdogVerdict && (watchdogVerdict.reason === 'review_lane_gate_blocked' || watchdogVerdict.reason === 'quality_gate_blocked')) {
+        return 'review_blocker';
+      }
+      return 'inspect_failure';
+    }
   }
   if (verificationSummary.status === 'failed' || verificationSummary.durableFailurePresent) {
     return 'inspect_failure';
@@ -733,4 +847,154 @@ function normalizeInteger(value: unknown): number | null {
 function normalizeNonNegativeInteger(value: unknown): number | null {
   const int = normalizeInteger(value);
   return int === null ? null : Math.max(0, int);
+}
+
+function deriveSchedulerWatchdogVerdictForTelemetry(
+  run: AutonomousRun,
+  steps: readonly AutonomousRunStep[],
+  evidence: readonly AutonomousEvidenceRecord[],
+  targetLeases: readonly AutonomousTargetLease[],
+  qualityGates: readonly AutonomousQualityGateRecord[],
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
+  generatedAt: number,
+): AutonomousSchedulerWatchdogVerdict | null {
+  const targetLease = targetLeases.find((l) => l.id === run.targetLeaseId && l.runId === run.id) ?? null;
+  const latestGate = qualityGates[qualityGates.length - 1] ?? null;
+  const qualityGateDecision: AutonomousSchedulerQualityGateLike | null = latestGate && (latestGate.status === 'blocked' || latestGate.status === 'failed' || latestGate.independentReview.blockingIssueCount > 0 || latestGate.independentReview.status === 'blocked')
+    ? {
+        blocked: true,
+        reason: latestGate.status,
+        latestGateStatus: latestGate.status,
+        seq: latestGate.seq,
+        conflictCount: latestGate.resultStateConsistency?.issueCount ?? null,
+      }
+    : null;
+  const blockingReviewLanes = reviewLanes.filter(isBlockingReviewLaneRecord);
+  const blockingPriority = selectReviewLaneBlockingPriority(blockingReviewLanes);
+  const reviewLaneGate: AutonomousRunReviewLaneGateInput | null = blockingReviewLanes.length > 0
+    ? {
+        canProceed: false,
+        status: 'blocked',
+        blockingPriority,
+        blockingLaneCount: blockingReviewLanes.length,
+        reason: selectReviewLaneGateReason(blockingReviewLanes, blockingPriority),
+      }
+    : null;
+  return evaluateAutonomousSchedulerWatchdog({
+    run,
+    steps,
+    evidence,
+    targetLease,
+    reviewLaneGate,
+    qualityGateDecision,
+    now: generatedAt,
+  });
+}
+
+function toSafeSchedulerWatchdogExport(
+  verdict: AutonomousSchedulerWatchdogVerdict,
+  handles: TelemetryHandles,
+): NonNullable<RunTelemetryHandoff['schedulerWatchdog']> {
+  return {
+    decision: verdict.decision,
+    reason: verdict.reason,
+    retryable: verdict.retryable,
+    blocksNextAction: verdict.blocksNextAction,
+    recommendedStatus: verdict.recommendedStatus,
+    errorCode: verdict.error ? sanitizeToken(verdict.error.code, 120, handles) : null,
+    details: toSafeSchedulerWatchdogDetails(verdict.details),
+  };
+}
+
+function toSafeSchedulerWatchdogDetails(
+  details: AutonomousSchedulerWatchdogDetails,
+): NonNullable<RunTelemetryHandoff['schedulerWatchdog']>['details'] {
+  return {
+    stepCount: normalizeNonNegativeInteger(details.stepCount) ?? 0,
+    evidenceCount: normalizeNonNegativeInteger(details.evidenceCount) ?? 0,
+    freshEvidenceCount: normalizeNonNegativeInteger(details.freshEvidenceCount) ?? 0,
+    staleEvidenceCount: normalizeNonNegativeInteger(details.staleEvidenceCount) ?? 0,
+    expiredEvidenceCount: normalizeNonNegativeInteger(details.expiredEvidenceCount) ?? 0,
+    targetLeaseAgeMs: normalizeNonNegativeInteger(details.targetLeaseAgeMs),
+    targetLeaseExpiresInMs: normalizeNonNegativeInteger(details.targetLeaseExpiresInMs),
+    blockingPriority: details.blockingPriority ?? null,
+    blockingLaneCount: normalizeNonNegativeInteger(details.blockingLaneCount) ?? 0,
+    qualityGateSeq: normalizeNonNegativeInteger(details.qualityGateSeq),
+    qualityGateConflictCount: normalizeNonNegativeInteger(details.qualityGateConflictCount),
+  };
+}
+
+function computeRetryPosture(
+  run: AutonomousRun,
+  verificationSummary: VerificationSummary,
+  reviewLane: RunTelemetryHandoff['reviewLane'],
+  watchdog: AutonomousSchedulerWatchdogVerdict | null,
+): RunTelemetryHandoff['retryPosture'] {
+  const errorRetryable = run.error ? run.error.retryable : null;
+  const durableAllows = isRunnableRunStatusForHandoff(run.status);
+  const totalB = reviewLane.blockingCount + (watchdog && watchdog.blocksNextAction ? 1 : 0) + (verificationSummary.durableFailurePresent ? 1 : 0);
+  return {
+    retryable: durableAllows && (watchdog ? watchdog.retryable : errorRetryable !== false),
+    durableStatusAllowsContinue: durableAllows,
+    hasRetryableError: errorRetryable === true,
+    totalBlockers: Math.max(0, totalB),
+  };
+}
+
+function isRunnableRunStatusForHandoff(status: AutonomousRun['status']): boolean {
+  return status === 'queued' || status === 'running';
+}
+
+function computeUnresolvedBlockers(
+  reviewLane: RunTelemetryHandoff['reviewLane'],
+  latestGate: AutonomousQualityGateRecord | null,
+  run: AutonomousRun,
+  steps: readonly AutonomousRunStep[],
+  evidence: readonly AutonomousEvidenceRecord[],
+  targetLeases: readonly AutonomousTargetLease[],
+  generatedAt: number,
+  watchdog: AutonomousSchedulerWatchdogVerdict | null,
+  verificationSummary: VerificationSummary,
+  handles: TelemetryHandles,
+): RunTelemetryHandoff['unresolvedBlockers'] {
+  const failedStepCount = steps.filter((s) => s.status === 'failed' || s.error !== null).length;
+  const errCode = run.error ? sanitizeToken(run.error.code, 120, handles) : null;
+  const targetLease = run.targetLeaseId ? targetLeases.find((lease) => lease.id === run.targetLeaseId) ?? null : null;
+  return {
+    review: {
+      blockingCount: reviewLane.blockingCount,
+      p1Count: reviewLane.p1Count,
+      p2Count: reviewLane.p2Count,
+      failedCount: reviewLane.failedCount,
+      blockRecommendationCount: reviewLane.blockRecommendationCount,
+    },
+    qualityGate: {
+      blockingPresent: !!(latestGate && (latestGate.status === 'blocked' || latestGate.status === 'failed' || (latestGate.independentReview?.blockingIssueCount ?? 0) > 0 || latestGate.independentReview?.status === 'blocked')),
+      latestStatus: latestGate ? latestGate.status : null,
+      blockingIssueCount: latestGate ? latestGate.independentReview.blockingIssueCount : 0,
+    },
+    run: {
+      errorPresent: !!run.error || verificationSummary.durableFailurePresent,
+      errorCode: errCode,
+      errorRetryable: run.error ? run.error.retryable : null,
+    },
+    steps: {
+      failedCount: failedStepCount,
+    },
+    targetLease: {
+      required: run.targetLeaseId !== null,
+      recordPresent: targetLease !== null,
+      inactiveCount: targetLeases.filter((lease) => lease.status !== 'active').length,
+      expiredCount: targetLeases.filter((lease) => lease.expiresAt <= generatedAt || lease.status === 'expired').length,
+      staleCount: targetLeases.filter((lease) => lease.status === 'stale').length,
+    },
+    evidence: {
+      staleCount: evidence.filter((record) => record.freshness === 'stale').length,
+      expiredCount: evidence.filter((record) => record.freshness === 'expired' || record.expiresAt <= generatedAt).length,
+    },
+    watchdog: {
+      blocksNextAction: !!(watchdog && watchdog.blocksNextAction),
+      reason: watchdog ? watchdog.reason : null,
+    },
+  };
 }

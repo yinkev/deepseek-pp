@@ -412,6 +412,142 @@ describe('autonomous run telemetry package', () => {
     expect(pkg?.files.find((file) => file.path.endsWith('/report.md'))?.content).toContain('- verification: failed');
   });
 
+  it('exports safe restart watchdog, retry, blocker, and checkpoint handoff fields', () => {
+    const state = createState();
+    state.targetLeases[0].expiresAt = 400;
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    const handoff = readJson(pkg, 'handoff.json');
+    expect(handoff).toMatchObject({
+      status: 'running',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'conflicted',
+      durableFailurePresent: false,
+      schedulerWatchdog: {
+        decision: 'mustBlock',
+        reason: 'expired_target_lease',
+        retryable: true,
+        blocksNextAction: true,
+        recommendedStatus: 'blocked',
+        errorCode: 'autonomous_watchdog_expired_target_lease',
+        details: {
+          stepCount: 2,
+          evidenceCount: 1,
+          freshEvidenceCount: 1,
+          staleEvidenceCount: 0,
+          expiredEvidenceCount: 0,
+          targetLeaseAgeMs: 389,
+          targetLeaseExpiresInMs: 0,
+          blockingPriority: null,
+          blockingLaneCount: 0,
+          qualityGateSeq: null,
+          qualityGateConflictCount: null,
+        },
+      },
+      retryPosture: {
+        retryable: true,
+        durableStatusAllowsContinue: true,
+        hasRetryableError: false,
+        totalBlockers: 1,
+      },
+      unresolvedBlockers: {
+        run: {
+          errorPresent: false,
+          errorCode: null,
+          errorRetryable: null,
+        },
+        targetLease: {
+          required: true,
+          recordPresent: true,
+          inactiveCount: 0,
+          expiredCount: 1,
+          staleCount: 0,
+        },
+        evidence: {
+          staleCount: 0,
+          expiredCount: 0,
+        },
+        watchdog: {
+          blocksNextAction: true,
+          reason: 'expired_target_lease',
+        },
+      },
+      checkpoint: {
+        latestStepHandle: 'step-2',
+        providerConversationPresent: true,
+        parentMessagePresent: true,
+        resumableSummaryCharCount: state.runs[0].checkpoint.resumableSummary.length,
+        unresolvedQuestionCount: 1,
+      },
+    });
+    expect(JSON.stringify(handoff)).not.toMatch(
+      /provider-secret-id|parent-secret-id|Resume after tests|Need final review|Target secret title|Private page|example\.com|shell_output tests pass|tests pass with secret token/,
+    );
+  });
+
+  it('does not finalize a blocked restart handoff when verification commands pass', () => {
+    const reconcileError = {
+      ...createRunError('autonomous_reconcile_missing_target_lease'),
+      retryable: true,
+    };
+    const state = createState({
+      status: 'blocked',
+      runError: reconcileError,
+    });
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'verification.json').summary).toMatchObject({
+      status: 'failed',
+      commandStatus: 'passed',
+      durableStatus: 'blocked',
+      durableSucceeded: false,
+      durableFailurePresent: true,
+      failedStepCount: 0,
+      runErrorPresent: true,
+    });
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'blocked',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'failed',
+      durableFailurePresent: true,
+      schedulerWatchdog: {
+        decision: 'blocked',
+        reason: 'already_blocked',
+        retryable: true,
+        blocksNextAction: true,
+        recommendedStatus: null,
+        errorCode: null,
+      },
+      retryPosture: {
+        retryable: false,
+        durableStatusAllowsContinue: false,
+        hasRetryableError: true,
+        totalBlockers: 2,
+      },
+      unresolvedBlockers: {
+        run: {
+          errorPresent: true,
+          errorCode: 'autonomous_reconcile_missing_target_lease',
+          errorRetryable: true,
+        },
+        watchdog: {
+          blocksNextAction: true,
+          reason: 'already_blocked',
+        },
+      },
+    });
+    expect(readJson(pkg, 'handoff.json').nextAction).not.toBe('finalize');
+    expect(readJson(pkg, 'handoff.json').verificationStatus).not.toBe('passed');
+  });
+
   it('collects evidence before continuing an unfinished run with no evidence', () => {
     const state = createState();
     state.evidence = [];
@@ -426,6 +562,33 @@ describe('autonomous run telemetry package', () => {
       nextAction: 'collect_evidence',
       evidenceCount: 0,
       verificationStatus: 'conflicted',
+    });
+  });
+
+  it('idles a paused run instead of reporting a restart failure', () => {
+    const state = createState({ status: 'paused' });
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'paused',
+      nextAction: 'idle',
+      verificationStatus: 'conflicted',
+      schedulerWatchdog: {
+        decision: 'paused',
+        reason: 'paused',
+        retryable: true,
+        blocksNextAction: true,
+      },
+      retryPosture: {
+        retryable: false,
+        durableStatusAllowsContinue: false,
+        hasRetryableError: false,
+        totalBlockers: 1,
+      },
     });
   });
 

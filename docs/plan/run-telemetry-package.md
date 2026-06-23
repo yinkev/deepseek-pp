@@ -19,6 +19,8 @@ Create a pure run telemetry exporter that turns the durable autonomous run ledge
 | Durable quality-gate and review-lane records export as safe handles, enums, booleans, counts, grades, and timestamps only. | `exports quality gates and review lanes as safe repo-visible metadata` |
 | Quality-gate command names/summaries, commit messages, review-lane summaries, raw durable gate/lane IDs, transcripts, and secret-like text do not leak into telemetry. | `exports quality gates and review lanes as safe repo-visible metadata` |
 | Verification summary cannot pass when durable run/step state records failure, even if command metadata says success. | `fails verification summary when durable run state failed despite passing commands` |
+| Handoff export exposes restart-safe scheduler/watchdog verdict, retry posture, unresolved blocker aggregates, and checkpoint metadata. | `exports safe restart watchdog, retry, blocker, and checkpoint handoff fields` |
+| Watchdog/reconcile blocked state cannot become `finalize` or `passed` just because verification command metadata passed. | `does not finalize a blocked restart handoff when verification commands pass` |
 | Root paths are normalized so package file paths remain under the requested telemetry root. | `normalizes root paths and keeps package paths inside .runs-style directories` |
 
 ## Mechanism
@@ -42,6 +44,13 @@ The function is pure. It does not call Chrome, storage, filesystem, terminal, ne
 When `generatedAt` is omitted, the exporter uses `run.updatedAt` instead of wall-clock time.
 
 `handoff.json` is the compact operator-facing summary for autonomous loops. It exposes safe counts, latest gate status/grade, aggregate review-lane blocker counts, verification status, and one `nextAction`. Review-lane blockers are durable gate records: a later clean lane does not erase an earlier persisted P1/P2, block recommendation, blocked lane, or failed lane. Clearing those blockers requires a separate durable resolution/pruning model; this exporter does not infer resolution from later clean records.
+
+Restart handoff fields are safe metadata only:
+
+- `schedulerWatchdog`: watchdog decision, reason, retryability, block flag, recommended status, safe error code, and count/age details;
+- `retryPosture`: whether durable status allows continuation, whether a retryable durable error exists, and total blocker count;
+- `unresolvedBlockers`: review, quality gate, durable run, failed step, target lease, evidence, and watchdog aggregate counts;
+- `checkpoint`: latest package-local step handle, provider/parent presence booleans, resumable summary character count, and unresolved question count.
 
 - `review_blocker` when the latest quality gate, independent review, or persisted review lane records report a blocking P1/P2, block recommendation, blocked status, or failed status;
 - `inspect_failure` when durable state or verification reports failure;
@@ -71,6 +80,8 @@ It exports only safe IDs, counts, booleans, timestamps, status enums, and bounde
 The privacy probe constructs states containing bearer tokens, cookies, signed URLs, secret-bearing durable IDs, plain durable IDs, file refs, data URLs, private target metadata, evidence refs, proof text, checkpoint text, quality-gate command summaries, commit messages, review-lane summaries, and raw transcript/output markers. The source JSON must contain those strings; the telemetry package JSON must omit them.
 
 The false-positive success probe constructs a failed durable run with a passing command exit. The command row can still record the raw command exit result, but the package-level verification summary must remain `failed`.
+
+The restart false-positive probe constructs a blocked durable run with a retryable reconcile error and a passing command exit. The handoff must remain `inspect_failure`, the package-level verification status must remain `failed`, and `nextAction` must not become `finalize`.
 
 ## Scope Caveat
 

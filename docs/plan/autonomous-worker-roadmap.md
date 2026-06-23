@@ -14,7 +14,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Branch: `codex/deepseek-pet`.
 - Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
-- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, and startup reconciliation for invalid target leases.
+- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, and repo-visible restart telemetry handoff.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -137,7 +137,7 @@ Every implementation slice must follow this order:
 
 ## Immediate Next Worker Slice
 
-Step 1 is the next implementation slice.
+Step 4 is the next implementation slice.
 
 Default worker prompt:
 
@@ -145,15 +145,15 @@ Default worker prompt:
 <worker_task>
   <repo_root>resolve from current checkout or injected REPO_ROOT</repo_root>
   <branch>codex/deepseek-pet</branch>
-  <slice>restartable-scheduler-watchdog-contract</slice>
+  <slice>projection-fidelity-auditor</slice>
   <scope>
-    Work only in pure autonomous core files under core/run, tests, and docs.
+    Work only in pure pet/control-plane and autonomous core files under core/pet, core/run, tests, and docs.
     Do not touch entrypoints/background.ts, Chrome/runtime wiring, or live browser behavior.
   </scope>
   <objective>
-    Add a pure scheduler/watchdog contract that prevents the autonomous loop from silently stalling.
-    It must account for stale target leases, stale evidence, repeated no-progress, retry budget exhaustion,
-    pause/resume gates, terminal runs, and unresolved review-lane blockers.
+    Add a projection fidelity auditor that compares pet cockpit projections against durable autonomous run state.
+    Persist or export a compact fidelity verdict, drift count, and gate-impact signal using safe metadata only.
+    Injected projection drift must fail the probe; clean projections must pass.
   </objective>
   <quality_gate>
     <item>Before committing, build a contract coverage table: each required behavior must map to at least one test assertion or be explicitly marked not testable in this slice.</item>
@@ -163,9 +163,11 @@ Default worker prompt:
     <item>After commit, expect an independent adversarial review; do not start the next slice if a P1/P2 is found.</item>
   </quality_gate>
   <verification>
-    <command>npm test -- tests/run-orchestrator.test.ts tests/run-worker.test.ts tests/run-target-store.test.ts tests/pet-orchestrator-bridge.test.ts</command>
+    <command>npm test -- tests/pet-control.test.ts tests/pet-orchestrator-bridge.test.ts tests/run-telemetry.test.ts</command>
     <command>npm run compile</command>
+    <command>npm test</command>
     <command>git diff --check</command>
+    <command>git diff --name-only HEAD -- entrypoints/background.ts</command>
   </verification>
   <report_format>XML final report with changed files, contract coverage, false-positive probe, verification, self-grade, commit hash, blockers, and next recommendation.</report_format>
 </worker_task>
