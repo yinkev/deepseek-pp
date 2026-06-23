@@ -86,6 +86,22 @@ describe('autonomous run policy and budget gate', () => {
     });
   });
 
+  it('does not treat token-count metric fields as secret-bearing credentials', () => {
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'pet_handoff',
+      metadataOnly: true,
+      redactionCandidates: [{
+        selectedTokenEstimate: 1200,
+        budgetTokens: 1500,
+      }],
+    })).toMatchObject({
+      status: 'safe',
+      redacted: false,
+      issueCount: 0,
+      issueCodes: [],
+    });
+  });
+
   it('blocks denied and manual-review policy gates in safety summaries', () => {
     expect(createAutonomousSafetyRedactionSummary({
       surface: 'action_policy',

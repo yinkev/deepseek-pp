@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createAutonomousSafetyRedactionSummary } from '../core/run/policy';
 import {
   AUTONOMOUS_WORKER_PROMPT_REQUIRED_MARKERS,
   AUTONOMOUS_WORKER_QUALITY_GATE_XML,
@@ -66,6 +67,29 @@ describe('autonomous worker prompt contract', () => {
     expect(safetyBlock).not.toContain('<code>');
     expect(safetyBlock).not.toContain('<category>');
     expect(safetyBlock).toContain('<policy_gate>not_applicable</policy_gate>');
+    expect(parseSafetyRedactionBlock(prompt)).toEqual(
+      createAutonomousSafetyRedactionSummary({
+        surface: 'worker_prompt',
+        metadataOnly: true,
+        redactionCandidates: [{
+          stepNumber: 1,
+          title: 'Prompt Contract Gate',
+          objective: 'Freeze the autonomous worker prompt contract.',
+          worktree: '/Users/kyin/Projects/deepseek-pp-pet',
+          branch: 'codex/deepseek-pet',
+          scope: ['Create pure prompt builder', 'Add contract tests'],
+          likelyFiles: [
+            'core/run/worker-prompt.ts',
+            'tests/run-worker-prompt.test.ts',
+          ],
+          verificationCommands: [
+            'npm test -- tests/run-worker-prompt.test.ts',
+            'npm run compile',
+            'git diff --check',
+          ],
+        }],
+      }),
+    );
     expect(prompt).toContain('Do not touch Chrome/runtime work unless explicitly resumed.');
     expect(prompt).toContain('Do not touch entrypoints/background.ts.');
     expect(prompt).toContain('<step_report>');
@@ -134,6 +158,13 @@ describe('autonomous worker prompt contract', () => {
     expect(prompt).toContain('<code>redaction_applied</code>');
     expect(prompt).toContain('<category>privacy</category>');
     expect(extractSafetyRedactionBlock(prompt)).toContain('<policy_gate>not_applicable</policy_gate>');
+    expect(parseSafetyRedactionBlock(prompt)).toEqual(
+      createAutonomousSafetyRedactionSummary({
+        surface: 'worker_prompt',
+        metadataOnly: true,
+        redactionCandidates: [input],
+      }),
+    );
     expect(prompt).not.toMatch(/secret-token|abc123|1234567890abcdef|secret-session|AAAA|path-token|secret-value|future-secret-value/);
     expect(reviewAutonomousWorkerPromptContract(prompt)).toEqual({
       ok: true,
@@ -166,4 +197,29 @@ function extractSafetyRedactionBlock(prompt: string): string {
   const match = prompt.match(/<safety_redaction>[\s\S]*?<\/safety_redaction>/);
   expect(match).not.toBeNull();
   return match?.[0] ?? '';
+}
+
+function parseSafetyRedactionBlock(prompt: string): ReturnType<typeof createAutonomousSafetyRedactionSummary> {
+  const block = extractSafetyRedactionBlock(prompt);
+  return {
+    status: extractTag(block, 'status') as ReturnType<typeof createAutonomousSafetyRedactionSummary>['status'],
+    surface: extractTag(block, 'surface') as ReturnType<typeof createAutonomousSafetyRedactionSummary>['surface'],
+    metadataOnly: extractTag(block, 'metadata_only') === 'true',
+    redacted: extractTag(block, 'redacted') === 'true',
+    issueCount: Number(extractTag(block, 'issue_count')),
+    issueCodes: extractRepeatedTags(block, 'code') as ReturnType<typeof createAutonomousSafetyRedactionSummary>['issueCodes'],
+    issueCategories: extractRepeatedTags(block, 'category') as ReturnType<typeof createAutonomousSafetyRedactionSummary>['issueCategories'],
+    policyGate: extractTag(block, 'policy_gate') as ReturnType<typeof createAutonomousSafetyRedactionSummary>['policyGate'],
+  };
+}
+
+function extractTag(block: string, tag: string): string {
+  const match = block.match(new RegExp(`<${tag}>(.*?)</${tag}>`));
+  expect(match).not.toBeNull();
+  return match?.[1] ?? '';
+}
+
+function extractRepeatedTags(block: string, tag: string): string[] {
+  return [...block.matchAll(new RegExp(`<${tag}>(.*?)</${tag}>`, 'g'))]
+    .map((match) => match[1]);
 }

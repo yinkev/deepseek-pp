@@ -13,11 +13,12 @@ The summary is deliberately metadata-only. It reports whether a surface is safe,
 | Clean metadata-only surfaces can report `safe`. | `createAutonomousSafetyRedactionSummary` clean telemetry test in `tests/run-policy.test.ts`. |
 | Missing metadata-only posture fails closed. | Unsafe export-surface test in `tests/run-policy.test.ts` expects `blocked` and `unsafe_export_surface`. |
 | Secret-like candidates set redaction flags without returning raw source text. | Privacy summary test in `tests/run-policy.test.ts`; JSON-style structured secret/password candidate test in `tests/run-policy.test.ts`; worker prompt future-field privacy test in `tests/run-worker-prompt.test.ts`. |
+| Token-count metrics are not false-positive credentials. | Metric-only safety test in `tests/run-policy.test.ts`. |
 | Deny and manual-review policy gates block autonomous summaries. | Policy gate summary test in `tests/run-policy.test.ts`. |
 | Real action-policy reviews can be converted into safe policy summaries. | Action-policy helper test in `tests/run-policy.test.ts`. |
 | Already-sanitized redaction markers cannot report clean. | False-positive probe in `tests/run-policy.test.ts`. |
 | Declared raw-content presence blocks and cannot be hidden by duplicate/invalid issue codes. | Raw-content issue-code vocabulary test in `tests/run-policy.test.ts`. |
-| Worker prompts expose safety metadata and preserve the required quality gate. | Deterministic and privacy prompt tests in `tests/run-worker-prompt.test.ts`. |
+| Worker prompts expose safety metadata and preserve the required quality gate. | Deterministic and privacy prompt tests in `tests/run-worker-prompt.test.ts`; parsed prompt safety block equals `createAutonomousSafetyRedactionSummary`. |
 | Telemetry handoff exposes redaction metadata only. | Stable telemetry package and privacy telemetry tests in `tests/run-telemetry.test.ts`. |
 | Review-lane exports expose redaction metadata only. | Quality gate/review-lane telemetry test in `tests/run-telemetry.test.ts`. |
 | Pet handoff capsule exposes redaction metadata and worker-cycle policy posture only. | Clean, forged-source, allow, and deny handoff tests in `tests/pet-control.test.ts`. |
