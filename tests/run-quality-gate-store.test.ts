@@ -26,6 +26,7 @@ describe('autonomous quality gate store', () => {
     const first = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
       contractCoverage: {
+        rows: createCoverageRows('covered', 'covered', 'covered', 'covered', 'covered', 'covered', 'not_testable'),
         complete: true,
         coveredCount: 6,
         gapCount: 0,
@@ -55,6 +56,7 @@ describe('autonomous quality gate store', () => {
     const second = await appendAutonomousQualityGateRecord(run.id, {
       status: 'failed',
       contractCoverage: {
+        rows: createCoverageRows('covered', 'covered', 'covered', 'covered', 'covered', 'gap'),
         complete: false,
         coveredCount: 5,
         gapCount: 1,
@@ -94,6 +96,14 @@ describe('autonomous quality gate store', () => {
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
       contractCoverage: {
+        rows: [
+          {
+            kind: 'done_criterion',
+            requirement: 'private https://signed.example/file?token=secret-token Authorization: Bearer sk-live-secret1234567890',
+            status: 'covered',
+            matchedBy: ['test assertion run-durable12345 token=plain-token-456'],
+          },
+        ],
         complete: true,
         coveredCount: 1,
         gapCount: 0,
@@ -148,6 +158,96 @@ describe('autonomous quality gate store', () => {
     expect(durableJson).toContain('[redacted:id]');
   });
 
+  it('derives durable coverage counts from first-class rows instead of caller aggregates', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'coverage-rows' });
+
+    const run = await createAutonomousRun({ id: 'coverage-row-run', goal: 'Coverage rows' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        rows: createCoverageRows('covered', 'gap', 'conflict', 'not_testable'),
+        complete: true,
+        coveredCount: 999,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+      },
+      resultStateConsistency: {
+        status: 'consistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      selfReview: { grade: 'A' },
+      verification: { commands: [{ name: 'focused tests', result: 'passed', summary: 'ok' }] },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    }, NOW + 2);
+
+    expect(gate).toMatchObject({
+      status: 'failed',
+      contractCoverage: {
+        complete: false,
+        coveredCount: 1,
+        gapCount: 1,
+        conflictCount: 1,
+        notTestableCount: 1,
+      },
+    });
+    expect(gate?.contractCoverage.rows).toHaveLength(4);
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
+  });
+
+  it('fails overall passed gates when coverage rows are missing', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'missing-rows' });
+
+    const run = await createAutonomousRun({ id: 'missing-row-run', goal: 'Missing coverage rows' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        complete: true,
+        coveredCount: 3,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+      },
+      resultStateConsistency: {
+        status: 'consistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      selfReview: { grade: 'A' },
+      verification: { commands: [{ name: 'focused tests', result: 'passed', summary: 'ok' }] },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    }, NOW + 2);
+
+    expect(gate).toMatchObject({
+      status: 'failed',
+      contractCoverage: {
+        rows: [],
+        complete: false,
+        coveredCount: 3,
+      },
+    });
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
+  });
+
   it('defaults malformed gate status and verification results to failed', async () => {
     const { chromeStub, storage } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
@@ -196,6 +296,7 @@ describe('autonomous quality gate store', () => {
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
       contractCoverage: {
+        rows: createCoverageRows('covered'),
         complete: true,
         coveredCount: 1,
         gapCount: 0,
@@ -242,6 +343,7 @@ describe('autonomous quality gate store', () => {
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
       contractCoverage: {
+        rows: createCoverageRows('covered'),
         complete: true,
         coveredCount: 1,
         gapCount: 0,
@@ -278,6 +380,58 @@ describe('autonomous quality gate store', () => {
     expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
   });
 
+  it('fails overall passed gates when the false-positive probe fails', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'false-positive-fail' });
+
+    const run = await createAutonomousRun({ id: 'false-positive-run', goal: 'False positive probe failure' }, NOW);
+    await transitionAutonomousRun(run.id, 'running', null, NOW + 1);
+
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: {
+        rows: createCoverageRows('covered'),
+        complete: true,
+        coveredCount: 1,
+        gapCount: 0,
+        conflictCount: 0,
+        notTestableCount: 0,
+      },
+      falsePositiveProbe: {
+        status: 'failed',
+        issueCount: 1,
+        blockingIssueCount: 1,
+      },
+      resultStateConsistency: {
+        status: 'consistent',
+        ok: true,
+        issueCount: 0,
+        blockingIssueCount: 0,
+      },
+      verification: {
+        commands: [
+          { name: 'clean verification', result: 'passed', summary: 'verification passed' },
+        ],
+      },
+      independentReview: {
+        status: 'passed',
+        grade: 'A',
+        blockingIssueCount: 0,
+      },
+    }, NOW + 2);
+
+    expect(gate).toMatchObject({
+      status: 'failed',
+      falsePositiveProbe: {
+        status: 'failed',
+        issueCount: 1,
+        blockingIssueCount: 1,
+      },
+    });
+    expect(gate).toEqual((await getAutonomousRunQualityGates(run.id))[0]);
+  });
+
   it('redacts quality-gate secrets before truncating text', async () => {
     const { chromeStub, storage } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
@@ -290,6 +444,7 @@ describe('autonomous quality gate store', () => {
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
       contractCoverage: {
+        rows: createCoverageRows('covered'),
         complete: true,
         coveredCount: 1,
         gapCount: 0,
@@ -353,6 +508,7 @@ function createGateInput() {
   return {
     status: 'passed' as const,
     contractCoverage: {
+      rows: createCoverageRows('covered'),
       complete: true,
       coveredCount: 1,
       gapCount: 0,
@@ -373,6 +529,15 @@ function createGateInput() {
       blockingIssueCount: 0,
     },
   };
+}
+
+function createCoverageRows(...statuses: Array<'covered' | 'gap' | 'conflict' | 'not_testable'>) {
+  return statuses.map((status, index) => ({
+    kind: 'done_criterion' as const,
+    requirement: `requirement ${index + 1}`,
+    status,
+    matchedBy: status === 'covered' ? [`test-${index + 1}`] : [],
+  }));
 }
 
 function createChromeStub() {

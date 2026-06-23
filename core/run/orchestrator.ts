@@ -165,7 +165,9 @@ export interface AutonomousRunQualityGateDecision {
     | 'gate_warning'
     | 'gate_failed'
     | 'gate_blocked'
+    | 'contract_rows_missing'
     | 'contract_conflicts'
+    | 'false_positive_probe_failed'
     | 'state_inconsistent'
     | 'review_issues';
   /** Top-level status of the latest quality gate, or null if none exist. */
@@ -174,6 +176,8 @@ export interface AutonomousRunQualityGateDecision {
   seq: number | null;
   /** Whether contract coverage was complete in the latest gate. */
   coverageComplete: boolean | null;
+  /** Count of first-class contract coverage rows in the latest gate. */
+  coverageRowCount: number | null;
   /** Count of covered requirements. */
   coveredCount: number | null;
   /** Count of uncovered/gap requirements. */
@@ -184,6 +188,8 @@ export interface AutonomousRunQualityGateDecision {
   notTestableCount: number | null;
   /** Self-review grade from the latest gate. */
   selfReviewGrade: AutonomousQualityGateGrade | null;
+  /** False-positive success probe status from the latest gate. */
+  falsePositiveProbeStatus: AutonomousQualityGateRecord['falsePositiveProbe']['status'] | null;
   /** Whether all verification commands passed. null when no commands exist. */
   verificationPassed: boolean | null;
 }
@@ -255,11 +261,13 @@ export function evaluateAutonomousQualityGateRecord(
       latestGateStatus: null,
       seq: null,
       coverageComplete: null,
+      coverageRowCount: null,
       coveredCount: null,
       gapCount: null,
       conflictCount: null,
       notTestableCount: null,
       selfReviewGrade: null,
+      falsePositiveProbeStatus: null,
       verificationPassed: null,
     };
   }
@@ -269,8 +277,11 @@ export function evaluateAutonomousQualityGateRecord(
     latest.independentReview.status === 'failed' ||
     latest.independentReview.status === 'blocked' ||
     latest.independentReview.blockingIssueCount > 0 ||
+    latest.contractCoverage.rows.length === 0 ||
     latest.resultStateConsistency.status === 'inconsistent' ||
     latest.resultStateConsistency.blockingIssueCount > 0 ||
+    latest.falsePositiveProbe.status === 'failed' ||
+    latest.falsePositiveProbe.blockingIssueCount > 0 ||
     latest.contractCoverage.conflictCount > 0;
 
   // Top-level block conditions
@@ -283,10 +294,15 @@ export function evaluateAutonomousQualityGateRecord(
       ? latest.status === 'failed' ? 'gate_failed' : 'gate_blocked'
       : latest.contractCoverage.conflictCount > 0
         ? 'contract_conflicts'
-        : latest.resultStateConsistency.status === 'inconsistent' ||
+        : latest.contractCoverage.rows.length === 0
+          ? 'contract_rows_missing'
+          : latest.falsePositiveProbe.status === 'failed' ||
+              latest.falsePositiveProbe.blockingIssueCount > 0
+            ? 'false_positive_probe_failed'
+            : latest.resultStateConsistency.status === 'inconsistent' ||
             latest.resultStateConsistency.blockingIssueCount > 0
-          ? 'state_inconsistent'
-          : 'review_issues'
+              ? 'state_inconsistent'
+              : 'review_issues'
     : latest.status === 'warning'
       ? 'gate_warning'
       : 'gate_passed';
@@ -301,11 +317,13 @@ export function evaluateAutonomousQualityGateRecord(
     latestGateStatus: latest.status,
     seq: latest.seq,
     coverageComplete: latest.contractCoverage.complete,
+    coverageRowCount: latest.contractCoverage.rows.length,
     coveredCount: latest.contractCoverage.coveredCount,
     gapCount: latest.contractCoverage.gapCount,
     conflictCount: latest.contractCoverage.conflictCount,
     notTestableCount: latest.contractCoverage.notTestableCount,
     selfReviewGrade: latest.selfReview.grade,
+    falsePositiveProbeStatus: latest.falsePositiveProbe.status,
     verificationPassed,
   };
 }

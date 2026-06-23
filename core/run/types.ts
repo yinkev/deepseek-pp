@@ -163,13 +163,24 @@ export type AutonomousQualityGateGrade = 'A' | 'B' | 'C' | 'D' | 'F';
 export type AutonomousQualityGateVerificationResult = 'passed' | 'failed' | 'known_preexisting_failure';
 export type AutonomousQualityGateIndependentReviewStatus = 'not_run' | 'passed' | 'failed' | 'blocked';
 export type AutonomousQualityGateConsistencyStatus = 'consistent' | 'inconsistent' | 'not_applicable';
+export type AutonomousQualityGateFalsePositiveProbeStatus = 'passed' | 'failed' | 'not_run';
+export type AutonomousQualityGateContractCoverageKind = 'done_criterion' | 'required_evidence' | 'anti_proof';
+export type AutonomousQualityGateContractCoverageStatus = 'covered' | 'gap' | 'conflict' | 'not_testable';
 export type AutonomousReviewLaneRole = 'implementer' | 'reviewer' | 'safety' | 'ux' | 'oracle' | 'grok';
 export type AutonomousReviewLaneRecordRole = AutonomousReviewLaneRole | 'other';
 export type AutonomousReviewLaneStatus = 'idle' | 'running' | 'passed' | 'blocked' | 'failed';
 export type AutonomousReviewLaneRecommendation = 'proceed' | 'iterate' | 'block' | 'unknown';
 export type AutonomousReviewLanePriority = 'P1' | 'P2' | 'P3';
 
+export interface AutonomousQualityGateContractCoverageRowSummary {
+  kind: AutonomousQualityGateContractCoverageKind;
+  requirement: string;
+  status: AutonomousQualityGateContractCoverageStatus;
+  matchedBy: string[];
+}
+
 export interface AutonomousQualityGateContractCoverageSummary {
+  rows: AutonomousQualityGateContractCoverageRowSummary[];
   complete: boolean;
   coveredCount: number;
   gapCount: number;
@@ -180,6 +191,12 @@ export interface AutonomousQualityGateContractCoverageSummary {
 export interface AutonomousQualityGateResultStateConsistencySummary {
   status: AutonomousQualityGateConsistencyStatus;
   ok: boolean;
+  issueCount: number;
+  blockingIssueCount: number;
+}
+
+export interface AutonomousQualityGateFalsePositiveProbeSummary {
+  status: AutonomousQualityGateFalsePositiveProbeStatus;
   issueCount: number;
   blockingIssueCount: number;
 }
@@ -216,6 +233,7 @@ export interface AutonomousQualityGateRecord {
   createdAt: number;
   status: AutonomousQualityGateStatus;
   contractCoverage: AutonomousQualityGateContractCoverageSummary;
+  falsePositiveProbe: AutonomousQualityGateFalsePositiveProbeSummary;
   resultStateConsistency: AutonomousQualityGateResultStateConsistencySummary;
   selfReview: AutonomousQualityGateSelfReviewSummary;
   verification: AutonomousQualityGateVerificationSummary;
@@ -304,6 +322,7 @@ export interface AutonomousRunStepCreateInput {
 export interface AutonomousQualityGateCreateInput {
   status: AutonomousQualityGateStatus;
   contractCoverage: Partial<AutonomousQualityGateContractCoverageSummary>;
+  falsePositiveProbe?: Partial<AutonomousQualityGateFalsePositiveProbeSummary>;
   resultStateConsistency: Partial<AutonomousQualityGateResultStateConsistencySummary>;
   selfReview?: Partial<AutonomousQualityGateSelfReviewSummary>;
   verification?: Partial<AutonomousQualityGateVerificationSummary>;

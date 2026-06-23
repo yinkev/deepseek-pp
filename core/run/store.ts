@@ -16,7 +16,11 @@ import type {
   AutonomousEvidenceCreateInput,
   AutonomousEvidenceRecord,
   AutonomousQualityGateCommitSummary,
+  AutonomousQualityGateContractCoverageKind,
+  AutonomousQualityGateContractCoverageRowSummary,
+  AutonomousQualityGateContractCoverageStatus,
   AutonomousQualityGateCreateInput,
+  AutonomousQualityGateFalsePositiveProbeSummary,
   AutonomousQualityGateGrade,
   AutonomousQualityGateIndependentReviewSummary,
   AutonomousQualityGateRecord,
@@ -52,6 +56,7 @@ const MAX_EVIDENCE_RECORDS = 500;
 const MAX_QUALITY_GATE_RECORDS = 300;
 const MAX_REVIEW_LANE_RECORDS = 500;
 const MAX_QUALITY_GATE_COMMANDS = 16;
+const MAX_QUALITY_GATE_COVERAGE_ROWS = 64;
 const MAX_TEXT_LENGTH = 2_000;
 const MAX_LIST_ITEMS = 32;
 const MAX_DETAILS_DEPTH = 3;
@@ -471,6 +476,7 @@ export async function appendAutonomousQualityGateRecord(
       createdAt: now,
       status: input.status,
       contractCoverage: input.contractCoverage,
+      falsePositiveProbe: input.falsePositiveProbe,
       resultStateConsistency: input.resultStateConsistency,
       selfReview: input.selfReview,
       verification: input.verification,
@@ -957,6 +963,7 @@ function normalizeQualityGateRecord(raw: unknown): AutonomousQualityGateRecord |
   if (!id || !runId || createdAt === null) return null;
   const contractCoverage = normalizeQualityGateContractCoverage(record.contractCoverage);
   const resultStateConsistency = normalizeQualityGateResultStateConsistency(record.resultStateConsistency);
+  const falsePositiveProbe = normalizeQualityGateFalsePositiveProbe(record.falsePositiveProbe, resultStateConsistency);
   const selfReview = normalizeQualityGateSelfReview(record.selfReview);
   const verification = normalizeQualityGateVerification(record.verification);
   const commit = normalizeQualityGateCommit(record.commit);
@@ -968,11 +975,13 @@ function normalizeQualityGateRecord(raw: unknown): AutonomousQualityGateRecord |
     createdAt,
     status: normalizeQualityGateStatus(record.status, {
       contractCoverage,
+      falsePositiveProbe,
       resultStateConsistency,
       verification,
       independentReview,
     }),
     contractCoverage,
+    falsePositiveProbe,
     resultStateConsistency,
     selfReview,
     verification,
@@ -1010,13 +1019,80 @@ function normalizeQualityGateContractCoverage(value: unknown): AutonomousQuality
   const summary = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Partial<AutonomousQualityGateRecord['contractCoverage']>
     : {};
+  const rows = normalizeQualityGateContractCoverageRows(summary.rows);
+  if (rows.length > 0) {
+    const coveredCount = rows.filter((row) => row.status === 'covered').length;
+    const gapCount = rows.filter((row) => row.status === 'gap').length;
+    const conflictCount = rows.filter((row) => row.status === 'conflict').length;
+    const notTestableCount = rows.filter((row) => row.status === 'not_testable').length;
+    return {
+      rows,
+      complete: gapCount === 0 && conflictCount === 0,
+      coveredCount,
+      gapCount,
+      conflictCount,
+      notTestableCount,
+    };
+  }
   return {
-    complete: summary.complete === true,
+    rows,
+    complete: false,
     coveredCount: normalizeNonNegativeInteger(summary.coveredCount) ?? 0,
     gapCount: normalizeNonNegativeInteger(summary.gapCount) ?? 0,
     conflictCount: normalizeNonNegativeInteger(summary.conflictCount) ?? 0,
     notTestableCount: normalizeNonNegativeInteger(summary.notTestableCount) ?? 0,
   };
+}
+
+function normalizeQualityGateContractCoverageRows(value: unknown): AutonomousQualityGateContractCoverageRowSummary[] {
+  if (!Array.isArray(value)) return [];
+  const rows: AutonomousQualityGateContractCoverageRowSummary[] = [];
+  for (const item of value) {
+    const row = normalizeQualityGateContractCoverageRow(item);
+    if (row) rows.push(row);
+    if (rows.length >= MAX_QUALITY_GATE_COVERAGE_ROWS) break;
+  }
+  return rows;
+}
+
+function normalizeQualityGateContractCoverageRow(value: unknown): AutonomousQualityGateContractCoverageRowSummary | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Partial<AutonomousQualityGateContractCoverageRowSummary>;
+  const kind = normalizeQualityGateContractCoverageKind(row.kind);
+  const requirement = normalizeQualityGateText(row.requirement, 200);
+  if (!requirement) return null;
+  const matchedBy = normalizeQualityGateCoverageMatchedBy(row.matchedBy);
+  let status = normalizeQualityGateContractCoverageStatus(row.status);
+  if ((kind === 'done_criterion' || kind === 'required_evidence') && status === 'covered' && matchedBy.length === 0) {
+    status = 'gap';
+  }
+  return {
+    kind,
+    requirement,
+    status,
+    matchedBy,
+  };
+}
+
+function normalizeQualityGateContractCoverageKind(value: unknown): AutonomousQualityGateContractCoverageKind {
+  if (value === 'required_evidence' || value === 'anti_proof') return value;
+  return 'done_criterion';
+}
+
+function normalizeQualityGateContractCoverageStatus(value: unknown): AutonomousQualityGateContractCoverageStatus {
+  if (value === 'covered' || value === 'conflict' || value === 'not_testable') return value;
+  return 'gap';
+}
+
+function normalizeQualityGateCoverageMatchedBy(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const output: string[] = [];
+  for (const item of value) {
+    const normalized = normalizeQualityGateText(item, 120);
+    if (normalized && !output.includes(normalized)) output.push(normalized);
+    if (output.length >= MAX_LIST_ITEMS) break;
+  }
+  return output;
 }
 
 function normalizeQualityGateResultStateConsistency(value: unknown): AutonomousQualityGateRecord['resultStateConsistency'] {
@@ -1028,6 +1104,26 @@ function normalizeQualityGateResultStateConsistency(value: unknown): AutonomousQ
     ok: summary.ok === true,
     issueCount: normalizeNonNegativeInteger(summary.issueCount) ?? 0,
     blockingIssueCount: normalizeNonNegativeInteger(summary.blockingIssueCount) ?? 0,
+  };
+}
+
+function normalizeQualityGateFalsePositiveProbe(
+  value: unknown,
+  consistency: AutonomousQualityGateRecord['resultStateConsistency'],
+): AutonomousQualityGateFalsePositiveProbeSummary {
+  const summary = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<AutonomousQualityGateFalsePositiveProbeSummary>
+    : {};
+  const derivedStatus = consistency.status === 'consistent'
+    ? 'passed'
+    : consistency.status === 'inconsistent'
+      ? 'failed'
+      : 'not_run';
+  const status = normalizeQualityGateFalsePositiveProbeStatus(summary.status, derivedStatus);
+  return {
+    status,
+    issueCount: normalizeNonNegativeInteger(summary.issueCount) ?? consistency.issueCount,
+    blockingIssueCount: normalizeNonNegativeInteger(summary.blockingIssueCount) ?? consistency.blockingIssueCount,
   };
 }
 
@@ -1098,11 +1194,14 @@ function nextReviewLaneSeq(records: readonly AutonomousReviewLaneRecord[], runId
 
 function normalizeQualityGateStatus(
   value: unknown,
-  summary: Pick<AutonomousQualityGateRecord, 'contractCoverage' | 'resultStateConsistency' | 'verification' | 'independentReview'>,
+  summary: Pick<AutonomousQualityGateRecord, 'contractCoverage' | 'falsePositiveProbe' | 'resultStateConsistency' | 'verification' | 'independentReview'>,
 ): AutonomousQualityGateRecord['status'] {
   if (summary.independentReview.status === 'blocked' || summary.independentReview.blockingIssueCount > 0) return 'blocked';
   if (
+    summary.contractCoverage.rows.length === 0 ||
     summary.contractCoverage.conflictCount > 0 ||
+    summary.falsePositiveProbe.status === 'failed' ||
+    summary.falsePositiveProbe.blockingIssueCount > 0 ||
     summary.resultStateConsistency.status === 'inconsistent' ||
     summary.resultStateConsistency.blockingIssueCount > 0 ||
     summary.verification.commands.some((command) => command.result === 'failed') ||
@@ -1120,6 +1219,14 @@ function normalizeQualityGateStatus(
 function normalizeQualityGateConsistencyStatus(value: unknown): AutonomousQualityGateRecord['resultStateConsistency']['status'] {
   if (value === 'consistent' || value === 'not_applicable') return value;
   return 'inconsistent';
+}
+
+function normalizeQualityGateFalsePositiveProbeStatus(
+  value: unknown,
+  derivedStatus: AutonomousQualityGateFalsePositiveProbeSummary['status'],
+): AutonomousQualityGateFalsePositiveProbeSummary['status'] {
+  if (value === 'passed' || value === 'failed' || value === 'not_run') return value;
+  return derivedStatus;
 }
 
 function normalizeQualityGateVerificationResult(value: unknown): AutonomousQualityGateVerificationCommandSummary['result'] {

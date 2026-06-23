@@ -106,9 +106,9 @@ Priority order:
    - Gate: focused consistency/coverage tests, adjacent worker/orchestrator tests, full serial suite, independent P1/P2 review.
 
 4. Durable quality-gate persistence.
-   - Status: complete for durable store API and normalized quality-gate records.
-   - Implemented by storing compact gate results for each run/iteration: contract coverage summary, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
-   - Gate: false-positive probe proves persisted gate state and returned result object agree; raw IDs/secrets stay out of gate summaries.
+   - Status: complete for durable store API, normalized quality-gate records, and first-class contract coverage automation.
+   - Implemented by storing compact gate results for each run/iteration: contract coverage rows and counts, false-positive probe status, result-state consistency verdict, self-review grade, verification commands, commit hash, and independent review status.
+   - Gate: missing coverage rows, conflicts, failed false-positive probe, state inconsistency, failed verification, or independent P1/P2 review blocks advancement; raw IDs/secrets stay out of gate summaries.
 
 5. Orchestrator enforcement.
    - Status: complete for pure core orchestration; Chrome/runtime caller wiring remains frozen.

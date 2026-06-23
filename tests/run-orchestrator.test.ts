@@ -572,6 +572,7 @@ describe('autonomous run orchestrator startup bridge', () => {
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
       contractCoverage: {
+        rows: createCoverageRows('covered', 'covered', 'covered', 'covered', 'not_testable'),
         complete: true,
         coveredCount: 4,
         gapCount: 0,
@@ -1366,11 +1367,13 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
       latestGateStatus: null,
       seq: null,
       coverageComplete: null,
+      coverageRowCount: null,
       coveredCount: null,
       gapCount: null,
       conflictCount: null,
       notTestableCount: null,
       selfReviewGrade: null,
+      falsePositiveProbeStatus: null,
       verificationPassed: null,
     });
     expect(executor).toHaveBeenCalledTimes(1);
@@ -1390,7 +1393,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
-      contractCoverage: { complete: true, coveredCount: 5, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'A' },
       verification: { commands: [{ name: 'npm test', result: 'passed', summary: 'ok' }] },
@@ -1408,7 +1411,9 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
       seq: 1,
     });
     expect(result.qualityGateDecision?.coverageComplete).toBe(true);
+    expect(result.qualityGateDecision?.coverageRowCount).toBe(5);
     expect(result.qualityGateDecision?.selfReviewGrade).toBe('A');
+    expect(result.qualityGateDecision?.falsePositiveProbeStatus).toBe('passed');
     expect(result.qualityGateDecision?.verificationPassed).toBe(true);
     expect(executor).toHaveBeenCalledTimes(1);
   });
@@ -1427,7 +1432,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 105);
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'warning',
-      contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'B' },
       verification: { commands: [{ name: 'npm test', result: 'passed', summary: 'ok' }] },
@@ -1463,7 +1468,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'failed',
-      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'C' },
       verification: { commands: [] },
@@ -1502,7 +1507,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'blocked',
-      contractCoverage: { complete: false, coveredCount: 0, gapCount: 1, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('gap'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'D' },
       verification: { commands: [] },
@@ -1537,7 +1542,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
-      contractCoverage: { complete: true, coveredCount: 5, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'A' },
       verification: { commands: [] },
@@ -1574,7 +1579,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'warning',
-      contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'B' },
       verification: { commands: [] },
@@ -1608,7 +1613,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
-      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'A' },
       verification: { commands: [] },
@@ -1641,7 +1646,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
-      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'inconsistent', ok: false, issueCount: 2, blockingIssueCount: 1 },
       selfReview: { grade: 'A' },
       verification: { commands: [] },
@@ -1675,7 +1680,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'warning',
-      contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 3, blockingIssueCount: 1 },
       selfReview: { grade: 'B' },
       verification: { commands: [] },
@@ -1709,7 +1714,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     const gate = await appendAutonomousQualityGateRecord(run.id, {
       status: 'passed',
-      contractCoverage: { complete: false, coveredCount: 3, gapCount: 0, conflictCount: 2, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'conflict', 'conflict'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'A' },
       verification: { commands: [] },
@@ -1726,6 +1731,77 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     expect(result.qualityGateDecision?.latestGateStatus).toBe('failed');
     expect(result.qualityGateDecision?.reason).toBe('gate_failed');
     expect(result.qualityGateDecision?.conflictCount).toBe(2);
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks advancement when first-class contract coverage rows are missing', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `missing-row-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'missing-row-gate',
+      goal: 'Missing coverage rows',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [{ name: 'focused tests', result: 'passed', summary: 'ok' }] },
+      independentReview: { status: 'passed', grade: 'A', blockingIssueCount: 0 },
+    }, 120);
+
+    expect(gate?.status).toBe('failed');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: true,
+      latestGateStatus: 'failed',
+      coverageRowCount: 0,
+    });
+    expect(result.workerResult).toBeNull();
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('blocks advancement when the false-positive probe fails', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    let id = 0;
+    vi.stubGlobal('crypto', { randomUUID: () => `false-positive-${id += 1}` });
+
+    const run = await createAutonomousRun({
+      id: 'false-positive-gate',
+      goal: 'False positive probe',
+      proofContract: { doneCriteria: ['test'], requiredEvidence: [], antiProof: [] },
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+    const gate = await appendAutonomousQualityGateRecord(run.id, {
+      status: 'passed',
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered'),
+      falsePositiveProbe: { status: 'failed', issueCount: 1, blockingIssueCount: 1 },
+      resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
+      selfReview: { grade: 'A' },
+      verification: { commands: [{ name: 'focused tests', result: 'passed', summary: 'ok' }] },
+      independentReview: { status: 'passed', grade: 'A', blockingIssueCount: 0 },
+    }, 120);
+
+    expect(gate?.status).toBe('failed');
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
+
+    expect(result.qualityGateDecision).toMatchObject({
+      blocked: true,
+      latestGateStatus: 'failed',
+      falsePositiveProbeStatus: 'failed',
+    });
     expect(result.workerResult).toBeNull();
     expect(executor).not.toHaveBeenCalled();
   });
@@ -1780,9 +1856,32 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
         name: 'contract conflict count',
         gate: createQualityGateRecord({
           status: 'passed',
-          contractCoverage: { complete: true, coveredCount: 4, gapCount: 0, conflictCount: 1, notTestableCount: 0 },
+          contractCoverage: createCoverageSummary('covered', 'covered', 'covered', 'covered', 'conflict'),
         }),
         reason: 'contract_conflicts',
+      },
+      {
+        name: 'missing contract coverage rows',
+        gate: createQualityGateRecord({
+          status: 'passed',
+          contractCoverage: {
+            rows: [],
+            complete: true,
+            coveredCount: 4,
+            gapCount: 0,
+            conflictCount: 0,
+            notTestableCount: 0,
+          },
+        }),
+        reason: 'contract_rows_missing',
+      },
+      {
+        name: 'failed false-positive probe',
+        gate: createQualityGateRecord({
+          status: 'passed',
+          falsePositiveProbe: { status: 'failed', issueCount: 1, blockingIssueCount: 1 },
+        }),
+        reason: 'false_positive_probe_failed',
       },
     ];
 
@@ -1824,7 +1923,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     await transitionAutonomousRun(run.id, 'running', null, 110);
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'failed',
-      contractCoverage: { complete: true, coveredCount: 3, gapCount: 0, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'covered'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'D' },
       verification: { commands: [] },
@@ -1872,7 +1971,7 @@ describe('autonomous run orchestrator quality gate enforcement', () => {
     // Inject a gate with fields that could leak sensitive data
     await appendAutonomousQualityGateRecord(run.id, {
       status: 'failed',
-      contractCoverage: { complete: false, coveredCount: 2, gapCount: 1, conflictCount: 0, notTestableCount: 0 },
+      contractCoverage: createCoverageSummary('covered', 'covered', 'gap'),
       resultStateConsistency: { status: 'consistent', ok: true, issueCount: 0, blockingIssueCount: 0 },
       selfReview: { grade: 'F' },
       verification: {
@@ -1904,11 +2003,12 @@ function createQualityGateRecord(
     createdAt: 100,
     status: 'passed',
     contractCoverage: {
-      complete: true,
-      coveredCount: 3,
-      gapCount: 0,
-      conflictCount: 0,
-      notTestableCount: 0,
+      ...createCoverageSummary('covered', 'covered', 'covered'),
+    },
+    falsePositiveProbe: {
+      status: 'passed',
+      issueCount: 0,
+      blockingIssueCount: 0,
     },
     resultStateConsistency: {
       status: 'consistent',
@@ -1926,6 +2026,27 @@ function createQualityGateRecord(
     },
     ...overrides,
   };
+}
+
+function createCoverageSummary(...statuses: Array<'covered' | 'gap' | 'conflict' | 'not_testable'>) {
+  const rows = createCoverageRows(...statuses);
+  return {
+    rows,
+    complete: rows.every((row) => row.status !== 'gap' && row.status !== 'conflict'),
+    coveredCount: rows.filter((row) => row.status === 'covered').length,
+    gapCount: rows.filter((row) => row.status === 'gap').length,
+    conflictCount: rows.filter((row) => row.status === 'conflict').length,
+    notTestableCount: rows.filter((row) => row.status === 'not_testable').length,
+  };
+}
+
+function createCoverageRows(...statuses: Array<'covered' | 'gap' | 'conflict' | 'not_testable'>) {
+  return statuses.map((status, index) => ({
+    kind: 'done_criterion' as const,
+    requirement: `requirement ${index + 1}`,
+    status,
+    matchedBy: status === 'covered' ? [`test-${index + 1}`] : [],
+  }));
 }
 
 function createProofContract() {

@@ -194,11 +194,13 @@ export interface PetQualityGate {
   latestGateStatus: AutonomousRunQualityGateDecision['latestGateStatus'];
   seq: number | null;
   coverageComplete: boolean | null;
+  coverageRowCount: number | null;
   coveredCount: number | null;
   gapCount: number | null;
   conflictCount: number | null;
   notTestableCount: number | null;
   selfReviewGrade: AutonomousRunQualityGateDecision['selfReviewGrade'];
+  falsePositiveProbeStatus: AutonomousRunQualityGateDecision['falsePositiveProbeStatus'];
   verificationPassed: boolean | null;
 }
 
@@ -1176,11 +1178,13 @@ export interface PetHandoffCapsule {
   qualityGateLatestStatus: AutonomousRunQualityGateDecision['latestGateStatus'];
   qualityGateSeq: number | null;
   qualityGateCoverageComplete: boolean | null;
+  qualityGateCoverageRowCount: number | null;
   qualityGateCoveredCount: number | null;
   qualityGateGapCount: number | null;
   qualityGateConflictCount: number | null;
   qualityGateNotTestableCount: number | null;
   qualityGateSelfReviewGrade: AutonomousRunQualityGateDecision['selfReviewGrade'];
+  qualityGateFalsePositiveProbeStatus: AutonomousRunQualityGateDecision['falsePositiveProbeStatus'];
   qualityGateVerificationPassed: boolean | null;
   reviewLaneCount: number;
   reviewLaneActiveCount: number;
@@ -1267,11 +1271,13 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const qualityGateLatestStatus = qualityGate.latestGateStatus;
   const qualityGateSeq = qualityGate.seq;
   const qualityGateCoverageComplete = qualityGate.coverageComplete;
+  const qualityGateCoverageRowCount = qualityGate.coverageRowCount;
   const qualityGateCoveredCount = qualityGate.coveredCount;
   const qualityGateGapCount = qualityGate.gapCount;
   const qualityGateConflictCount = qualityGate.conflictCount;
   const qualityGateNotTestableCount = qualityGate.notTestableCount;
   const qualityGateSelfReviewGrade = qualityGate.selfReviewGrade;
+  const qualityGateFalsePositiveProbeStatus = qualityGate.falsePositiveProbeStatus;
   const qualityGateVerificationPassed = qualityGate.verificationPassed;
 
   let nextAction: PetHandoffNextAction = 'idle';
@@ -1438,11 +1444,13 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     qualityGateLatestStatus,
     qualityGateSeq,
     qualityGateCoverageComplete,
+    qualityGateCoverageRowCount,
     qualityGateCoveredCount,
     qualityGateGapCount,
     qualityGateConflictCount,
     qualityGateNotTestableCount,
     qualityGateSelfReviewGrade,
+    qualityGateFalsePositiveProbeStatus,
     qualityGateVerificationPassed,
     reviewLaneCount,
     reviewLaneActiveCount,
@@ -1604,11 +1612,13 @@ export function mergeAutonomousQualityGateDecisionIntoSnapshot(
     latestGateStatus: decision.latestGateStatus,
     seq: normalizeQualityGateNumber(decision.seq),
     coverageComplete: decision.coverageComplete,
+    coverageRowCount: normalizeQualityGateNumber(decision.coverageRowCount),
     coveredCount: normalizeQualityGateNumber(decision.coveredCount),
     gapCount: normalizeQualityGateNumber(decision.gapCount),
     conflictCount: normalizeQualityGateNumber(decision.conflictCount),
     notTestableCount: normalizeQualityGateNumber(decision.notTestableCount),
     selfReviewGrade: decision.selfReviewGrade,
+    falsePositiveProbeStatus: decision.falsePositiveProbeStatus,
     verificationPassed: decision.verificationPassed,
   };
   const next = {
@@ -1644,11 +1654,13 @@ function createDefaultPetQualityGate(): PetQualityGate {
     latestGateStatus: null,
     seq: null,
     coverageComplete: null,
+    coverageRowCount: null,
     coveredCount: null,
     gapCount: null,
     conflictCount: null,
     notTestableCount: null,
     selfReviewGrade: null,
+    falsePositiveProbeStatus: null,
     verificationPassed: null,
   };
 }

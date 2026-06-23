@@ -247,11 +247,17 @@ describe('autonomous run telemetry package', () => {
         createdAt: 210,
         status: 'blocked',
         contractCoverage: {
+          rows: createCoverageRows('covered', 'covered', 'covered', 'gap', 'not_testable'),
           complete: false,
           coveredCount: 3,
           gapCount: 1,
           conflictCount: 0,
           notTestableCount: 1,
+        },
+        falsePositiveProbe: {
+          status: 'failed',
+          issueCount: 2,
+          blockingIssueCount: 1,
         },
         resultStateConsistency: {
           status: 'inconsistent',
@@ -437,11 +443,17 @@ describe('autonomous run telemetry package', () => {
         createdAt: 220,
         status: 'failed',
         contractCoverage: {
+          rows: createCoverageRows('covered', 'covered', 'covered', 'covered', 'gap'),
           complete: false,
           coveredCount: 4,
           gapCount: 1,
           conflictCount: 0,
           notTestableCount: 0,
+        },
+        falsePositiveProbe: {
+          status: 'failed',
+          issueCount: 1,
+          blockingIssueCount: 1,
         },
         resultStateConsistency: {
           status: 'inconsistent',
@@ -1209,6 +1221,15 @@ function createState(overrides: {
     qualityGates: [],
     reviewLanes: [],
   };
+}
+
+function createCoverageRows(...statuses: Array<'covered' | 'gap' | 'conflict' | 'not_testable'>) {
+  return statuses.map((status, index) => ({
+    kind: 'done_criterion' as const,
+    requirement: `requirement ${index + 1}`,
+    status,
+    matchedBy: status === 'covered' ? [`test-${index + 1}`] : [],
+  }));
 }
 
 function createRunError(code: string): NonNullable<AutonomousRunStorageState['runs'][number]['error']> {

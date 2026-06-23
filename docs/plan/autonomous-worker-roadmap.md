@@ -14,7 +14,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Branch: `codex/deepseek-pet`.
 - Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
-- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, and pure review dispatch planning.
+- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, pure review dispatch planning, and first-class contract coverage automation.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -113,7 +113,7 @@ Every implementation slice must follow this order:
 
 ### Step 7: Contract Coverage Automation
 
-- Files: `core/run/contract-coverage.ts`, `core/run/result-consistency.ts`, `core/run/store.ts`, `tests/run-contract-coverage.test.ts`, `tests/run-result-consistency.test.ts`, `tests/run-quality-gate-store.test.ts`.
+- Files: `core/run/types.ts`, `core/run/store.ts`, `core/run/orchestrator.ts`, `core/run/telemetry.ts`, `core/run/worker-prompt.ts`, `core/pet/control.ts`, `tests/run-quality-gate-store.test.ts`, `tests/run-orchestrator.test.ts`, `tests/run-telemetry.test.ts`, `tests/run-worker-prompt.test.ts`, `tests/run-result-consistency.test.ts`, `tests/pet-control.test.ts`, `tests/pet-orchestrator-bridge.test.ts`, plus `docs/plan/autonomous-contract-coverage-automation.md`.
 - Contract: every slice quality gate stores coverage rows, result-state consistency, self-grade, verification summary, commit hash, and independent review status.
 - Acceptance: missing coverage rows, conflicts, result-state mismatch, failed review, or P1/P2 review blocks advancement.
 
@@ -137,7 +137,7 @@ Every implementation slice must follow this order:
 
 ## Immediate Next Worker Slice
 
-Step 7 is the next implementation slice.
+Step 8 is the next implementation slice.
 
 Default worker prompt:
 
@@ -145,17 +145,17 @@ Default worker prompt:
 <worker_task>
   <repo_root>resolve from current checkout or injected REPO_ROOT</repo_root>
   <branch>codex/deepseek-pet</branch>
-  <slice>contract-coverage-automation</slice>
+  <slice>pet-cockpit-projection-contract</slice>
   <scope>
     Work only in pure autonomous core and pet/control-plane files under core/run, core/pet, tests, and docs.
     Do not touch entrypoints/background.ts, Chrome/runtime wiring, or live browser behavior.
   </scope>
   <objective>
-    Add contract coverage automation.
-    Make every slice quality gate store first-class coverage rows, false-positive probe status,
-    result-state consistency, verification summary, self-grade, commit hash, and independent review status.
-    Missing coverage rows, conflicts, result-state mismatch, failed review, or unresolved P1/P2 must block advancement.
-    Raw prompts, transcripts, reviewer prose, command output, provider IDs, session URLs, and secret-like source fields must not leak.
+    Complete the safe metadata pet cockpit projection contract.
+    Ensure pet snapshot and handoff expose run posture, scheduler/watchdog gate, telemetry handoff,
+    quality gate row/probe status, review lane gate, fidelity score, and stop-line state as safe metadata only.
+    Do not add UI/runtime wiring; this is a pure projection and handoff contract slice.
+    Raw labels, prompts, transcripts, URLs, target IDs, provider IDs, session URLs, command output, and secrets must not leak.
   </objective>
   <quality_gate>
     <item>Evaluate, Review, Grade, Iterate after implementation before committing.</item>
@@ -166,7 +166,7 @@ Default worker prompt:
     <item>After commit, expect an independent adversarial review; do not start the next slice if a P1/P2 is found.</item>
   </quality_gate>
   <verification>
-    <command>npm test -- tests/run-contract-coverage.test.ts tests/run-result-consistency.test.ts tests/run-quality-gate-store.test.ts tests/run-orchestrator.test.ts</command>
+    <command>npm test -- tests/pet-control.test.ts tests/pet-orchestrator-bridge.test.ts tests/run-telemetry.test.ts tests/run-orchestrator.test.ts</command>
     <command>npm run compile</command>
     <command>npm test</command>
     <command>git diff --check</command>
@@ -182,7 +182,7 @@ Default worker prompt:
 | --- | --- |
 | Use multiple Grok workers as advisory lanes. | Session evidence only; not a repo behavior and not used as proof of correctness. |
 | Preserve runtime/background freeze. | Roadmap states freeze and marks runtime wiring as Step 10 only. |
-| Choose one next default implementation slice. | `Immediate Next Worker Slice` selects contract coverage automation. |
+| Choose one next default implementation slice. | `Immediate Next Worker Slice` selects pet cockpit projection contract. |
 | Include every major step and how to accomplish it. | `Roadmap` table lists ten steps with implementation method, verification, and commit boundary. |
 | Include Evaluate, Review, Grade, Iterate quality gate. | `Non-Negotiable Loop` and worker XML prompt include the quality gate. |
 | Include false-positive success probe. | Loop and worker prompt require result/durable agreement. |

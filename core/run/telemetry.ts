@@ -152,7 +152,9 @@ interface RunTelemetryHandoff {
   qualityGate: {
     latestStatus: AutonomousQualityGateRecord['status'] | null;
     latestSeq: number | null;
+    coverageRowCount: number;
     selfReviewGrade: AutonomousQualityGateRecord['selfReview']['grade'];
+    falsePositiveProbeStatus: AutonomousQualityGateRecord['falsePositiveProbe']['status'] | null;
     independentReviewStatus: AutonomousQualityGateRecord['independentReview']['status'] | null;
     blockingIssueCount: number;
   };
@@ -405,7 +407,9 @@ function createHandoffExport(
     qualityGate: {
       latestStatus: latestGate ? latestGate.status : null,
       latestSeq: latestGate ? latestGate.seq : null,
+      coverageRowCount: latestGate ? latestGate.contractCoverage.rows.length : 0,
       selfReviewGrade: latestGate ? latestGate.selfReview.grade : null,
+      falsePositiveProbeStatus: latestGate ? latestGate.falsePositiveProbe.status : null,
       independentReviewStatus: latestGate ? latestGate.independentReview.status : null,
       blockingIssueCount: latestGate ? latestGate.independentReview.blockingIssueCount : 0,
     },
@@ -581,6 +585,8 @@ function toQualityGateExport(record: AutonomousQualityGateRecord, handles: Telem
     createdAt: record.createdAt,
     status: record.status,
     contractCoverage: record.contractCoverage,
+    coverageRowCount: record.contractCoverage.rows.length,
+    falsePositiveProbe: record.falsePositiveProbe,
     resultStateConsistency: record.resultStateConsistency,
     selfReviewGrade: record.selfReview.grade,
     verification: {
