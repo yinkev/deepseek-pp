@@ -10,7 +10,7 @@ Create a pure run telemetry exporter that turns the durable autonomous run ledge
 | Existing runs produce stable `.runs/<runHandle>/...` file paths. | `creates stable repo-visible telemetry files for one run` |
 | Omitted `generatedAt` is deterministic. | `uses deterministic generatedAt when omitted` |
 | Manifest exposes safe status, counts, policy modes/counts, budgets, and proof-contract counts. | `creates stable repo-visible telemetry files for one run` |
-| Handoff export exposes a compact repo-visible next action from safe durable state only. | `creates stable repo-visible telemetry files for one run`; `exports quality gates and review lanes as safe repo-visible metadata`; `fails verification summary when durable run state failed despite passing commands`; `collects evidence before continuing an unfinished run with no evidence`; `idles a terminal run when verification is not recorded`; `inspects a terminal run when verification commands fail`; `keeps historical review blockers active until durable records are removed`; `keeps latest review blockers ahead of durable failure inspection`; `inspects a failed latest review lane without priority blockers`; `finalizes the handoff only when durable success and verification both pass` |
+| Handoff export exposes a compact repo-visible next action from safe durable state only. | `creates stable repo-visible telemetry files for one run`; `exports quality gates and review lanes as safe repo-visible metadata`; `fails verification summary when durable run state failed despite passing commands`; `collects evidence before continuing an unfinished run with no evidence`; `idles a terminal run when verification is not recorded`; `inspects a terminal run when verification commands fail`; `keeps historical review blockers active until durable records are removed`; `keeps latest review blockers ahead of durable failure inspection`; `blocks on a failed persisted review lane without priority blockers`; `finalizes the handoff only when durable success and verification both pass` |
 | Steps export only IDs, phases, status, timestamps, progress score, counts, and safe error codes. | `creates stable repo-visible telemetry files for one run` |
 | Exported run, step, evidence, target lease IDs, paths, and free-form strings use package-local opaque handles, not raw durable IDs. | `redacts plain durable IDs from paths and free-form telemetry strings` |
 | Evidence export omits summaries, refs, metadata, URLs, and raw target content. | `omits raw goals, checkpoint text, evidence summaries, refs, urls, metadata, and secrets` |
@@ -43,8 +43,8 @@ When `generatedAt` is omitted, the exporter uses `run.updatedAt` instead of wall
 
 `handoff.json` is the compact operator-facing summary for autonomous loops. It exposes safe counts, latest gate status/grade, aggregate review-lane blocker counts, verification status, and one `nextAction`. Review-lane blockers are durable gate records: a later clean lane does not erase an earlier persisted P1/P2, block recommendation, blocked lane, or failed lane. Clearing those blockers requires a separate durable resolution/pruning model; this exporter does not infer resolution from later clean records.
 
-- `review_blocker` when the latest quality gate, independent review, or persisted review lane records report a blocking P1/P2, block recommendation, or blocked status;
-- `inspect_failure` when durable state, verification, or persisted failed review-lane records report failure;
+- `review_blocker` when the latest quality gate, independent review, or persisted review lane records report a blocking P1/P2, block recommendation, blocked status, or failed status;
+- `inspect_failure` when durable state or verification reports failure;
 - `collect_evidence` when unfinished work has no evidence yet;
 - `continue_run` when the durable run is still active;
 - `finalize` only when the durable run succeeded and verification passed;

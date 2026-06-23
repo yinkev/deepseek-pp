@@ -10,6 +10,11 @@ import {
   type AutonomousReviewLaneSchedulerLaneInput,
 } from './review-scheduler';
 import {
+  isBlockingReviewLaneRecord,
+  selectReviewLaneBlockingPriority,
+  selectReviewLaneGateReason,
+} from './review-lane-gate';
+import {
   createAutonomousRunTelemetryPackage,
   type AutonomousRunTelemetryCommit,
   type AutonomousRunTelemetryVerification,
@@ -204,11 +209,7 @@ export function deriveAutonomousRunReviewLaneGate(
       };
   }
 
-  const blockingPriority = blockingRecords.some((record) => record.highestPriority === 'P1')
-    ? 'P1'
-    : blockingRecords.some((record) => record.highestPriority === 'P2')
-      ? 'P2'
-      : null;
+  const blockingPriority = selectReviewLaneBlockingPriority(blockingRecords);
 
   return {
     status: 'blocked',
@@ -362,26 +363,6 @@ export async function executeAutonomousOrchestratorCycle(
     telemetryResult,
     afterSnapshot,
   };
-}
-
-function isBlockingReviewLaneRecord(record: AutonomousReviewLaneRecord): boolean {
-  return record.highestPriority === 'P1' ||
-    record.highestPriority === 'P2' ||
-    record.recommendation === 'block' ||
-    record.status === 'blocked' ||
-    record.status === 'failed';
-}
-
-function selectReviewLaneGateReason(
-  records: readonly AutonomousReviewLaneRecord[],
-  blockingPriority: 'P1' | 'P2' | null,
-): AutonomousRunReviewLaneGateInput['reason'] {
-  if (blockingPriority === 'P1') return 'p1';
-  if (blockingPriority === 'P2') return 'p2';
-  if (records.some((record) => record.recommendation === 'block')) return 'block_recommendation';
-  if (records.some((record) => record.status === 'failed')) return 'failed_lane';
-  if (records.some((record) => record.status === 'blocked')) return 'blocked_lane';
-  return 'unknown';
 }
 
 function mergeReviewLaneGates(

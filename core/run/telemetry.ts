@@ -1,4 +1,5 @@
 import { redactDurableToolString } from '../tool/redaction';
+import { isBlockingReviewLaneRecord } from './review-lane-gate';
 import type {
   AutonomousEvidenceRecord,
   AutonomousQualityGateRecord,
@@ -144,6 +145,7 @@ interface RunTelemetryHandoff {
     runningCount: number;
     blockedCount: number;
     failedCount: number;
+    blockingCount: number;
     blockRecommendationCount: number;
     p1Count: number;
     p2Count: number;
@@ -326,6 +328,7 @@ function createReviewLaneHandoffSummary(
     runningCount: reviewLanes.filter((lane) => lane.status === 'running').length,
     blockedCount: reviewLanes.filter((lane) => lane.status === 'blocked').length,
     failedCount: reviewLanes.filter((lane) => lane.status === 'failed').length,
+    blockingCount: reviewLanes.filter(isBlockingReviewLaneRecord).length,
     blockRecommendationCount: reviewLanes.filter((lane) => lane.recommendation === 'block').length,
     p1Count: reviewLanes.filter((lane) => lane.highestPriority === 'P1').length,
     p2Count: reviewLanes.filter((lane) => lane.highestPriority === 'P2').length,
@@ -345,14 +348,11 @@ function chooseTelemetryHandoffNextAction(
     latestGate?.status === 'failed' ||
     latestGate?.independentReview.status === 'blocked' ||
     (latestGate?.independentReview.blockingIssueCount ?? 0) > 0 ||
-    reviewLane.p1Count > 0 ||
-    reviewLane.p2Count > 0 ||
-    reviewLane.blockRecommendationCount > 0 ||
-    reviewLane.blockedCount > 0
+    reviewLane.blockingCount > 0
   ) {
     return 'review_blocker';
   }
-  if (verificationSummary.status === 'failed' || verificationSummary.durableFailurePresent || reviewLane.failedCount > 0) {
+  if (verificationSummary.status === 'failed' || verificationSummary.durableFailurePresent) {
     return 'inspect_failure';
   }
   if (evidence.length === 0 && run.status !== 'succeeded') {

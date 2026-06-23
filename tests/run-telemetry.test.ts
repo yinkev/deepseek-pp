@@ -272,6 +272,7 @@ describe('autonomous run telemetry package', () => {
       reviewLane: {
         total: 1,
         blockedCount: 1,
+        blockingCount: 1,
         blockRecommendationCount: 1,
         p1Count: 1,
         highestPriority: 'P1',
@@ -496,6 +497,7 @@ describe('autonomous run telemetry package', () => {
       reviewLane: {
         total: 2,
         blockedCount: 1,
+        blockingCount: 1,
         p1Count: 1,
         highestPriority: 'P1',
       },
@@ -527,6 +529,7 @@ describe('autonomous run telemetry package', () => {
       reviewLane: {
         total: 1,
         blockedCount: 1,
+        blockingCount: 1,
         blockRecommendationCount: 1,
         p2Count: 1,
         highestPriority: 'P2',
@@ -534,7 +537,7 @@ describe('autonomous run telemetry package', () => {
     });
   });
 
-  it('inspects a failed latest review lane without priority blockers', () => {
+  it('blocks on a failed persisted review lane without priority blockers', () => {
     const state = createState();
     state.reviewLanes = [
       createReviewLane({ id: 'lane-latest-failed', seq: 1, status: 'failed', recommendation: 'iterate', highestPriority: null }),
@@ -547,11 +550,12 @@ describe('autonomous run telemetry package', () => {
 
     expect(readJson(pkg, 'handoff.json')).toMatchObject({
       status: 'running',
-      nextAction: 'inspect_failure',
+      nextAction: 'review_blocker',
       verificationStatus: 'conflicted',
       reviewLane: {
         total: 1,
         failedCount: 1,
+        blockingCount: 1,
         p1Count: 0,
         p2Count: 0,
         highestPriority: null,

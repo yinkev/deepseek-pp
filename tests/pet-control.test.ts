@@ -3054,7 +3054,7 @@ describe('pet control snapshot', () => {
         reason: 'p1',
         canProceed: false,
         blockingPriority: 'P1',
-        blockingLaneCount: 3,
+        blockingLaneCount: 4,
       });
     });
 
@@ -3125,27 +3125,27 @@ describe('pet control snapshot', () => {
       });
     });
 
-    it('createPetReviewLaneGate marks failed, blocked, and running lanes as attention without blocking progress', () => {
+    it('createPetReviewLaneGate blocks failed and blocked lanes while running lanes remain attention', () => {
       const failed = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
         { role: 'reviewer', status: 'failed', grade: 'F', recommendation: 'unknown', highestPriority: null, issueCount: 1 },
       ]);
       expect(failed.reviewLaneGate).toEqual({
-        status: 'attention',
+        status: 'blocked',
         reason: 'failed_lane',
-        canProceed: true,
+        canProceed: false,
         blockingPriority: null,
-        blockingLaneCount: 0,
+        blockingLaneCount: 1,
       });
 
       const blocked = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [
         { role: 'reviewer', status: 'blocked', grade: 'C', recommendation: 'iterate', highestPriority: null, issueCount: 1 },
       ]);
       expect(blocked.reviewLaneGate).toEqual({
-        status: 'attention',
+        status: 'blocked',
         reason: 'blocked_lane',
-        canProceed: true,
+        canProceed: false,
         blockingPriority: null,
-        blockingLaneCount: 0,
+        blockingLaneCount: 1,
       });
 
       const running = mergePetReviewLanesIntoSnapshot(createBasePetSnapshot(), [

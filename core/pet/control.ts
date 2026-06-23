@@ -5,6 +5,11 @@ import {
   type AutonomousRunQualityGateDecision,
   getAutonomousRunCockpitSnapshot,
 } from '../run/orchestrator';
+import {
+  isBlockingReviewLaneRecord,
+  selectReviewLaneBlockingPriority,
+  selectReviewLaneGateReason,
+} from '../run/review-lane-gate';
 import { transitionAutonomousRun } from '../run/store';
 import type { RuntimeDoctorReport } from '../chat/runtime-doctor';
 import type {
@@ -1505,57 +1510,16 @@ export function createPetReviewLaneGate(
     };
   }
 
-  const blockingLaneCount = reviewLanes.lanes.filter(
-    (lane) => lane.highestPriority === 'P1' || lane.highestPriority === 'P2' || lane.recommendation === 'block',
-  ).length;
-
-  if (reviewLanes.highestPriority === 'P1') {
+  const blockingLanes = reviewLanes.lanes.filter(isBlockingReviewLaneRecord);
+  if (blockingLanes.length > 0) {
+    const blockingPriority = selectReviewLaneBlockingPriority(blockingLanes);
+    const reason = selectReviewLaneGateReason(blockingLanes, blockingPriority);
     return {
       status: 'blocked',
-      reason: 'p1',
+      reason: reason === 'unknown' || reason === 'none' || reason === 'active_review' ? 'blocked_lane' : reason,
       canProceed: false,
-      blockingPriority: 'P1',
-      blockingLaneCount,
-    };
-  }
-
-  if (reviewLanes.highestPriority === 'P2') {
-    return {
-      status: 'blocked',
-      reason: 'p2',
-      canProceed: false,
-      blockingPriority: 'P2',
-      blockingLaneCount,
-    };
-  }
-
-  if (reviewLanes.blockCount > 0) {
-    return {
-      status: 'blocked',
-      reason: 'block_recommendation',
-      canProceed: false,
-      blockingPriority: null,
-      blockingLaneCount,
-    };
-  }
-
-  if (reviewLanes.failedCount > 0) {
-    return {
-      status: 'attention',
-      reason: 'failed_lane',
-      canProceed: true,
-      blockingPriority: null,
-      blockingLaneCount: 0,
-    };
-  }
-
-  if (reviewLanes.blockedCount > 0) {
-    return {
-      status: 'attention',
-      reason: 'blocked_lane',
-      canProceed: true,
-      blockingPriority: null,
-      blockingLaneCount: 0,
+      blockingPriority,
+      blockingLaneCount: blockingLanes.length,
     };
   }
 

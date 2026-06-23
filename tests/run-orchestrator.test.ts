@@ -476,6 +476,7 @@ describe('autonomous run orchestrator startup bridge', () => {
         runningCount: 0,
         blockedCount: 0,
         failedCount: 0,
+        blockingCount: 0,
         blockRecommendationCount: 0,
       },
     });
