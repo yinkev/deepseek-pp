@@ -15,6 +15,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
 - Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, pure review dispatch planning, first-class contract coverage automation, pure pet cockpit projection contract, and controlled runtime resume gate.
+- Post-Step-9 hardening adds a pure doc-resumption gate so a fresh agent can verify the current blocked runtime posture from repo docs without reading chat history.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
