@@ -108,6 +108,30 @@ export type PetTelemetryExportErrorCode =
   | 'telemetry_write_failed'
   | 'unknown_telemetry_error';
 export type PetQualityGateStatus = 'none' | 'clear' | 'warning' | 'blocked';
+export type PetProjectionFidelityStatus = 'unchecked' | 'passed' | 'drifted';
+export type PetProjectionFidelitySource = 'none' | 'cockpit' | 'orchestrator_cycle';
+export type PetProjectionFidelityDriftKey =
+  | 'generated_at'
+  | 'readiness_status'
+  | 'readiness_preparing'
+  | 'run_active'
+  | 'run_phase'
+  | 'run_next_action'
+  | 'run_queue'
+  | 'target'
+  | 'evidence'
+  | 'stop_line'
+  | 'handoff_next_action';
+
+export interface PetProjectionFidelity {
+  status: PetProjectionFidelityStatus;
+  score: number;
+  driftCount: number;
+  gateImpact: boolean;
+  source: PetProjectionFidelitySource;
+  checkedAt: number | null;
+  driftKeys: PetProjectionFidelityDriftKey[];
+}
 
 export interface PetReviewLaneSummary {
   role: PetReviewLaneRole;
@@ -258,12 +282,29 @@ export interface PetControlSnapshot {
     lanes: PetReviewLaneSummary[];
   };
   reviewLaneGate: PetReviewLaneGate;
+  projectionFidelity: PetProjectionFidelity;
 }
 
 type PetEvidencePulse = PetControlSnapshot['evidence'];
 type PetBlockerLens = PetControlSnapshot['blockerLens'];
 type PetReviewHeat = PetControlSnapshot['reviewHeat'];
 type PetStopLineState = PetControlSnapshot['stopLine'];
+
+const PET_PROJECTION_FIDELITY_DRIFT_LIMIT = 12;
+const PET_PROJECTION_FIDELITY_COCKPIT_CHECK_COUNT = 11;
+const PET_PROJECTION_FIDELITY_BRIDGE_CHECK_COUNT = 10;
+const PET_PROJECTION_FIDELITY_GATE_KEYS = new Set<PetProjectionFidelityDriftKey>([
+  'readiness_status',
+  'readiness_preparing',
+  'run_active',
+  'run_phase',
+  'run_next_action',
+  'run_queue',
+  'target',
+  'evidence',
+  'stop_line',
+  'handoff_next_action',
+]);
 
 export interface PetStopLineResult {
   applied: boolean;
@@ -288,6 +329,13 @@ const PET_BLOCKER_CATEGORY_PRIORITY: PetBlockerCategory[] = [
 ];
 
 export function createPetControlSnapshotFromRunCockpit(
+  snapshot: AutonomousRunCockpitSnapshot,
+): PetControlSnapshot {
+  const output = createUnauditedPetControlSnapshotFromRunCockpit(snapshot);
+  return attachPetProjectionFidelity(output, snapshot, 'cockpit');
+}
+
+function createUnauditedPetControlSnapshotFromRunCockpit(
   snapshot: AutonomousRunCockpitSnapshot,
 ): PetControlSnapshot {
   const activeRun = snapshot.activeRun;
@@ -513,7 +561,157 @@ export function createPetControlSnapshotFromRunCockpit(
     qualityGate,
     reviewLanes,
     reviewLaneGate,
+    projectionFidelity: createUncheckedPetProjectionFidelity(),
   };
+}
+
+export function createUncheckedPetProjectionFidelity(): PetProjectionFidelity {
+  return {
+    status: 'unchecked',
+    score: 0,
+    driftCount: 0,
+    gateImpact: false,
+    source: 'none',
+    checkedAt: null,
+    driftKeys: [],
+  };
+}
+
+export function attachPetProjectionFidelity(
+  snapshot: PetControlSnapshot,
+  cockpit: AutonomousRunCockpitSnapshot,
+  source: Exclude<PetProjectionFidelitySource, 'none'> = 'cockpit',
+): PetControlSnapshot {
+  return {
+    ...snapshot,
+    projectionFidelity: auditPetProjectionFidelity(snapshot, cockpit, source),
+  };
+}
+
+export function mergeCockpitProjectionIntoPetSnapshot(
+  snapshot: PetControlSnapshot,
+  cockpit: AutonomousRunCockpitSnapshot,
+  source: Exclude<PetProjectionFidelitySource, 'none'> = 'orchestrator_cycle',
+): PetControlSnapshot {
+  const projected = createUnauditedPetControlSnapshotFromRunCockpit(cockpit);
+  const next = {
+    ...snapshot,
+    generatedAt: projected.generatedAt,
+    readiness: projected.readiness,
+    run: projected.run,
+    runQueue: projected.runQueue,
+    target: projected.target,
+    evidence: projected.evidence,
+    stopLine: projected.stopLine,
+  };
+  return attachPetProjectionFidelity({
+    ...next,
+    blockerLens: createPetBlockerLens({
+      readinessBlockers: next.readiness.blockers,
+      targetStale: next.target.stale,
+      leakIssueCount: next.safety.leakIssueCount,
+      runPhase: next.run.phase,
+      proofDebtCount: next.review.proofDebtCount,
+      issueCount: next.review.issueCount,
+      qualityGateBlocked: next.qualityGate.status === 'blocked',
+    }),
+  }, cockpit, source);
+}
+
+export function auditPetProjectionFidelity(
+  snapshot: PetControlSnapshot,
+  cockpit: AutonomousRunCockpitSnapshot,
+  source: Exclude<PetProjectionFidelitySource, 'none'> = 'cockpit',
+): PetProjectionFidelity {
+  const expected = createUnauditedPetControlSnapshotFromRunCockpit(cockpit);
+  const driftKeys: PetProjectionFidelityDriftKey[] = [];
+  pushDrift(driftKeys, 'generated_at', snapshot.generatedAt !== expected.generatedAt);
+  pushDrift(driftKeys, 'readiness_status', snapshot.readiness.status !== expected.readiness.status);
+  pushDrift(driftKeys, 'readiness_preparing', snapshot.readiness.preparing !== expected.readiness.preparing);
+  pushDrift(driftKeys, 'run_active', snapshot.run.active !== expected.run.active);
+  pushDrift(driftKeys, 'run_phase', snapshot.run.phase !== expected.run.phase);
+  pushDrift(driftKeys, 'run_next_action', snapshot.run.nextAction !== expected.run.nextAction);
+  pushDrift(driftKeys, 'run_queue', !sameRunQueue(snapshot.runQueue, expected.runQueue));
+  pushDrift(driftKeys, 'target', !sameTargetProjection(snapshot.target, expected.target));
+  pushDrift(driftKeys, 'evidence', !sameEvidenceProjection(snapshot.evidence, expected.evidence));
+  pushDrift(driftKeys, 'stop_line', !sameStopLineProjection(snapshot.stopLine, expected.stopLine));
+  if (source === 'cockpit') {
+    pushDrift(
+      driftKeys,
+      'handoff_next_action',
+      createPetHandoffCapsule(snapshot).nextAction !== createPetHandoffCapsule(expected).nextAction,
+    );
+  }
+
+  const boundedDrifts = driftKeys.slice(0, PET_PROJECTION_FIDELITY_DRIFT_LIMIT);
+  const driftCount = driftKeys.length;
+  const checkCount = source === 'cockpit'
+    ? PET_PROJECTION_FIDELITY_COCKPIT_CHECK_COUNT
+    : PET_PROJECTION_FIDELITY_BRIDGE_CHECK_COUNT;
+  const score = Math.max(0, Math.round((1 - (driftCount / checkCount)) * 1000) / 1000);
+  return {
+    status: driftCount === 0 ? 'passed' : 'drifted',
+    score,
+    driftCount,
+    gateImpact: boundedDrifts.some((key) => PET_PROJECTION_FIDELITY_GATE_KEYS.has(key)),
+    source,
+    checkedAt: cockpit.generatedAt,
+    driftKeys: boundedDrifts,
+  };
+}
+
+function pushDrift(
+  driftKeys: PetProjectionFidelityDriftKey[],
+  key: PetProjectionFidelityDriftKey,
+  drifted: boolean,
+): void {
+  if (drifted && !driftKeys.includes(key)) {
+    driftKeys.push(key);
+  }
+}
+
+function sameRunQueue(a: PetRunQueue, b: PetRunQueue): boolean {
+  return a.queuedDepth === b.queuedDepth &&
+    a.runningCount === b.runningCount &&
+    a.pausedCount === b.pausedCount &&
+    a.blockedCount === b.blockedCount &&
+    a.backlog === b.backlog &&
+    a.contention === b.contention &&
+    a.posture === b.posture;
+}
+
+function sameTargetProjection(
+  a: PetControlSnapshot['target'],
+  b: PetControlSnapshot['target'],
+): boolean {
+  return a.locked === b.locked &&
+    a.stale === b.stale &&
+    a.leaseStatus === b.leaseStatus &&
+    a.leaseAgeMs === b.leaseAgeMs &&
+    a.leaseExpiresInMs === b.leaseExpiresInMs;
+}
+
+function sameEvidenceProjection(
+  a: PetControlSnapshot['evidence'],
+  b: PetControlSnapshot['evidence'],
+): boolean {
+  return a.status === b.status &&
+    a.count === b.count &&
+    a.freshCount === b.freshCount &&
+    a.staleCount === b.staleCount &&
+    a.expiredCount === b.expiredCount &&
+    a.latestCapturedAt === b.latestCapturedAt &&
+    a.latestAgeMs === b.latestAgeMs;
+}
+
+function sameStopLineProjection(
+  a: PetControlSnapshot['stopLine'],
+  b: PetControlSnapshot['stopLine'],
+): boolean {
+  return a.available === b.available &&
+    a.action === b.action &&
+    a.reason === b.reason &&
+    a.runStatus === b.runStatus;
 }
 
 export async function getPetControlSnapshot(
@@ -988,6 +1186,12 @@ export interface PetHandoffCapsule {
   reviewLaneGateCanProceed: boolean;
   reviewLaneGateBlockingPriority: PetReviewLanePriority | null;
   reviewLaneGateBlockingLaneCount: number;
+  projectionFidelityStatus: PetProjectionFidelityStatus;
+  projectionFidelityScore: number;
+  projectionFidelityDriftCount: number;
+  projectionFidelityGateImpact: boolean;
+  projectionFidelitySource: PetProjectionFidelitySource;
+  projectionFidelityDriftKeys: PetProjectionFidelityDriftKey[];
 }
 
 export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandoffCapsule {
@@ -1232,6 +1436,12 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     reviewLaneGateCanProceed,
     reviewLaneGateBlockingPriority,
     reviewLaneGateBlockingLaneCount,
+    projectionFidelityStatus: normalizeProjectionStatus(snapshot.projectionFidelity?.status),
+    projectionFidelityScore: normalizeProjectionScore(snapshot.projectionFidelity?.score),
+    projectionFidelityDriftCount: normalizeProjectionCount(snapshot.projectionFidelity?.driftCount),
+    projectionFidelityGateImpact: snapshot.projectionFidelity?.gateImpact === true,
+    projectionFidelitySource: normalizeProjectionSource(snapshot.projectionFidelity?.source),
+    projectionFidelityDriftKeys: sanitizeProjectionDriftKeys(snapshot.projectionFidelity?.driftKeys),
   };
 }
 
@@ -1254,6 +1464,52 @@ export function mergePromptMemoryPressureIntoSnapshot(
       budgetTokens: pressure.budgetTokens,
     },
   };
+}
+
+function normalizeProjectionScore(score: unknown): number {
+  if (typeof score !== 'number' || !Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(1, Math.round(score * 1000) / 1000));
+}
+
+function normalizeProjectionStatus(status: unknown): PetProjectionFidelityStatus {
+  if (status === 'passed' || status === 'drifted') return status;
+  return 'unchecked';
+}
+
+function normalizeProjectionCount(count: unknown): number {
+  if (typeof count !== 'number' || !Number.isFinite(count)) return 0;
+  return Math.max(0, Math.floor(count));
+}
+
+function normalizeProjectionSource(source: unknown): PetProjectionFidelitySource {
+  if (source === 'cockpit' || source === 'orchestrator_cycle') return source;
+  return 'none';
+}
+
+function sanitizeProjectionDriftKeys(keys: unknown): PetProjectionFidelityDriftKey[] {
+  if (!Array.isArray(keys)) return [];
+  const output: PetProjectionFidelityDriftKey[] = [];
+  for (const key of keys) {
+    if (isProjectionDriftKey(key) && !output.includes(key)) {
+      output.push(key);
+    }
+    if (output.length >= PET_PROJECTION_FIDELITY_DRIFT_LIMIT) break;
+  }
+  return output;
+}
+
+function isProjectionDriftKey(key: unknown): key is PetProjectionFidelityDriftKey {
+  return key === 'generated_at' ||
+    key === 'readiness_status' ||
+    key === 'readiness_preparing' ||
+    key === 'run_active' ||
+    key === 'run_phase' ||
+    key === 'run_next_action' ||
+    key === 'run_queue' ||
+    key === 'target' ||
+    key === 'evidence' ||
+    key === 'stop_line' ||
+    key === 'handoff_next_action';
 }
 
 export function mergeAutonomousWorkerCycleResultIntoSnapshot(

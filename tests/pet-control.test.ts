@@ -21,6 +21,8 @@ import {
   createPetReviewLaneGate,
   createPetRunQueue,
   mergePetReviewLanesIntoSnapshot,
+  createUncheckedPetProjectionFidelity,
+  attachPetProjectionFidelity,
   type PetControlSnapshot,
   type PetReviewLaneInput,
 } from '../core/pet/control';
@@ -81,6 +83,7 @@ describe('pet control snapshot', () => {
     qualityGate?: Partial<PetControlSnapshot['qualityGate']>;
     reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
     reviewLaneGate?: Partial<PetControlSnapshot['reviewLaneGate']>;
+    projectionFidelity?: Partial<PetControlSnapshot['projectionFidelity']>;
   } = {}): PetControlSnapshot {
     return {
       schemaVersion: 1,
@@ -244,6 +247,10 @@ describe('pet control snapshot', () => {
         blockingPriority: null,
         blockingLaneCount: 0,
         ...overrides.reviewLaneGate,
+      },
+      projectionFidelity: {
+        ...createUncheckedPetProjectionFidelity(),
+        ...overrides.projectionFidelity,
       },
     };
   }
@@ -464,6 +471,157 @@ describe('pet control snapshot', () => {
     });
     expect(pet.run.label).toBeNull();
     expect(pet.target.label).toBeNull();
+  });
+
+  it('marks clean cockpit-derived pet projection as fidelity passed and mirrors it in handoff', () => {
+    const cockpit = {
+      schemaVersion: 1 as const,
+      generatedAt: 200,
+      status: 'running' as const,
+      totals: {
+        queued: 1,
+        running: 1,
+        paused: 0,
+        blocked: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+      },
+      activeRun: {
+        id: 'SECRET_RUN_ID',
+        goal: 'Allowed run label SECRET_GOAL_TEXT',
+        mode: 'unattended' as const,
+        status: 'running' as const,
+        targetLeaseId: 'SECRET_LEASE_ID',
+        targetLeaseStatus: 'active' as const,
+        targetLeaseAgeMs: 50,
+        targetLeaseExpiresInMs: 550,
+        createdAt: 100,
+        startedAt: 120,
+        updatedAt: 180,
+        latestStep: { id: 'SECRET_STEP_ID', phase: 'tool_execution' as const, status: 'succeeded' as const, progressScore: 1, endedAt: 170 },
+        stepCount: 2,
+        evidenceCount: 1,
+        freshEvidenceCount: 1,
+        staleEvidenceCount: 0,
+        expiredEvidenceCount: 0,
+        latestEvidenceAt: 190,
+        targetLeaseCount: 1,
+        errorCode: null,
+      },
+    };
+
+    const pet = createPetControlSnapshotFromRunCockpit(cockpit);
+    const capsule = createPetHandoffCapsule(pet);
+
+    expect(pet.projectionFidelity).toEqual({
+      status: 'passed',
+      score: 1,
+      driftCount: 0,
+      gateImpact: false,
+      source: 'cockpit',
+      checkedAt: 200,
+      driftKeys: [],
+    });
+    expect(capsule).toMatchObject({
+      projectionFidelityStatus: 'passed',
+      projectionFidelityScore: 1,
+      projectionFidelityDriftCount: 0,
+      projectionFidelityGateImpact: false,
+      projectionFidelitySource: 'cockpit',
+      projectionFidelityDriftKeys: [],
+    });
+    expect(JSON.stringify(pet.projectionFidelity)).not.toMatch(/SECRET_RUN_ID|SECRET_GOAL_TEXT|SECRET_LEASE_ID|SECRET_STEP_ID/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_RUN_ID|SECRET_GOAL_TEXT|SECRET_LEASE_ID|SECRET_STEP_ID/);
+  });
+
+  it('fails forged projection fidelity and prevents fake pass from reaching handoff', () => {
+    const cockpit = {
+      schemaVersion: 1 as const,
+      generatedAt: 300,
+      status: 'running' as const,
+      totals: {
+        queued: 0,
+        running: 1,
+        paused: 0,
+        blocked: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+      },
+      activeRun: {
+        id: 'SECRET_FORGED_RUN',
+        goal: 'Forged drift run',
+        mode: 'unattended' as const,
+        status: 'running' as const,
+        targetLeaseId: 'SECRET_FORGED_LEASE',
+        targetLeaseStatus: 'active' as const,
+        targetLeaseAgeMs: 10,
+        targetLeaseExpiresInMs: 590,
+        createdAt: 100,
+        startedAt: 120,
+        updatedAt: 290,
+        latestStep: { id: 'SECRET_FORGED_STEP', phase: 'verification' as const, status: 'succeeded' as const, progressScore: 1, endedAt: 280 },
+        stepCount: 3,
+        evidenceCount: 2,
+        freshEvidenceCount: 2,
+        staleEvidenceCount: 0,
+        expiredEvidenceCount: 0,
+        latestEvidenceAt: 295,
+        targetLeaseCount: 1,
+        errorCode: null,
+      },
+    };
+    const source = createPetControlSnapshotFromRunCockpit(cockpit);
+    const forged = {
+      ...source,
+      run: { ...source.run, active: false, phase: 'idle', nextAction: null },
+      runQueue: { ...source.runQueue, runningCount: 0, posture: 'idle' },
+      target: { ...source.target, locked: false, stale: true, leaseStatus: 'expired', leaseAgeMs: 999, leaseExpiresInMs: 0 },
+      evidence: { ...source.evidence, status: 'none', count: 0, freshCount: 0, latestAgeMs: null },
+      stopLine: { available: false, action: 'none', reason: 'no_run', runStatus: null },
+      projectionFidelity: {
+        status: 'passed',
+        score: 1,
+        driftCount: 0,
+        gateImpact: false,
+        source: 'cockpit',
+        checkedAt: 300,
+        driftKeys: ['SECRET_DRIFT_KEY'],
+        rawPrompt: 'SECRET_FORGED_PROMPT',
+      },
+      rawTargetUrl: 'https://secret.invalid/target?token=SECRET_TOKEN',
+    } as unknown as PetControlSnapshot & Record<string, unknown>;
+
+    expect(JSON.stringify(forged)).toMatch(/SECRET_FORGED_PROMPT|secret\.invalid|SECRET_TOKEN|SECRET_DRIFT_KEY/);
+
+    const audited = attachPetProjectionFidelity(forged, cockpit, 'cockpit');
+    const capsule = createPetHandoffCapsule(audited);
+
+    expect(audited.projectionFidelity.status).toBe('drifted');
+    expect(audited.projectionFidelity.score).toBeLessThan(1);
+    expect(audited.projectionFidelity.driftCount).toBeGreaterThan(0);
+    expect(audited.projectionFidelity.gateImpact).toBe(true);
+    expect(audited.projectionFidelity.driftKeys).toEqual(expect.arrayContaining([
+      'run_active',
+      'run_phase',
+      'run_next_action',
+      'run_queue',
+      'target',
+      'evidence',
+      'stop_line',
+      'handoff_next_action',
+    ]));
+    expect(capsule).toMatchObject({
+      projectionFidelityStatus: 'drifted',
+      projectionFidelityDriftCount: audited.projectionFidelity.driftCount,
+      projectionFidelityGateImpact: true,
+      projectionFidelitySource: 'cockpit',
+    });
+    expect(capsule.projectionFidelityScore).toBe(audited.projectionFidelity.score);
+    expect(capsule.projectionFidelityDriftKeys).toEqual(audited.projectionFidelity.driftKeys);
+    expect(JSON.stringify(audited.projectionFidelity)).not.toMatch(/SECRET_FORGED_PROMPT|secret\.invalid|SECRET_TOKEN|SECRET_DRIFT_KEY|SECRET_FORGED_RUN|SECRET_FORGED_LEASE|SECRET_FORGED_STEP/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_FORGED_PROMPT|secret\.invalid|SECRET_TOKEN|SECRET_DRIFT_KEY|SECRET_FORGED_RUN|SECRET_FORGED_LEASE|SECRET_FORGED_STEP/);
   });
 
   it('maps queued cockpit to ready/thinking with preparing, active run', async () => {

@@ -3,6 +3,7 @@ import {
   mergePetReviewLanesIntoSnapshot,
   mergeAutonomousQualityGateDecisionIntoSnapshot,
   mergeAutonomousWorkerCycleResultIntoSnapshot,
+  mergeCockpitProjectionIntoPetSnapshot,
   mergeOrchestratorTelemetryResultIntoSnapshot,
   type PetControlSnapshot,
   type PetReviewLaneInput,
@@ -70,7 +71,7 @@ export function mergeAutonomousOrchestratorCycleResultIntoSnapshot(
     return snapshot;
   }
 
-  let next = snapshot;
+  let next = mergeCockpitProjectionIntoPetSnapshot(snapshot, result.afterSnapshot, 'orchestrator_cycle');
   if (result.workerResult) {
     next = mergeAutonomousWorkerCycleResultIntoSnapshot(next, result.workerResult);
   }
@@ -81,6 +82,7 @@ export function mergeAutonomousOrchestratorCycleResultIntoSnapshot(
     next = mergeAutonomousQualityGateDecisionIntoSnapshot(next, result.qualityGateDecision);
   }
   next = mergeAutonomousReviewLanePlanIntoSnapshot(next, result.reviewLanePlan);
+  next = mergeCockpitProjectionIntoPetSnapshot(next, result.afterSnapshot, 'orchestrator_cycle');
   return next;
 }
 

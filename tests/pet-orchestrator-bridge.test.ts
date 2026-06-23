@@ -267,6 +267,80 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(mergeAutonomousOrchestratorCycleResultIntoSnapshot(snapshot, undefined)).toBe(snapshot);
   });
 
+  it('refreshes forged cockpit projection fields from orchestrator afterSnapshot', () => {
+    const forged = {
+      ...createBasePetSnapshot(),
+      run: {
+        active: false,
+        label: 'SECRET_FORGED_LABEL',
+        phase: 'idle',
+        nextAction: null,
+      },
+      target: {
+        locked: false,
+        label: 'SECRET_TARGET_LABEL',
+        stale: true,
+        leaseStatus: 'expired',
+        leaseAgeMs: 999,
+        leaseExpiresInMs: 0,
+      },
+      rawPrompt: 'SECRET_FORGED_PROMPT',
+    } as unknown as PetControlSnapshot & Record<string, unknown>;
+    const result = createOrchestratorResult({
+      afterSnapshot: createRunningCockpit(),
+      workerResult: createWorkerResult({
+        advanced: true,
+        applied: true,
+        finalStatus: 'running',
+      }),
+    });
+
+    expect(JSON.stringify(forged)).toMatch(/SECRET_FORGED_LABEL|SECRET_TARGET_LABEL|SECRET_FORGED_PROMPT/);
+
+    const merged = mergeAutonomousOrchestratorCycleResultIntoSnapshot(forged, result);
+    const capsule = createPetHandoffCapsule(merged);
+
+    expect(merged.run).toMatchObject({
+      active: true,
+      label: 'Running bridge run SECRET_ALLOWED_LABEL',
+      phase: 'working',
+      nextAction: 'Continue autonomous cycle',
+    });
+    expect(merged.target).toMatchObject({
+      locked: true,
+      label: 'Target locked',
+      stale: false,
+      leaseStatus: 'active',
+      leaseAgeMs: 20,
+      leaseExpiresInMs: 580,
+    });
+    expect(merged.projectionFidelity).toMatchObject({
+      status: 'passed',
+      score: 1,
+      driftCount: 0,
+      gateImpact: false,
+      source: 'orchestrator_cycle',
+      checkedAt: 200,
+      driftKeys: [],
+    });
+    expect(merged.workerCycle).toMatchObject({
+      advanced: true,
+      applied: true,
+      finalStatus: 'running',
+    });
+    expect(capsule).toMatchObject({
+      projectionFidelityStatus: 'passed',
+      projectionFidelityScore: 1,
+      projectionFidelityDriftCount: 0,
+      projectionFidelityGateImpact: false,
+      projectionFidelitySource: 'orchestrator_cycle',
+      projectionFidelityDriftKeys: [],
+      nextAction: 'continue_run',
+    });
+    expect(JSON.stringify(merged.projectionFidelity)).not.toMatch(/SECRET_FORGED_LABEL|SECRET_TARGET_LABEL|SECRET_FORGED_PROMPT|SECRET_RUNNING_RUN|SECRET_RUNNING_LEASE/);
+    expect(JSON.stringify(capsule)).not.toMatch(/SECRET_FORGED_LABEL|SECRET_TARGET_LABEL|SECRET_FORGED_PROMPT|SECRET_RUNNING_RUN|SECRET_RUNNING_LEASE/);
+  });
+
   it('projects blocking orchestrator review lane plans into pet snapshot and handoff fields', () => {
     const snapshot = createBasePetSnapshot();
     const result = createOrchestratorResult({
@@ -805,6 +879,51 @@ function createIdleCockpit(): AutonomousRunCockpitSnapshot {
     totals: {
       queued: 0,
       running: 0,
+      paused: 0,
+      blocked: 0,
+      succeeded: 0,
+      failed: 0,
+      cancelled: 0,
+    },
+  };
+}
+
+function createRunningCockpit(): AutonomousRunCockpitSnapshot {
+  return {
+    schemaVersion: 1,
+    generatedAt: 200,
+    status: 'running',
+    activeRun: {
+      id: 'SECRET_RUNNING_RUN',
+      goal: 'Running bridge run SECRET_ALLOWED_LABEL',
+      mode: 'unattended',
+      status: 'running',
+      targetLeaseId: 'SECRET_RUNNING_LEASE',
+      targetLeaseStatus: 'active',
+      targetLeaseAgeMs: 20,
+      targetLeaseExpiresInMs: 580,
+      createdAt: 100,
+      startedAt: 120,
+      updatedAt: 190,
+      latestStep: {
+        id: 'SECRET_RUNNING_STEP',
+        phase: 'tool_execution',
+        status: 'succeeded',
+        progressScore: 1,
+        endedAt: 180,
+      },
+      stepCount: 2,
+      evidenceCount: 1,
+      freshEvidenceCount: 1,
+      staleEvidenceCount: 0,
+      expiredEvidenceCount: 0,
+      latestEvidenceAt: 190,
+      targetLeaseCount: 1,
+      errorCode: null,
+    },
+    totals: {
+      queued: 0,
+      running: 1,
       paused: 0,
       blocked: 0,
       succeeded: 0,

@@ -14,7 +14,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Branch: `codex/deepseek-pet`.
 - Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
-- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, and repo-visible restart telemetry handoff.
+- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, and pet projection fidelity audit.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -137,7 +137,7 @@ Every implementation slice must follow this order:
 
 ## Immediate Next Worker Slice
 
-Step 4 is the next implementation slice.
+Step 5 is the next implementation slice.
 
 Default worker prompt:
 
@@ -145,15 +145,16 @@ Default worker prompt:
 <worker_task>
   <repo_root>resolve from current checkout or injected REPO_ROOT</repo_root>
   <branch>codex/deepseek-pet</branch>
-  <slice>projection-fidelity-auditor</slice>
+  <slice>safety-policy-and-redaction-gate</slice>
   <scope>
-    Work only in pure pet/control-plane and autonomous core files under core/pet, core/run, tests, and docs.
+    Work only in pure autonomous core and pet/control-plane files under core/run, core/pet, tests, and docs.
     Do not touch entrypoints/background.ts, Chrome/runtime wiring, or live browser behavior.
   </scope>
   <objective>
-    Add a projection fidelity auditor that compares pet cockpit projections against durable autonomous run state.
-    Persist or export a compact fidelity verdict, drift count, and gate-impact signal using safe metadata only.
-    Injected projection drift must fail the probe; clean projections must pass.
+    Add the autonomous safety policy and redaction gate.
+    Deny-by-default autonomous action summaries and privacy redaction flags must be enforced before telemetry,
+    review lanes, worker prompts, or pet handoff export raw state. Secret-like source fixtures must be present
+    in tests and absent from exported telemetry, pet, review, and worker-prompt surfaces.
   </objective>
   <quality_gate>
     <item>Before committing, build a contract coverage table: each required behavior must map to at least one test assertion or be explicitly marked not testable in this slice.</item>
@@ -163,7 +164,7 @@ Default worker prompt:
     <item>After commit, expect an independent adversarial review; do not start the next slice if a P1/P2 is found.</item>
   </quality_gate>
   <verification>
-    <command>npm test -- tests/pet-control.test.ts tests/pet-orchestrator-bridge.test.ts tests/run-telemetry.test.ts</command>
+    <command>npm test -- tests/run-policy.test.ts tests/run-telemetry.test.ts tests/pet-control.test.ts tests/run-worker-prompt.test.ts</command>
     <command>npm run compile</command>
     <command>npm test</command>
     <command>git diff --check</command>
