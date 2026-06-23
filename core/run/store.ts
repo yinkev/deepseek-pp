@@ -608,6 +608,16 @@ export async function reconcileInterruptedAutonomousRuns(
     let count = 0;
     const runs = state.runs.map((run) => {
       if (run.status !== 'running') return run;
+      const leaseError = createTargetLeaseReconcileError(run, state.targetLeases, now);
+      if (leaseError) {
+        count += 1;
+        return normalizeRun({
+          ...run,
+          status: 'blocked',
+          error: leaseError,
+          updatedAt: now,
+        }) ?? run;
+      }
       if (now - run.updatedAt < thresholdMs) return run;
       count += 1;
       return normalizeRun({
@@ -630,6 +640,62 @@ export async function reconcileInterruptedAutonomousRuns(
       write: count > 0,
     };
   });
+}
+
+function createTargetLeaseReconcileError(
+  run: AutonomousRun,
+  targetLeases: readonly AutonomousTargetLease[],
+  now: number,
+): AutonomousRunError | null {
+  if (!run.targetLeaseId) return null;
+  const lease = targetLeases.find((item) => item.id === run.targetLeaseId && item.runId === run.id) ?? null;
+  if (!lease) {
+    return createReconcileError(
+      'autonomous_reconcile_target_lease_missing',
+      'Autonomous run target lease was missing during startup reconciliation.',
+      now,
+      null,
+    );
+  }
+  if (lease.status !== 'active') {
+    return createReconcileError(
+      'autonomous_reconcile_target_lease_inactive',
+      'Autonomous run target lease was inactive during startup reconciliation.',
+      now,
+      lease,
+    );
+  }
+  if (lease.expiresAt <= now) {
+    return createReconcileError(
+      'autonomous_reconcile_target_lease_expired',
+      'Autonomous run target lease expired before startup reconciliation.',
+      now,
+      lease,
+    );
+  }
+  return null;
+}
+
+function createReconcileError(
+  code: string,
+  message: string,
+  now: number,
+  lease: AutonomousTargetLease | null,
+): AutonomousRunError {
+  return {
+    code,
+    message,
+    phase: 'storage',
+    retryable: true,
+    at: now,
+    details: lease
+      ? {
+        leaseStatus: lease.status,
+        targetLeaseAgeMs: Math.max(0, now - lease.acquiredAt),
+        targetLeaseExpiresInMs: Math.max(0, lease.expiresAt - now),
+      }
+      : {},
+  };
 }
 
 function createAutonomousRunIterationStep(

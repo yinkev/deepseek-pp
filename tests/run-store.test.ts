@@ -7,9 +7,11 @@ import {
   getAutonomousRuns,
   getAutonomousRunSteps,
   reconcileInterruptedAutonomousRuns,
+  releaseAutonomousTargetLease,
   transitionAutonomousRun,
   updateAutonomousRun,
   updateAutonomousRunCheckpoint,
+  upsertAutonomousTargetLease,
 } from '../core/run/store';
 
 afterEach(() => {
@@ -151,6 +153,88 @@ describe('autonomous run store', () => {
       error: {
         code: 'autonomous_run_interrupted',
         retryable: true,
+      },
+    });
+  });
+
+  it('reconciles running runs with missing target leases before selection', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'missing-lease-reconcile' });
+
+    const run = await createAutonomousRun({
+      goal: 'Missing lease reconcile',
+      targetLeaseId: 'lease-missing',
+    }, 100);
+    await transitionAutonomousRun(run.id, 'running', null, 110);
+
+    await expect(reconcileInterruptedAutonomousRuns(60_000, 200)).resolves.toBe(1);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: {
+        code: 'autonomous_reconcile_target_lease_missing',
+        retryable: true,
+        phase: 'storage',
+      },
+    });
+  });
+
+  it('reconciles running runs with inactive target leases before selection', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'inactive-lease-reconcile' });
+
+    const run = await createAutonomousRun({ goal: 'Inactive lease reconcile' }, 100);
+    const lease = await upsertAutonomousTargetLease({
+      id: 'lease-inactive',
+      runId: run.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+    }, 110);
+    await releaseAutonomousTargetLease(lease?.id ?? '', 120);
+    await updateAutonomousRun(run.id, { targetLeaseId: lease?.id ?? null }, 130);
+    await transitionAutonomousRun(run.id, 'running', null, 140);
+
+    await expect(reconcileInterruptedAutonomousRuns(60_000, 200)).resolves.toBe(1);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: {
+        code: 'autonomous_reconcile_target_lease_inactive',
+        details: {
+          leaseStatus: 'released',
+          targetLeaseExpiresInMs: 0,
+        },
+      },
+    });
+  });
+
+  it('reconciles running runs with expired target leases before selection', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'expired-lease-reconcile' });
+
+    const run = await createAutonomousRun({ goal: 'Expired lease reconcile' }, 100);
+    await upsertAutonomousTargetLease({
+      id: 'lease-expired',
+      runId: run.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+      acquiredAt: 0,
+      ttlMs: 10_000,
+    }, 110);
+    await transitionAutonomousRun(run.id, 'running', null, 120);
+
+    await expect(reconcileInterruptedAutonomousRuns(60_000, 20_000)).resolves.toBe(1);
+    await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: {
+        code: 'autonomous_reconcile_target_lease_expired',
+        details: {
+          leaseStatus: 'active',
+          targetLeaseExpiresInMs: 0,
+        },
       },
     });
   });

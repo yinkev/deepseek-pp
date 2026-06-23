@@ -14,7 +14,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Branch: `codex/deepseek-pet`.
 - Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
-- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, and worker-level scheduler watchdog preflight.
+- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, and startup reconciliation for invalid target leases.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -61,7 +61,7 @@ Every implementation slice must follow this order:
 | Step | Slice | How To Accomplish It | Verification | Commit Boundary |
 | --- | --- | --- | --- | --- |
 | 1 | Restartable scheduler/watchdog contract | Add a pure liveness gate around the existing run/orchestrator flow: lease age, evidence age, no-progress count, retry budget, pause/resume flag, and review-lane blocker state. Keep it in `core/run/*`; do not wire runtime. Implementation surface: `core/run/scheduler-watchdog.ts` plus worker preflight integration. | Unit tests for stale lease, stale evidence, repeated no-progress, review blocker, pause, terminal no-op, and result/durable agreement. | `Add autonomous scheduler watchdog contract` |
-| 2 | Lease/retry/restart reconciliation | Harden startup reconciliation so interrupted, stale, or expired active work becomes blocked/retryable with durable error metadata before new work is selected. | Store/orchestrator tests proving expired leases reconcile before selection and terminal runs stay terminal. | `Harden autonomous restart reconciliation` |
+| 2 | Lease/retry/restart reconciliation | Harden startup reconciliation so interrupted, stale, or expired active work becomes blocked/retryable with durable error metadata before new work is selected. Implementation surface: `reconcileInterruptedAutonomousRuns` blocks running runs with missing, inactive, or expired target leases before selection. | Store/orchestrator tests proving expired leases reconcile before selection and terminal runs stay terminal. | `Harden autonomous restart reconciliation` |
 | 3 | Repo-visible restart telemetry | Extend telemetry writer/package so restart handoff includes scheduler gate, watchdog verdict, retry posture, unresolved blockers, and last safe checkpoint. | Telemetry writer tests for `.complete.json`, path safety, privacy, and handoff fields agreeing with durable state. | `Add restartable telemetry handoff` |
 | 4 | Projection fidelity auditor | Measure pet cockpit projection fidelity against durable state after each pure cycle. Persist score, drift count, and gate-impact metadata. This is the selected novel feature. | Pet/orchestrator bridge tests where injected projection drift fails the fidelity probe and clean projections pass. | `Add pet projection fidelity audit` |
 | 5 | Safety policy and redaction gate | Add a pure deny-by-default policy summary for autonomous actions and privacy redaction flags for telemetry/pet exports. No raw prompts, transcripts, target labels, URLs, or secrets should leak. | Privacy false-positive probes across telemetry, quality gates, review lanes, and pet handoff. | `Add autonomous safety policy gate` |
@@ -85,6 +85,7 @@ Every implementation slice must follow this order:
 - Files: `core/run/store.ts`, `core/run/orchestrator.ts`, `tests/run-store.test.ts`, `tests/run-orchestrator.test.ts`, `tests/run-target-store.test.ts`.
 - Contract: startup reconciliation converts interrupted or stale running state into explicit blocked/retryable durable records before any new run is selected.
 - Acceptance: expired leases reconcile before selection; terminal runs never reacquire leases; retry exhaustion becomes a durable blocker.
+- Slice doc: `docs/plan/autonomous-restart-reconciliation.md`.
 
 ### Step 3: Repo-Visible Restart Telemetry
 

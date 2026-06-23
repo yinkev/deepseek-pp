@@ -268,6 +268,48 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
   });
 
+  it('reconciles expired-lease running runs before falling back to queued work', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.stubGlobal('crypto', { randomUUID: () => 'expired-reconcile-cycle' });
+
+    const expired = await createAutonomousRun({
+      id: 'expired-running-before-selection',
+      goal: 'Expired running before selection',
+      proofContract: createProofContract(),
+    }, 100);
+    await upsertAutonomousTargetLease({
+      id: 'lease-expired-before-selection',
+      runId: expired.id,
+      tabId: 42,
+      windowId: 7,
+      origin: 'https://example.com',
+      acquiredAt: 0,
+      ttlMs: 10_000,
+    }, 110);
+    await transitionAutonomousRun(expired.id, 'running', null, 120);
+    const queued = await createAutonomousRun({
+      id: 'queued-after-expired-lease',
+      goal: 'Queued after expired lease',
+      proofContract: createProofContract(),
+    }, 500);
+
+    const executor = vi.fn();
+    const result = await executeAutonomousOrchestratorCycle(executor, {
+      interruptedThresholdMs: 60_000,
+      now: 20_000,
+    });
+
+    expect(result.reconciledInterruptedRuns).toBe(1);
+    expect(result.beforeSnapshot.totals).toMatchObject({ blocked: 1, queued: 1, running: 0 });
+    expect(result.selectedRunId).toBe(queued.id);
+    expect(executor).toHaveBeenCalledTimes(1);
+    await expect(getAutonomousRunById(expired.id)).resolves.toMatchObject({
+      status: 'blocked',
+      error: { code: 'autonomous_reconcile_target_lease_expired' },
+    });
+  });
+
   it('returns noop when no runnable run exists and does not resume paused or blocked runs', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
@@ -322,7 +364,7 @@ describe('autonomous run orchestrator startup bridge', () => {
     await expect(getAutonomousRunById(cancelled.id)).resolves.toMatchObject({ status: 'cancelled' });
   });
 
-  it('lets worker watchdog block expired target leases before executor and keeps snapshots durable-agreeing', async () => {
+  it('reconciles expired target leases before worker selection and keeps snapshots durable-agreeing', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
     vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-expired-lease' });
@@ -346,30 +388,22 @@ describe('autonomous run orchestrator startup bridge', () => {
     const executor = vi.fn();
     const result = await executeAutonomousOrchestratorCycle(executor, { now: 20_000 });
 
-    expect(result.selectedRunId).toBe(run.id);
-    expect(result.workerResult).toMatchObject({
-      action: 'block',
-      advanced: false,
-      finalStatus: 'blocked',
-      errorCode: 'autonomous_watchdog_expired_target_lease',
-      schedulerWatchdogVerdict: {
-        decision: 'mustBlock',
-        reason: 'expired_target_lease',
-      },
-    });
+    expect(result.reconciledInterruptedRuns).toBe(1);
+    expect(result.selectedRunId).toBeNull();
+    expect(result.workerResult).toBeNull();
     expect(executor).not.toHaveBeenCalled();
     await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
       status: 'blocked',
-      error: { code: result.workerResult?.errorCode },
+      error: { code: 'autonomous_reconcile_target_lease_expired' },
     });
     expect(result.afterSnapshot.activeRun).toMatchObject({
       id: run.id,
       status: 'blocked',
-      errorCode: result.workerResult?.errorCode,
+      errorCode: 'autonomous_reconcile_target_lease_expired',
     });
   });
 
-  it('lets worker watchdog block missing target leases before executor and keeps snapshots durable-agreeing', async () => {
+  it('reconciles missing target leases before worker selection and keeps snapshots durable-agreeing', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
     vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-missing-lease' });
@@ -385,30 +419,22 @@ describe('autonomous run orchestrator startup bridge', () => {
     const executor = vi.fn();
     const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
 
-    expect(result.selectedRunId).toBe(run.id);
-    expect(result.workerResult).toMatchObject({
-      action: 'block',
-      advanced: false,
-      finalStatus: 'blocked',
-      errorCode: 'autonomous_watchdog_missing_target_lease',
-      schedulerWatchdogVerdict: {
-        decision: 'mustBlock',
-        reason: 'missing_target_lease',
-      },
-    });
+    expect(result.reconciledInterruptedRuns).toBe(1);
+    expect(result.selectedRunId).toBeNull();
+    expect(result.workerResult).toBeNull();
     expect(executor).not.toHaveBeenCalled();
     await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
       status: 'blocked',
-      error: { code: result.workerResult?.errorCode },
+      error: { code: 'autonomous_reconcile_target_lease_missing' },
     });
     expect(result.afterSnapshot.activeRun).toMatchObject({
       id: run.id,
       status: 'blocked',
-      errorCode: result.workerResult?.errorCode,
+      errorCode: 'autonomous_reconcile_target_lease_missing',
     });
   });
 
-  it('lets worker watchdog block inactive target leases before executor and keeps snapshots durable-agreeing', async () => {
+  it('reconciles inactive target leases before worker selection and keeps snapshots durable-agreeing', async () => {
     const { chromeStub } = createChromeStub();
     vi.stubGlobal('chrome', chromeStub);
     vi.stubGlobal('crypto', { randomUUID: () => 'orchestrator-inactive-lease' });
@@ -432,26 +458,18 @@ describe('autonomous run orchestrator startup bridge', () => {
     const executor = vi.fn();
     const result = await executeAutonomousOrchestratorCycle(executor, { now: 200 });
 
-    expect(result.selectedRunId).toBe(run.id);
-    expect(result.workerResult).toMatchObject({
-      action: 'block',
-      advanced: false,
-      finalStatus: 'blocked',
-      errorCode: 'autonomous_watchdog_inactive_target_lease',
-      schedulerWatchdogVerdict: {
-        decision: 'mustBlock',
-        reason: 'inactive_target_lease',
-      },
-    });
+    expect(result.reconciledInterruptedRuns).toBe(1);
+    expect(result.selectedRunId).toBeNull();
+    expect(result.workerResult).toBeNull();
     expect(executor).not.toHaveBeenCalled();
     await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({
       status: 'blocked',
-      error: { code: result.workerResult?.errorCode },
+      error: { code: 'autonomous_reconcile_target_lease_inactive' },
     });
     expect(result.afterSnapshot.activeRun).toMatchObject({
       id: run.id,
       status: 'blocked',
-      errorCode: result.workerResult?.errorCode,
+      errorCode: 'autonomous_reconcile_target_lease_inactive',
     });
   });
 
