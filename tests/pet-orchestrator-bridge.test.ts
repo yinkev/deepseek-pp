@@ -666,6 +666,20 @@ describe('pet to orchestrator review lane bridge', () => {
         applied: true,
         advanced: true,
         iterationAction: 'iterate',
+        schedulerWatchdogVerdict: {
+          decision: 'canContinue',
+          reason: 'ok',
+          retryable: true,
+          blocksNextAction: false,
+          recommendedStatus: null,
+          error: null,
+          details: {
+            stepCount: 2,
+            evidenceCount: 1,
+            staleEvidenceCount: 0,
+            expiredEvidenceCount: 0,
+          },
+        },
         reviewSummary: {
           action: 'iterate',
           completionDecision: 'iterate',
@@ -724,6 +738,15 @@ describe('pet to orchestrator review lane bridge', () => {
       acceptedEvidenceCount: 3,
       reviewErrorCode: 'completion_review_iterate',
     });
+    expect(merged.schedulerWatchdog).toMatchObject({
+      status: 'clear',
+      decision: 'canContinue',
+      reason: 'ok',
+      retryable: true,
+      blocksNextAction: false,
+      stepCount: 2,
+      evidenceCount: 1,
+    });
     expect(merged.telemetry).toEqual({
       status: 'written',
       complete: true,
@@ -742,6 +765,8 @@ describe('pet to orchestrator review lane bridge', () => {
       verificationPassed: false,
     });
     expect(capsule.workerCycleReviewGrade).toBe(merged.workerCycle.reviewGrade);
+    expect(capsule.schedulerWatchdogStatus).toBe(merged.schedulerWatchdog.status);
+    expect(capsule.schedulerWatchdogDecision).toBe(merged.schedulerWatchdog.decision);
     expect(capsule.telemetryComplete).toBe(merged.telemetry.complete);
     expect(capsule.telemetryQualityGatePackagePresent).toBe(merged.telemetry.qualityGatePackagePresent);
     expect(capsule.telemetryReviewLanePackagePresent).toBe(merged.telemetry.reviewLanePackagePresent);

@@ -127,8 +127,8 @@ Priority order:
    - Gate: `.complete.json` marker required, writer failures safe, package summaries agree with durable state.
 
 8. Pet cockpit projection.
-   - Status: partially complete; cockpit projection remains a safe-metadata subset.
-   - Implemented so far by projecting run status, run queue, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, stop-line, memory pressure, worker-cycle, telemetry, quality-gate, bounded review lanes, and handoff capsule state into pet snapshot/handoff fields.
+   - Status: complete for the pure projection contract; UI/runtime wiring remains frozen.
+   - Implemented by projecting run status, run queue, scheduler/watchdog verdict, evidence freshness, target lease pulse, proof debt, blocker lens, review heat, stop-line, memory pressure, worker-cycle, telemetry, quality-gate row/probe status, bounded review lanes, review-lane gate, projection fidelity, and handoff capsule state into safe pet snapshot/handoff fields.
    - Gate: pet surfaces expose safe metadata only and never trigger browser/file mutation by themselves.
 
 9. Controlled runtime resume.

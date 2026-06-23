@@ -20,6 +20,11 @@ import {
 import { transitionAutonomousRun } from '../run/store';
 import type { RuntimeDoctorReport } from '../chat/runtime-doctor';
 import type {
+  AutonomousSchedulerWatchdogDecision,
+  AutonomousSchedulerWatchdogReason,
+  AutonomousSchedulerWatchdogVerdict,
+} from '../run/scheduler-watchdog';
+import type {
   AutonomousRunCompletionDecision,
   AutonomousRunCompletionGrade,
   AutonomousRunCompletionReview,
@@ -115,6 +120,7 @@ export type PetTelemetryExportErrorCode =
   | 'telemetry_write_failed'
   | 'unknown_telemetry_error';
 export type PetQualityGateStatus = 'none' | 'clear' | 'warning' | 'blocked';
+export type PetSchedulerWatchdogStatus = 'none' | 'clear' | 'blocked' | 'retry' | 'paused' | 'terminal';
 export type PetProjectionFidelityStatus = 'unchecked' | 'passed' | 'drifted';
 export type PetProjectionFidelitySource = 'none' | 'cockpit' | 'orchestrator_cycle';
 export type PetProjectionFidelityDriftKey =
@@ -204,6 +210,22 @@ export interface PetQualityGate {
   verificationPassed: boolean | null;
 }
 
+export interface PetSchedulerWatchdog {
+  status: PetSchedulerWatchdogStatus;
+  decision: AutonomousSchedulerWatchdogDecision | null;
+  reason: AutonomousSchedulerWatchdogReason | null;
+  retryable: boolean;
+  blocksNextAction: boolean;
+  recommendedStatus: AutonomousRunCockpitRun['status'] | null;
+  errorCode: string | null;
+  stepCount: number;
+  evidenceCount: number;
+  staleEvidenceCount: number;
+  expiredEvidenceCount: number;
+  blockingLaneCount: number;
+  qualityGateConflictCount: number | null;
+}
+
 export interface PetControlSnapshot {
   schemaVersion: 1;
   generatedAt: number;
@@ -274,6 +296,7 @@ export interface PetControlSnapshot {
     budgetTokens: number;
   };
   workerCycle: PetWorkerCycle;
+  schedulerWatchdog: PetSchedulerWatchdog;
   telemetry: PetTelemetryExport;
   qualityGate: PetQualityGate;
   reviewLanes: {
@@ -506,6 +529,7 @@ function createUnauditedPetControlSnapshotFromRunCockpit(
     reviewLanePackagePresent: false,
   };
   const qualityGate = createDefaultPetQualityGate();
+  const schedulerWatchdog = createDefaultPetSchedulerWatchdog();
 
   const reviewLanes: PetControlSnapshot['reviewLanes'] = {
     total: 0,
@@ -566,6 +590,7 @@ function createUnauditedPetControlSnapshotFromRunCockpit(
     stopLine: createPetStopLineState(activeRun),
     memoryPressure,
     workerCycle,
+    schedulerWatchdog,
     telemetry,
     qualityGate,
     reviewLanes,
@@ -1166,6 +1191,19 @@ export interface PetHandoffCapsule {
   workerCycleReviewProofDebtCount: number;
   workerCycleAcceptedEvidenceCount: number;
   workerCycleReviewErrorCode: string | null;
+  schedulerWatchdogStatus: PetSchedulerWatchdogStatus;
+  schedulerWatchdogDecision: AutonomousSchedulerWatchdogDecision | null;
+  schedulerWatchdogReason: AutonomousSchedulerWatchdogReason | null;
+  schedulerWatchdogRetryable: boolean;
+  schedulerWatchdogBlocksNextAction: boolean;
+  schedulerWatchdogRecommendedStatus: AutonomousRunCockpitRun['status'] | null;
+  schedulerWatchdogErrorCode: string | null;
+  schedulerWatchdogStepCount: number;
+  schedulerWatchdogEvidenceCount: number;
+  schedulerWatchdogStaleEvidenceCount: number;
+  schedulerWatchdogExpiredEvidenceCount: number;
+  schedulerWatchdogBlockingLaneCount: number;
+  schedulerWatchdogQualityGateConflictCount: number | null;
   telemetryStatus: PetTelemetryExportStatus;
   telemetryComplete: boolean;
   telemetryFileCount: number;
@@ -1222,6 +1260,7 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     generatedAt,
     memoryPressure: mp,
     workerCycle: wc,
+    schedulerWatchdog: sw,
     telemetry: tel,
     qualityGate: qg,
     reviewLanes: rl,
@@ -1322,6 +1361,20 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
   const workerCycleReviewProofDebtCount = wc ? wc.reviewProofDebtCount : 0;
   const workerCycleAcceptedEvidenceCount = wc ? wc.acceptedEvidenceCount : 0;
   const workerCycleReviewErrorCode = wc ? wc.reviewErrorCode : null;
+  const schedulerWatchdog = sw ?? createDefaultPetSchedulerWatchdog();
+  const schedulerWatchdogStatus = schedulerWatchdog.status;
+  const schedulerWatchdogDecision = schedulerWatchdog.decision;
+  const schedulerWatchdogReason = schedulerWatchdog.reason;
+  const schedulerWatchdogRetryable = schedulerWatchdog.retryable;
+  const schedulerWatchdogBlocksNextAction = schedulerWatchdog.blocksNextAction;
+  const schedulerWatchdogRecommendedStatus = schedulerWatchdog.recommendedStatus;
+  const schedulerWatchdogErrorCode = schedulerWatchdog.errorCode;
+  const schedulerWatchdogStepCount = schedulerWatchdog.stepCount;
+  const schedulerWatchdogEvidenceCount = schedulerWatchdog.evidenceCount;
+  const schedulerWatchdogStaleEvidenceCount = schedulerWatchdog.staleEvidenceCount;
+  const schedulerWatchdogExpiredEvidenceCount = schedulerWatchdog.expiredEvidenceCount;
+  const schedulerWatchdogBlockingLaneCount = schedulerWatchdog.blockingLaneCount;
+  const schedulerWatchdogQualityGateConflictCount = schedulerWatchdog.qualityGateConflictCount;
   const telemetryStatus = tel ? tel.status : 'none';
   const telemetryComplete = tel ? tel.complete : false;
   const telemetryFileCount = tel ? tel.fileCount : 0;
@@ -1432,6 +1485,19 @@ export function createPetHandoffCapsule(snapshot: PetControlSnapshot): PetHandof
     workerCycleReviewProofDebtCount,
     workerCycleAcceptedEvidenceCount,
     workerCycleReviewErrorCode,
+    schedulerWatchdogStatus,
+    schedulerWatchdogDecision,
+    schedulerWatchdogReason,
+    schedulerWatchdogRetryable,
+    schedulerWatchdogBlocksNextAction,
+    schedulerWatchdogRecommendedStatus,
+    schedulerWatchdogErrorCode,
+    schedulerWatchdogStepCount,
+    schedulerWatchdogEvidenceCount,
+    schedulerWatchdogStaleEvidenceCount,
+    schedulerWatchdogExpiredEvidenceCount,
+    schedulerWatchdogBlockingLaneCount,
+    schedulerWatchdogQualityGateConflictCount,
     telemetryStatus,
     telemetryComplete,
     telemetryFileCount,
@@ -1568,9 +1634,11 @@ export function mergeAutonomousWorkerCycleResultIntoSnapshot(
     acceptedEvidenceCount: summary ? summary.acceptedEvidenceCount : 0,
     reviewErrorCode: toPetWorkerCycleReviewErrorCode(summary ? summary.errorCode : null),
   };
+  const schedulerWatchdog = createPetSchedulerWatchdog(result.schedulerWatchdogVerdict ?? null);
   return {
     ...snapshot,
     workerCycle,
+    schedulerWatchdog,
   };
 }
 
@@ -1663,6 +1731,84 @@ function createDefaultPetQualityGate(): PetQualityGate {
     falsePositiveProbeStatus: null,
     verificationPassed: null,
   };
+}
+
+function createDefaultPetSchedulerWatchdog(): PetSchedulerWatchdog {
+  return {
+    status: 'none',
+    decision: null,
+    reason: null,
+    retryable: false,
+    blocksNextAction: false,
+    recommendedStatus: null,
+    errorCode: null,
+    stepCount: 0,
+    evidenceCount: 0,
+    staleEvidenceCount: 0,
+    expiredEvidenceCount: 0,
+    blockingLaneCount: 0,
+    qualityGateConflictCount: null,
+  };
+}
+
+function createPetSchedulerWatchdog(
+  verdict: AutonomousSchedulerWatchdogVerdict | null | undefined,
+): PetSchedulerWatchdog {
+  if (!verdict) {
+    return createDefaultPetSchedulerWatchdog();
+  }
+  return {
+    status: toPetSchedulerWatchdogStatus(verdict),
+    decision: verdict.decision,
+    reason: verdict.reason,
+    retryable: verdict.retryable === true,
+    blocksNextAction: verdict.blocksNextAction === true,
+    recommendedStatus: normalizeRunStatus(verdict.recommendedStatus),
+    errorCode: normalizeWatchdogErrorCode(verdict.error?.code),
+    stepCount: normalizeQualityGateNumber(verdict.details.stepCount ?? null) ?? 0,
+    evidenceCount: normalizeQualityGateNumber(verdict.details.evidenceCount ?? null) ?? 0,
+    staleEvidenceCount: normalizeQualityGateNumber(verdict.details.staleEvidenceCount ?? null) ?? 0,
+    expiredEvidenceCount: normalizeQualityGateNumber(verdict.details.expiredEvidenceCount ?? null) ?? 0,
+    blockingLaneCount: normalizeQualityGateNumber(verdict.details.blockingLaneCount ?? null) ?? 0,
+    qualityGateConflictCount: normalizeQualityGateNumber(verdict.details.qualityGateConflictCount ?? null),
+  };
+}
+
+function toPetSchedulerWatchdogStatus(verdict: AutonomousSchedulerWatchdogVerdict): PetSchedulerWatchdogStatus {
+  if (verdict.decision === 'terminalNoop') return 'terminal';
+  if (verdict.decision === 'paused') return 'paused';
+  if (verdict.decision === 'mustRetry') return 'retry';
+  if (verdict.blocksNextAction || verdict.decision === 'mustBlock' || verdict.decision === 'blocked') return 'blocked';
+  if (verdict.decision === 'canContinue') return 'clear';
+  return 'none';
+}
+
+function normalizeWatchdogErrorCode(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (
+    trimmed === 'run_no_progress' ||
+    trimmed === 'same_error' ||
+    /^autonomous_[a-z0-9_]{1,96}$/.test(trimmed)
+  ) {
+    return trimmed;
+  }
+  return 'unknown_watchdog_error';
+}
+
+function normalizeRunStatus(value: unknown): AutonomousRunCockpitRun['status'] | null {
+  if (
+    value === 'queued' ||
+    value === 'running' ||
+    value === 'paused' ||
+    value === 'blocked' ||
+    value === 'succeeded' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  ) {
+    return value;
+  }
+  return null;
 }
 
 function toPetQualityGateStatus(decision: AutonomousRunQualityGateDecision): PetQualityGateStatus {

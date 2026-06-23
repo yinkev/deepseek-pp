@@ -14,7 +14,7 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Branch: `codex/deepseek-pet`.
 - Latest verified autonomous commit before the scheduler/watchdog implementation slice: `319b27c Adversarial probe: contradictory gates fail closed at unit and worker level`.
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
-- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, pure review dispatch planning, and first-class contract coverage automation.
+- Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, worker-level scheduler watchdog preflight, startup reconciliation for invalid target leases, repo-visible restart telemetry handoff, pet projection fidelity audit, autonomous safety/redaction summaries, pure review dispatch planning, first-class contract coverage automation, and pure pet cockpit projection contract.
 
   Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
 
@@ -119,7 +119,7 @@ Every implementation slice must follow this order:
 
 ### Step 8: Pet Cockpit Projection Contract
 
-- Files: `core/pet/control.ts`, `tests/pet-control.test.ts`, `tests/pet-orchestrator-bridge.test.ts`.
+- Files: `core/pet/control.ts`, `tests/pet-control.test.ts`, `tests/pet-orchestrator-bridge.test.ts`, plus `docs/plan/pet-cockpit-projection-contract.md`.
 - Contract: pet snapshot exposes only safe metadata for run posture, scheduler/watchdog gate, telemetry handoff, quality gate, review lane gate, fidelity score, and stop-line state.
 - Acceptance: projection tests prove no raw labels, prompts, URLs, transcripts, target IDs, or secret-like strings leak.
 
@@ -137,7 +137,7 @@ Every implementation slice must follow this order:
 
 ## Immediate Next Worker Slice
 
-Step 8 is the next implementation slice.
+Step 9 is the next implementation slice.
 
 Default worker prompt:
 
@@ -145,17 +145,17 @@ Default worker prompt:
 <worker_task>
   <repo_root>resolve from current checkout or injected REPO_ROOT</repo_root>
   <branch>codex/deepseek-pet</branch>
-  <slice>pet-cockpit-projection-contract</slice>
+  <slice>controlled-runtime-resume-gate</slice>
   <scope>
     Work only in pure autonomous core and pet/control-plane files under core/run, core/pet, tests, and docs.
     Do not touch entrypoints/background.ts, Chrome/runtime wiring, or live browser behavior.
   </scope>
   <objective>
-    Complete the safe metadata pet cockpit projection contract.
-    Ensure pet snapshot and handoff expose run posture, scheduler/watchdog gate, telemetry handoff,
-    quality gate row/probe status, review lane gate, fidelity score, and stop-line state as safe metadata only.
-    Do not add UI/runtime wiring; this is a pure projection and handoff contract slice.
-    Raw labels, prompts, transcripts, URLs, target IDs, provider IDs, session URLs, command output, and secrets must not leak.
+    Add the controlled runtime resume gate.
+    Runtime wiring remains blocked unless an explicit durable user authorization is present.
+    Document required commands, runtime smoke, Chrome safety checks, manual authorization record, rollback path, and P1/P2 review requirements.
+    If a guard type is added, pure tests must prove resume remains blocked without explicit authorization.
+    Do not touch entrypoints/background.ts or Chrome/runtime wiring in this slice.
   </objective>
   <quality_gate>
     <item>Evaluate, Review, Grade, Iterate after implementation before committing.</item>
@@ -166,7 +166,7 @@ Default worker prompt:
     <item>After commit, expect an independent adversarial review; do not start the next slice if a P1/P2 is found.</item>
   </quality_gate>
   <verification>
-    <command>npm test -- tests/pet-control.test.ts tests/pet-orchestrator-bridge.test.ts tests/run-telemetry.test.ts tests/run-orchestrator.test.ts</command>
+    <command>npm test -- tests/run-runtime-resume-gate.test.ts tests/run-orchestrator.test.ts tests/pet-control.test.ts</command>
     <command>npm run compile</command>
     <command>npm test</command>
     <command>git diff --check</command>
@@ -182,7 +182,7 @@ Default worker prompt:
 | --- | --- |
 | Use multiple Grok workers as advisory lanes. | Session evidence only; not a repo behavior and not used as proof of correctness. |
 | Preserve runtime/background freeze. | Roadmap states freeze and marks runtime wiring as Step 10 only. |
-| Choose one next default implementation slice. | `Immediate Next Worker Slice` selects pet cockpit projection contract. |
+| Choose one next default implementation slice. | `Immediate Next Worker Slice` selects controlled runtime resume gate. |
 | Include every major step and how to accomplish it. | `Roadmap` table lists ten steps with implementation method, verification, and commit boundary. |
 | Include Evaluate, Review, Grade, Iterate quality gate. | `Non-Negotiable Loop` and worker XML prompt include the quality gate. |
 | Include false-positive success probe. | Loop and worker prompt require result/durable agreement. |

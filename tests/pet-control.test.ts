@@ -80,6 +80,7 @@ describe('pet control snapshot', () => {
     stopLine?: Partial<PetControlSnapshot['stopLine']>;
     memoryPressure?: Partial<PetControlSnapshot['memoryPressure']>;
     workerCycle?: Partial<PetControlSnapshot['workerCycle']>;
+    schedulerWatchdog?: Partial<PetControlSnapshot['schedulerWatchdog']>;
     telemetry?: Partial<PetControlSnapshot['telemetry']>;
     qualityGate?: Partial<PetControlSnapshot['qualityGate']>;
     reviewLanes?: Partial<PetControlSnapshot['reviewLanes']>;
@@ -201,6 +202,22 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         reviewErrorCode: null,
         ...overrides.workerCycle,
+      },
+      schedulerWatchdog: {
+        status: 'none',
+        decision: null,
+        reason: null,
+        retryable: false,
+        blocksNextAction: false,
+        recommendedStatus: null,
+        errorCode: null,
+        stepCount: 0,
+        evidenceCount: 0,
+        staleEvidenceCount: 0,
+        expiredEvidenceCount: 0,
+        blockingLaneCount: 0,
+        qualityGateConflictCount: null,
+        ...overrides.schedulerWatchdog,
       },
       telemetry: {
         status: 'none',
@@ -1640,6 +1657,19 @@ describe('pet control snapshot', () => {
         workerCycleReviewProofDebtCount: 0,
         workerCycleAcceptedEvidenceCount: 0,
         workerCycleReviewErrorCode: null,
+        schedulerWatchdogStatus: 'none',
+        schedulerWatchdogDecision: null,
+        schedulerWatchdogReason: null,
+        schedulerWatchdogRetryable: false,
+        schedulerWatchdogBlocksNextAction: false,
+        schedulerWatchdogRecommendedStatus: null,
+        schedulerWatchdogErrorCode: null,
+        schedulerWatchdogStepCount: 0,
+        schedulerWatchdogEvidenceCount: 0,
+        schedulerWatchdogStaleEvidenceCount: 0,
+        schedulerWatchdogExpiredEvidenceCount: 0,
+        schedulerWatchdogBlockingLaneCount: 0,
+        schedulerWatchdogQualityGateConflictCount: null,
         telemetryStatus: 'none',
         telemetryComplete: false,
         telemetryFileCount: 0,
@@ -1650,11 +1680,13 @@ describe('pet control snapshot', () => {
         qualityGateLatestStatus: null,
         qualityGateSeq: null,
         qualityGateCoverageComplete: null,
+        qualityGateCoverageRowCount: null,
         qualityGateCoveredCount: null,
         qualityGateGapCount: null,
         qualityGateConflictCount: null,
         qualityGateNotTestableCount: null,
         qualityGateSelfReviewGrade: null,
+        qualityGateFalsePositiveProbeStatus: null,
         qualityGateVerificationPassed: null,
         reviewLaneCount: 0,
         reviewLaneActiveCount: 0,
@@ -2360,6 +2392,21 @@ describe('pet control snapshot', () => {
         acceptedEvidenceCount: 0,
         reviewErrorCode: null,
       });
+      expect(pet.schedulerWatchdog).toEqual({
+        status: 'none',
+        decision: null,
+        reason: null,
+        retryable: false,
+        blocksNextAction: false,
+        recommendedStatus: null,
+        errorCode: null,
+        stepCount: 0,
+        evidenceCount: 0,
+        staleEvidenceCount: 0,
+        expiredEvidenceCount: 0,
+        blockingLaneCount: 0,
+        qualityGateConflictCount: null,
+      });
       const idleCockpit = {
         schemaVersion: 1 as const,
         generatedAt: 123,
@@ -2368,6 +2415,7 @@ describe('pet control snapshot', () => {
         activeRun: null,
       };
       expect(createPetControlSnapshotFromRunCockpit(idleCockpit).workerCycle).toEqual(pet.workerCycle);
+      expect(createPetControlSnapshotFromRunCockpit(idleCockpit).schedulerWatchdog).toEqual(pet.schedulerWatchdog);
     });
 
     it('mergeAutonomousWorkerCycleResultIntoSnapshot returns original snapshot object unchanged if result null or undefined', () => {
@@ -2404,6 +2452,69 @@ describe('pet control snapshot', () => {
       expect(merged.review).toEqual(snap.review);
       expect(merged.reviewHeat).toEqual(snap.reviewHeat);
       expect(merged.run.nextAction).toBe('continue');
+    });
+
+    it('projects scheduler watchdog verdicts into safe pet and handoff metadata', () => {
+      const snap = createBaseForHandoff({ run: { active: true, phase: 'working' } });
+      const result = createCycleResult({
+        schedulerWatchdogVerdict: {
+          decision: 'mustBlock',
+          reason: 'stale_evidence',
+          retryable: true,
+          blocksNextAction: true,
+          recommendedStatus: 'blocked',
+          error: {
+            code: 'autonomous_watchdog_stale_evidence',
+            message: 'raw message should not project',
+            phase: 'verification',
+            retryable: true,
+            at: 200,
+          },
+          details: {
+            stepCount: 2,
+            evidenceCount: 3,
+            staleEvidenceCount: 2,
+            expiredEvidenceCount: 1,
+            blockingLaneCount: 0,
+            qualityGateConflictCount: 1,
+          },
+        },
+      });
+
+      const merged = mergeAutonomousWorkerCycleResultIntoSnapshot(snap, result);
+      const capsule = createPetHandoffCapsule(merged);
+
+      expect(merged.schedulerWatchdog).toEqual({
+        status: 'blocked',
+        decision: 'mustBlock',
+        reason: 'stale_evidence',
+        retryable: true,
+        blocksNextAction: true,
+        recommendedStatus: 'blocked',
+        errorCode: 'autonomous_watchdog_stale_evidence',
+        stepCount: 2,
+        evidenceCount: 3,
+        staleEvidenceCount: 2,
+        expiredEvidenceCount: 1,
+        blockingLaneCount: 0,
+        qualityGateConflictCount: 1,
+      });
+      expect(capsule).toMatchObject({
+        schedulerWatchdogStatus: 'blocked',
+        schedulerWatchdogDecision: 'mustBlock',
+        schedulerWatchdogReason: 'stale_evidence',
+        schedulerWatchdogRetryable: true,
+        schedulerWatchdogBlocksNextAction: true,
+        schedulerWatchdogRecommendedStatus: 'blocked',
+        schedulerWatchdogErrorCode: 'autonomous_watchdog_stale_evidence',
+        schedulerWatchdogStepCount: 2,
+        schedulerWatchdogEvidenceCount: 3,
+        schedulerWatchdogStaleEvidenceCount: 2,
+        schedulerWatchdogExpiredEvidenceCount: 1,
+        schedulerWatchdogBlockingLaneCount: 0,
+        schedulerWatchdogQualityGateConflictCount: 1,
+      });
+      expect(JSON.stringify(merged)).not.toContain('raw message should not project');
     });
 
     it('null reviewSummary still records cycle action/status metadata with zero review counters', () => {
@@ -2514,6 +2625,28 @@ describe('pet control snapshot', () => {
           rawEvidenceIds: ['ev_SECRET_EVIDENCE_456'],
           rawMessage: 'password=worker-secret',
         } as AutonomousRunCycleResult['reviewSummary'] & Record<string, unknown>,
+        schedulerWatchdogVerdict: {
+          decision: 'mustBlock',
+          reason: 'quality_gate_blocked',
+          retryable: true,
+          blocksNextAction: true,
+          recommendedStatus: 'blocked',
+          error: {
+            code: 'SECRET_WATCHDOG_ERROR',
+            message: 'watchdog password=secret',
+            phase: 'verification',
+            retryable: true,
+            at: 100,
+          },
+          details: {
+            stepCount: 1,
+            evidenceCount: 1,
+            staleEvidenceCount: 0,
+            expiredEvidenceCount: 0,
+            blockingLaneCount: 0,
+            qualityGateConflictCount: 0,
+          },
+        } as any,
         rawTranscript: 'model said TOPSECRET_WORKER_TRANSCRIPT',
       } as Partial<AutonomousRunCycleResult> & Record<string, unknown>);
       const sourceJson = JSON.stringify(resultWithSecrets);
@@ -2528,11 +2661,13 @@ describe('pet control snapshot', () => {
       expect(merged.workerCycle.reviewIssueCount).toBe(2);
       expect(merged.workerCycle.reviewProofDebtCount).toBe(1);
       expect(merged.workerCycle.reviewErrorCode).toBe('unknown_worker_cycle_error');
+      expect(merged.schedulerWatchdog.errorCode).toBe('unknown_watchdog_error');
       expect(capsule.workerCycleReviewGrade).toBe('C');
       expect(capsule.workerCycleReviewIssueCount).toBe(2);
       expect(capsule.workerCycleReviewErrorCode).toBe('unknown_worker_cycle_error');
-      expect(petJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
-      expect(capsuleJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|password=/);
+      expect(capsule.schedulerWatchdogErrorCode).toBe('unknown_watchdog_error');
+      expect(petJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|SECRET_WATCHDOG_ERROR|password=/);
+      expect(capsuleJson).not.toMatch(/SECRET_WORKER_ID_123|SECRET_EVIDENCE_456|worker-secret|TOPSECRET_WORKER_TRANSCRIPT|SECRET_WORKER_ERROR|SECRET_WATCHDOG_ERROR|password=/);
     });
   });
 
