@@ -262,6 +262,42 @@ describe('autonomous run telemetry package', () => {
     expect(handoff).toMatchObject({
       nextAction: 'review_blocker',
       verificationStatus: 'conflicted',
+      schedulerWatchdog: {
+        decision: 'mustBlock',
+        reason: 'review_lane_gate_blocked',
+        retryable: true,
+        blocksNextAction: true,
+        recommendedStatus: 'blocked',
+        errorCode: 'autonomous_review_lane_gate_blocked',
+        details: {
+          blockingPriority: 'P1',
+          blockingLaneCount: 1,
+        },
+      },
+      retryPosture: {
+        retryable: true,
+        durableStatusAllowsContinue: true,
+        hasRetryableError: false,
+        totalBlockers: 2,
+      },
+      unresolvedBlockers: {
+        review: {
+          blockingCount: 1,
+          p1Count: 1,
+          p2Count: 0,
+          failedCount: 0,
+          blockRecommendationCount: 1,
+        },
+        qualityGate: {
+          blockingPresent: true,
+          latestStatus: 'blocked',
+          blockingIssueCount: 1,
+        },
+        watchdog: {
+          blocksNextAction: true,
+          reason: 'review_lane_gate_blocked',
+        },
+      },
       qualityGate: {
         latestStatus: 'blocked',
         latestSeq: 2,
@@ -319,6 +355,80 @@ describe('autonomous run telemetry package', () => {
     expect(JSON.stringify(pkg)).not.toMatch(
       /gate-token=secret|lane-token=secret|run-token=secret|Bearer secret|rawOutput|transcript|Cookie|Authorization|sid=secret/,
     );
+  });
+
+  it('exports a quality-gate watchdog blocker when no review lane blocks', () => {
+    const state = createState({ runId: 'quality-run-token=secret' });
+    state.qualityGates = [
+      {
+        id: 'quality-gate-token=secret',
+        runId: 'quality-run-token=secret',
+        seq: 1,
+        createdAt: 220,
+        status: 'failed',
+        contractCoverage: {
+          complete: false,
+          coveredCount: 4,
+          gapCount: 1,
+          conflictCount: 0,
+          notTestableCount: 0,
+        },
+        resultStateConsistency: {
+          status: 'inconsistent',
+          ok: false,
+          issueCount: 1,
+          blockingIssueCount: 1,
+        },
+        selfReview: { grade: 'B' },
+        verification: { commands: [] },
+        commit: null,
+        independentReview: {
+          status: 'passed',
+          grade: 'A',
+          blockingIssueCount: 0,
+        },
+      },
+    ];
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'quality-run-token=secret', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'running',
+      nextAction: 'review_blocker',
+      schedulerWatchdog: {
+        decision: 'mustBlock',
+        reason: 'quality_gate_blocked',
+        retryable: true,
+        blocksNextAction: true,
+        recommendedStatus: 'blocked',
+        errorCode: 'autonomous_quality_gate_blocked',
+        details: {
+          qualityGateSeq: 1,
+          qualityGateConflictCount: 1,
+        },
+      },
+      retryPosture: {
+        retryable: true,
+        durableStatusAllowsContinue: true,
+        hasRetryableError: false,
+        totalBlockers: 1,
+      },
+      unresolvedBlockers: {
+        qualityGate: {
+          blockingPresent: true,
+          latestStatus: 'failed',
+          blockingIssueCount: 0,
+        },
+        watchdog: {
+          blocksNextAction: true,
+          reason: 'quality_gate_blocked',
+        },
+      },
+    });
+    expect(JSON.stringify(pkg)).not.toMatch(/quality-run-token=secret|quality-gate-token=secret/);
   });
 
   it('uses deterministic generatedAt when omitted', () => {
@@ -489,6 +599,70 @@ describe('autonomous run telemetry package', () => {
     );
   });
 
+  it('exports stale evidence and no-progress watchdog blockers through handoff', () => {
+    const staleState = createState();
+    staleState.evidence[0].freshness = 'stale';
+
+    const stalePackage = createAutonomousRunTelemetryPackage(staleState, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(stalePackage, 'handoff.json')).toMatchObject({
+      nextAction: 'inspect_failure',
+      schedulerWatchdog: {
+        decision: 'mustBlock',
+        reason: 'stale_evidence',
+        errorCode: 'autonomous_watchdog_stale_evidence',
+      },
+      retryPosture: {
+        retryable: true,
+        durableStatusAllowsContinue: true,
+        totalBlockers: 1,
+      },
+      unresolvedBlockers: {
+        evidence: {
+          staleCount: 1,
+          expiredCount: 0,
+        },
+        watchdog: {
+          reason: 'stale_evidence',
+        },
+      },
+    });
+
+    const noProgressState = createState();
+    for (const step of noProgressState.steps) {
+      step.progressScore = 0;
+      step.proofDelta = [];
+      step.evidenceRefs = [];
+    }
+
+    const noProgressPackage = createAutonomousRunTelemetryPackage(noProgressState, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(noProgressPackage, 'handoff.json')).toMatchObject({
+      nextAction: 'inspect_failure',
+      schedulerWatchdog: {
+        decision: 'mustBlock',
+        reason: 'no_progress_exceeded',
+        errorCode: 'run_no_progress',
+      },
+      retryPosture: {
+        retryable: true,
+        durableStatusAllowsContinue: true,
+        totalBlockers: 1,
+      },
+      unresolvedBlockers: {
+        watchdog: {
+          reason: 'no_progress_exceeded',
+        },
+      },
+    });
+  });
+
   it('does not finalize a blocked restart handoff when verification commands pass', () => {
     const reconcileError = {
       ...createRunError('autonomous_reconcile_missing_target_lease'),
@@ -587,7 +761,7 @@ describe('autonomous run telemetry package', () => {
         retryable: false,
         durableStatusAllowsContinue: false,
         hasRetryableError: false,
-        totalBlockers: 1,
+        totalBlockers: 0,
       },
     });
   });
@@ -748,6 +922,26 @@ describe('autonomous run telemetry package', () => {
       nextAction: 'finalize',
       verificationStatus: 'passed',
       durableFailurePresent: false,
+      schedulerWatchdog: {
+        decision: 'terminalNoop',
+        reason: 'terminal',
+        retryable: false,
+        blocksNextAction: true,
+        recommendedStatus: null,
+        errorCode: null,
+      },
+      retryPosture: {
+        retryable: false,
+        durableStatusAllowsContinue: false,
+        hasRetryableError: false,
+        totalBlockers: 0,
+      },
+      unresolvedBlockers: {
+        watchdog: {
+          blocksNextAction: true,
+          reason: 'terminal',
+        },
+      },
     });
   });
 

@@ -932,7 +932,10 @@ function computeRetryPosture(
 ): RunTelemetryHandoff['retryPosture'] {
   const errorRetryable = run.error ? run.error.retryable : null;
   const durableAllows = isRunnableRunStatusForHandoff(run.status);
-  const totalB = reviewLane.blockingCount + (watchdog && watchdog.blocksNextAction ? 1 : 0) + (verificationSummary.durableFailurePresent ? 1 : 0);
+  const watchdogBlockerCount = watchdog && watchdog.blocksNextAction && watchdog.decision !== 'terminalNoop' && watchdog.decision !== 'paused'
+    ? 1
+    : 0;
+  const totalB = reviewLane.blockingCount + watchdogBlockerCount + (verificationSummary.durableFailurePresent ? 1 : 0);
   return {
     retryable: durableAllows && (watchdog ? watchdog.retryable : errorRetryable !== false),
     durableStatusAllowsContinue: durableAllows,

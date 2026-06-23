@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { createAutonomousRunTelemetryPackage } from '../core/run/telemetry';
 import { writeAutonomousRunTelemetryPackage } from '../core/run/telemetry-writer';
 import type { AutonomousRunTelemetryPackage } from '../core/run/telemetry';
+import type { AutonomousRunStorageState } from '../core/run/types';
 
 describe('autonomous run telemetry writer', () => {
   it('validates then writes package files in package order', async () => {
@@ -111,6 +113,25 @@ describe('autonomous run telemetry writer', () => {
     expect(writes).toEqual(['.runs/run-1/manifest.json', '.runs/run-1/report.md']);
     expect(writes).not.toContain('.runs/run-1/.complete.json');
   });
+
+  it('does not write a completion marker when real handoff file write fails', async () => {
+    const pkg = createAutonomousRunTelemetryPackage(createState(), 'run-1', { generatedAt: 500 });
+    expect(pkg?.files.map((file) => file.path)).toContain('.runs/run-1/handoff.json');
+    const writes: string[] = [];
+
+    await expect(writeAutonomousRunTelemetryPackage(pkg!, {
+      writeTextFile(path) {
+        writes.push(path);
+        if (path.endsWith('/handoff.json')) throw new Error('handoff write failed');
+      },
+    })).rejects.toThrow(/handoff write failed/);
+
+    expect(writes).toEqual([
+      '.runs/run-1/manifest.json',
+      '.runs/run-1/handoff.json',
+    ]);
+    expect(writes).not.toContain('.runs/run-1/.complete.json');
+  });
 });
 
 function createPackage(overrides: Partial<AutonomousRunTelemetryPackage> = {}): AutonomousRunTelemetryPackage {
@@ -121,5 +142,75 @@ function createPackage(overrides: Partial<AutonomousRunTelemetryPackage> = {}): 
       { path: '.runs/run-1/manifest.json', content: '{}\n' },
       { path: '.runs/run-1/report.md', content: '# Report\n' },
     ],
+  };
+}
+
+function createState(): AutonomousRunStorageState {
+  return {
+    version: 1,
+    runs: [
+      {
+        id: 'run-1',
+        goal: 'Write restart telemetry',
+        mode: 'unattended',
+        status: 'running',
+        modelAdapter: 'deepseek_web',
+        targetLeaseId: 'lease-1',
+        budgets: {
+          maxWallMs: 1000,
+          maxModelTurns: 10,
+          maxToolCalls: 20,
+          maxConsecutiveNoProgress: 2,
+          maxSameErrorRepeats: 1,
+          maxPromptBytesPerTurn: 100,
+          maxObservationBytesPerTurn: 50,
+        },
+        policy: {
+          approvalMode: 'auto_low_risk',
+          allowedTools: ['shell_exec'],
+          deniedTools: [],
+          browserMutationRequiresTargetLock: true,
+          persistMemory: 'propose',
+          shellMode: 'allowlisted',
+        },
+        proofContract: {
+          doneCriteria: ['tests pass'],
+          requiredEvidence: [],
+          antiProof: [],
+        },
+        checkpoint: {
+          providerConversationId: null,
+          parentMessageId: null,
+          latestStepId: null,
+          resumableSummary: '',
+          unresolvedQuestions: [],
+        },
+        error: null,
+        createdAt: 100,
+        startedAt: 110,
+        completedAt: null,
+        updatedAt: 200,
+      },
+    ],
+    steps: [],
+    targetLeases: [
+      {
+        id: 'lease-1',
+        runId: 'run-1',
+        status: 'active',
+        label: 'target',
+        tabId: 1,
+        windowId: 1,
+        origin: 'https://example.com',
+        title: 'target',
+        acquiredAt: 100,
+        expiresAt: 1000,
+        lastVerifiedAt: 150,
+        releasedAt: null,
+      },
+    ],
+    evidence: [],
+    qualityGates: [],
+    reviewLanes: [],
   };
 }
