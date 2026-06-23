@@ -8,6 +8,8 @@ Every quality gate now stores bounded coverage rows, false-positive probe status
 
 This is pure autonomous core and pet metadata work. It does not touch `entrypoints/background.ts`, Chrome/runtime wiring, live browser behavior, or UI runtime dispatch.
 
+Full pet cockpit completion is intentionally out of scope for this slice. Step 7 only exposes the new quality-gate row count and false-positive probe status as safe metadata so downstream cockpit code has a durable source. Step 8 owns the complete cockpit projection contract.
+
 ## Contract Coverage
 
 | Requirement | Coverage |
