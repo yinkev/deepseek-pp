@@ -11,6 +11,8 @@ Add a pure bridge from pet review-lane state to orchestrator review-lane options
 | Worker pulse, memory/browser/shell/ui risk, maxParallel, and Oracle/Grok advisor requests map into scheduler metadata. | `projects sanitized pet review lanes, worker pulse, risk, and advisor requests` |
 | Gate fields are re-derived from sanitized lane summaries instead of trusting forged snapshot gate fields. | `re-derives the gate from sanitized summaries instead of trusting forged snapshot gate fields` |
 | Blocking gate derivation scans all sanitized lanes, even beyond the capped scheduler lane output. | `derives blocking gate from lanes beyond scheduler output cap` |
+
+**Centralized implementation note:** Blocking decisions for the resulting gate input flow through the shared helpers in core/run/review-lane-gate.ts when consumed by the orchestrator and worker.
 | Pet-derived blocking gates can be passed to the orchestrator and durably block worker execution. | `feeds pet-derived blocking gate into orchestrator and durable worker block` |
 | Raw pet labels, transcripts, messages, URLs, and unknown fields do not appear in bridged options. | `keeps raw pet snapshot fields out of bridged orchestrator options` |
 

@@ -23,6 +23,8 @@ This slice is pure `core/run` orchestration, tests, and docs. It does not dispat
 
 The derived gate contains only status, reason, blocking priority, and blocking lane count. It does not expose lane ids, run ids, summaries, prompts, transcripts, sessions, URLs, or raw reviewer prose.
 
+**Centralized implementation:** The orchestrator derives the effective gate using record helpers from `review-lane-gate.ts` and merges explicit/persisted gates using `isBlockingGateInput`. The scheduler and worker also delegate to the shared normalizer.
+
 ## Adversarial Probe
 
 The false-positive safety probe stores a P2 lane, runs a cycle with no explicit gate, and asserts:

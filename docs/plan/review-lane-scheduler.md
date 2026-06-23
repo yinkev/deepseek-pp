@@ -34,6 +34,8 @@ Decision order:
 3. Hold if active lanes already meet `maxParallel`.
 4. Select roles by priority: implementer, reviewer, safety, UX, oracle, Grok.
 
+**Centralized implementation:** The scheduler calls the shared `normalizeReviewLaneGate` (which uses `isBlockingGateInput`) from `core/run/review-lane-gate.ts`. The local wrapper only maps the result for plan output. No behavior change from prior duplication.
+
 The planner is pure. It does not call storage, Chrome, terminal, network, worker execution, or pet reducers.
 
 ## Adversarial Probe

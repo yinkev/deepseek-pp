@@ -23,6 +23,8 @@ Required behavior:
 - `blockingPriority` is P1 or P2
 - `reason` is `p1`, `p2`, or `block_recommendation`
 
+**Centralized implementation:** Gate-input blocking is decided by the shared `isBlockingGateInput` / `normalizeReviewLaneGate` in `core/run/review-lane-gate.ts`. Worker, scheduler, and orchestrator all delegate here. No behavior change.
+
 The worker appends a metadata-only failed review step, transitions the run to `blocked`, and returns a block result. It does not call the executor and it does not start queued work first.
 
 `executeAutonomousOrchestratorCycle` forwards the gate option to the selected worker. Selection remains unchanged.

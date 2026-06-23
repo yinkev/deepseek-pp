@@ -20,6 +20,8 @@ Expose the pure review-lane scheduler from the non-Chrome orchestrator cycle wit
 
 The plan is observational metadata for review-lane dispatch. It does not start review workers and it does not stop the selected autonomous worker when `action` is `hold` or `dispatch`. Blocking remains enforced by the existing worker review-lane gate path: a halt plan with a selected run calls the worker with the same gate, and the worker appends the durable review block.
 
+**Centralized implementation:** Gate input decisions use the shared `isBlockingGateInput` from `core/run/review-lane-gate.ts` (via `mergeReviewLaneGates`). No behavior change.
+
 ## Adversarial Probe
 
 The halt test passes a runnable run, a P2 gate, and every dispatch trigger. The result must contain `reviewLanePlan.action = halt`, `canRunWorker = false`, no selected roles, no executor call, and durable stored run status/error matching the worker result.

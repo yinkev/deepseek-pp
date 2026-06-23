@@ -34,6 +34,8 @@ Required behavior:
 
 `blockingLaneCount` counts lanes that carry P1, P2, `block` recommendation, blocked status, or failed status when the gate is blocked. It is zero for attention and clear gates. Gate derivation uses all sanitized review lanes; handoff may expose only the first four summaries, but hidden blocking lanes still affect the gate/count projection.
 
+**Note:** When this derived gate is later consumed by the autonomous run loop, blocking evaluation uses the shared `isBlockingGateInput` / `normalizeReviewLaneGate` in core/run/review-lane-gate.ts.
+
 The handoff capsule treats sanitized `snapshot.reviewLanes.lanes` as the source for projected review-lane counts and gate fields, then exposes only a capped `reviewLaneSummaries` array. Caller-provided aggregate counts or gate fields are not trusted when the capsule is built.
 
 ## Adversarial Probe

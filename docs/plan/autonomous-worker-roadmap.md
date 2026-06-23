@@ -16,6 +16,8 @@ Oracle, Grok, Claude, Hermes, and other agents are advisory or worker lanes. Non
 - Frozen until explicit user resume: `entrypoints/background.ts`, Chrome/runtime wiring, and live browser mutation.
 - Completed pure-core foundation: durable iteration apply, worker prompt quality gate, contract coverage, result-state consistency, quality-gate persistence, pure orchestrator enforcement, review-lane persistence/gate consumption, telemetry handoff summary, pet cockpit projections, and worker-level scheduler watchdog preflight.
 
+  Review-lane gate-input blocking logic was consolidated into a single shared implementation in core/run/review-lane-gate.ts (isBlockingGateInput + normalizeReviewLaneGate) with full contract coverage and adversarial probes.
+
 ## Advisory Fan-Out Synthesis
 
 Codex launched twelve Grok CLI advisory workers across roadmap, orchestration, worker queue, review lanes, pet cockpit, telemetry/restart, safety, tests, failure modes, integration, novel features, and sequencing.
