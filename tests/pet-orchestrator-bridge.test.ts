@@ -606,10 +606,11 @@ describe('pet to orchestrator review lane bridge', () => {
         status: 'written',
         runId: 'SECRET_TELEMETRY_RUN',
         rootDir: '.runs/SECRET_TELEMETRY_RUN',
-        fileCount: 4,
+        fileCount: 5,
         contentLength: 400,
         paths: [
           '.runs/SECRET_TELEMETRY_RUN/manifest.json',
+          '.runs/SECRET_TELEMETRY_RUN/handoff.json',
           '.runs/SECRET_TELEMETRY_RUN/quality-gates.ndjson',
           '.runs/SECRET_TELEMETRY_RUN/review-lanes.ndjson',
           '.runs/SECRET_TELEMETRY_RUN/.complete.json',
@@ -648,7 +649,7 @@ describe('pet to orchestrator review lane bridge', () => {
     expect(merged.telemetry).toEqual({
       status: 'written',
       complete: true,
-      fileCount: 4,
+      fileCount: 5,
       contentLength: 400,
       errorCode: null,
       qualityGatePackagePresent: true,

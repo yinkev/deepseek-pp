@@ -18,6 +18,7 @@ describe('autonomous run telemetry package', () => {
     expect(pkg?.rootDir).toBe('.runs/run-1');
     expect(pkg?.files.map((file) => file.path)).toEqual([
       '.runs/run-1/manifest.json',
+      '.runs/run-1/handoff.json',
       '.runs/run-1/checkpoint.json',
       '.runs/run-1/steps.ndjson',
       '.runs/run-1/evidence.ndjson',
@@ -30,6 +31,7 @@ describe('autonomous run telemetry package', () => {
     ]);
 
     const manifest = readJson(pkg, 'manifest.json');
+    const handoff = readJson(pkg, 'handoff.json');
     expect(manifest).toMatchObject({
       schemaVersion: 1,
       generatedAt: 500,
@@ -61,12 +63,40 @@ describe('autonomous run telemetry package', () => {
         allowedToolCount: 1,
         deniedToolCount: 1,
       },
+      budgets: {
+        maxWallMs: 1000,
+        maxModelTurns: 10,
+        maxToolCalls: 20,
+        maxConsecutiveNoProgress: 2,
+        maxSameErrorRepeats: 1,
+        maxPromptBytesPerTurn: 100,
+        maxObservationBytesPerTurn: 50,
+      },
       verification: {
         status: 'conflicted',
         commandStatus: 'passed',
         durableStatus: 'running',
         durableSucceeded: false,
         durableFailurePresent: false,
+      },
+    });
+    expect(handoff).toMatchObject({
+      schemaVersion: 1,
+      generatedAt: 500,
+      runId: 'run-1',
+      status: 'running',
+      nextAction: 'continue_run',
+      verificationStatus: 'conflicted',
+      durableFailurePresent: false,
+      targetLeasePresent: true,
+      evidenceCount: 1,
+      counts: {
+        steps: 2,
+        evidence: 1,
+        targetLeases: 1,
+        qualityGates: 0,
+        reviewLanes: 0,
+        commits: 1,
       },
     });
 
@@ -98,6 +128,18 @@ describe('autonomous run telemetry package', () => {
         summaryCharCount: 35,
         refCount: 1,
         metadataPresent: true,
+      }),
+    ]);
+    expect(readNdjson(pkg, 'target-leases.ndjson')).toEqual([
+      expect.objectContaining({
+        id: 'target-lease-1',
+        runId: 'run-1',
+        status: 'active',
+        labelPresent: true,
+        tabPresent: true,
+        windowPresent: true,
+        originPresent: true,
+        titlePresent: true,
       }),
     ]);
   });
@@ -212,9 +254,28 @@ describe('autonomous run telemetry package', () => {
     expect(source).toMatch(/gate-token=secret|lane-token=secret|Bearer secret|rawOutput|transcript|Cookie/);
 
     const manifest = readJson(pkg, 'manifest.json');
+    const handoff = readJson(pkg, 'handoff.json');
     expect(manifest.counts).toMatchObject({
       qualityGates: 1,
       reviewLanes: 1,
+    });
+    expect(handoff).toMatchObject({
+      nextAction: 'review_blocker',
+      verificationStatus: 'conflicted',
+      qualityGate: {
+        latestStatus: 'blocked',
+        latestSeq: 2,
+        selfReviewGrade: 'B',
+        independentReviewStatus: 'blocked',
+        blockingIssueCount: 1,
+      },
+      reviewLane: {
+        total: 1,
+        blockedCount: 1,
+        blockRecommendationCount: 1,
+        p1Count: 1,
+        highestPriority: 'P1',
+      },
     });
     expect(readNdjson(pkg, 'quality-gates.ndjson')).toEqual([
       expect.objectContaining({
@@ -341,7 +402,186 @@ describe('autonomous run telemetry package', () => {
       passed: true,
     });
     expect(readJson(pkg, 'manifest.json').run.error.code).not.toMatch(/Token=secret/i);
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'failed',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'failed',
+      durableFailurePresent: true,
+    });
     expect(pkg?.files.find((file) => file.path.endsWith('/report.md'))?.content).toContain('- verification: failed');
+  });
+
+  it('collects evidence before continuing an unfinished run with no evidence', () => {
+    const state = createState();
+    state.evidence = [];
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'running',
+      nextAction: 'collect_evidence',
+      evidenceCount: 0,
+      verificationStatus: 'conflicted',
+    });
+  });
+
+  it('idles a terminal run when verification is not recorded', () => {
+    const state = createState({ status: 'succeeded' });
+    state.runs[0].completedAt = 250;
+    state.runs[0].updatedAt = 250;
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+    });
+
+    expect(readJson(pkg, 'verification.json').summary).toMatchObject({
+      status: 'not-recorded',
+      commandStatus: 'not-recorded',
+      durableStatus: 'succeeded',
+      durableSucceeded: true,
+    });
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'succeeded',
+      nextAction: 'idle',
+      verificationStatus: 'not-recorded',
+      durableFailurePresent: false,
+    });
+  });
+
+  it('inspects a terminal run when verification commands fail', () => {
+    const state = createState({ status: 'succeeded' });
+    state.runs[0].completedAt = 250;
+    state.runs[0].updatedAt = 250;
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 1 }],
+    });
+
+    expect(readJson(pkg, 'verification.json').summary).toMatchObject({
+      status: 'failed',
+      commandStatus: 'failed',
+      durableStatus: 'succeeded',
+      durableSucceeded: true,
+    });
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'succeeded',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'failed',
+      durableFailurePresent: false,
+    });
+  });
+
+  it('keeps historical review blockers active until durable records are removed', () => {
+    const state = createState({ status: 'succeeded' });
+    state.runs[0].completedAt = 250;
+    state.runs[0].updatedAt = 250;
+    state.reviewLanes = [
+      createReviewLane({ id: 'lane-old-blocker', seq: 1, status: 'blocked', recommendation: 'block', highestPriority: 'P1' }),
+      createReviewLane({ id: 'lane-latest-pass', seq: 2, status: 'passed', recommendation: 'proceed', highestPriority: null }),
+    ];
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'succeeded',
+      nextAction: 'review_blocker',
+      verificationStatus: 'passed',
+      reviewLane: {
+        total: 2,
+        blockedCount: 1,
+        p1Count: 1,
+        highestPriority: 'P1',
+      },
+    });
+  });
+
+  it('keeps latest review blockers ahead of durable failure inspection', () => {
+    const error = createRunError('durable failure after review');
+    const state = createState({
+      status: 'failed',
+      runError: error,
+      step2Status: 'failed',
+      step2Error: error,
+    });
+    state.reviewLanes = [
+      createReviewLane({ id: 'lane-latest-p2', seq: 1, status: 'blocked', recommendation: 'block', highestPriority: 'P2' }),
+    ];
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'failed',
+      nextAction: 'review_blocker',
+      verificationStatus: 'failed',
+      durableFailurePresent: true,
+      reviewLane: {
+        total: 1,
+        blockedCount: 1,
+        blockRecommendationCount: 1,
+        p2Count: 1,
+        highestPriority: 'P2',
+      },
+    });
+  });
+
+  it('inspects a failed latest review lane without priority blockers', () => {
+    const state = createState();
+    state.reviewLanes = [
+      createReviewLane({ id: 'lane-latest-failed', seq: 1, status: 'failed', recommendation: 'iterate', highestPriority: null }),
+    ];
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'running',
+      nextAction: 'inspect_failure',
+      verificationStatus: 'conflicted',
+      reviewLane: {
+        total: 1,
+        failedCount: 1,
+        p1Count: 0,
+        p2Count: 0,
+        highestPriority: null,
+      },
+    });
+  });
+
+  it('finalizes the handoff only when durable success and verification both pass', () => {
+    const state = createState({ status: 'succeeded' });
+    state.runs[0].completedAt = 250;
+    state.runs[0].updatedAt = 250;
+
+    const pkg = createAutonomousRunTelemetryPackage(state, 'run-1', {
+      generatedAt: 500,
+      verification: [{ command: 'npm test -- tests/run-telemetry.test.ts', exitCode: 0 }],
+    });
+
+    expect(readJson(pkg, 'verification.json').summary).toMatchObject({
+      status: 'passed',
+      commandStatus: 'passed',
+      durableStatus: 'succeeded',
+      durableSucceeded: true,
+      durableFailurePresent: false,
+    });
+    expect(readJson(pkg, 'handoff.json')).toMatchObject({
+      status: 'succeeded',
+      nextAction: 'finalize',
+      verificationStatus: 'passed',
+      durableFailurePresent: false,
+    });
   });
 
   it('normalizes root paths and keeps package paths inside .runs-style directories', () => {
@@ -365,6 +605,26 @@ function readNdjson(pkg: ReturnType<typeof createAutonomousRunTelemetryPackage>,
   expect(file).toBeDefined();
   const content = file?.content.trim() ?? '';
   return content ? content.split('\n').map((line) => JSON.parse(line)) : [];
+}
+
+function createReviewLane(
+  overrides: Partial<AutonomousRunStorageState['reviewLanes'][number]> = {},
+): AutonomousRunStorageState['reviewLanes'][number] {
+  return {
+    id: 'lane-1',
+    runId: 'run-1',
+    seq: 1,
+    createdAt: 220,
+    role: 'grok',
+    status: 'passed',
+    grade: 'A',
+    recommendation: 'proceed',
+    highestPriority: null,
+    issueCount: 0,
+    evidenceRefCount: 1,
+    summary: null,
+    ...overrides,
+  };
 }
 
 function createState(overrides: {

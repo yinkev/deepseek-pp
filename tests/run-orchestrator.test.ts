@@ -440,16 +440,18 @@ describe('autonomous run orchestrator startup bridge', () => {
       status: 'written',
       runId: 'run-1',
       rootDir: '.runs/run-1',
-      fileCount: 11,
+      fileCount: 12,
       errorCode: null,
     });
     expect(writes.map((write) => write.path)).toEqual(result.telemetryResult?.paths);
     expect(writes[writes.length - 1].path).toBe('.runs/run-1/.complete.json');
     const final = await getAutonomousRunById(run.id);
     const manifest = readTelemetryJson(writes, 'manifest.json');
+    const handoff = readTelemetryJson(writes, 'handoff.json');
     const verification = readTelemetryJson(writes, 'verification.json');
     const qualityGates = readTelemetryNdjson(writes, 'quality-gates.ndjson');
     const reviewLanes = readTelemetryNdjson(writes, 'review-lanes.ndjson');
+    const completionMarker = readTelemetryJson(writes, '.complete.json');
     expect(manifest.run).toMatchObject({
       id: 'run-1',
       status: final?.status,
@@ -459,6 +461,32 @@ describe('autonomous run orchestrator startup bridge', () => {
       qualityGates: 1,
       reviewLanes: 1,
     });
+    expect(handoff).toMatchObject({
+      runId: 'run-1',
+      status: final?.status,
+      nextAction: 'collect_evidence',
+      evidenceCount: 0,
+      qualityGate: {
+        latestStatus: 'passed',
+        selfReviewGrade: 'A',
+        independentReviewStatus: 'passed',
+      },
+      reviewLane: {
+        total: 1,
+        runningCount: 0,
+        blockedCount: 0,
+        failedCount: 0,
+        blockRecommendationCount: 0,
+      },
+    });
+    expect(completionMarker).toMatchObject({
+      schemaVersion: 1,
+      runId: 'run-1',
+      rootDir: '.runs/run-1',
+      packageFileCount: 11,
+    });
+    expect(completionMarker.packagePaths).toEqual(writes.slice(0, -1).map((write) => write.path));
+    expect(completionMarker.packagePaths[1]).toBe('.runs/run-1/handoff.json');
     expect(qualityGates).toEqual([
       expect.objectContaining({
         id: 'quality-gate-1',
@@ -571,6 +599,7 @@ describe('autonomous run orchestrator startup bridge', () => {
     });
     expect(JSON.stringify(result.telemetryResult)).not.toMatch(/Authorization|Bearer|secret-token/);
     expect(writes).toContain('.runs/run-1/manifest.json');
+    expect(writes).toContain('.runs/run-1/handoff.json');
     expect(writes).toContain('.runs/run-1/checkpoint.json');
     expect(writes).not.toContain('.runs/run-1/.complete.json');
     await expect(getAutonomousRunById(run.id)).resolves.toMatchObject({

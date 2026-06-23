@@ -46,6 +46,13 @@ export interface AutonomousRunTelemetryPackage {
 }
 
 type TelemetryVerificationStatus = 'not-recorded' | 'passed' | 'failed' | 'conflicted';
+type TelemetryHandoffNextAction =
+  | 'review_blocker'
+  | 'inspect_failure'
+  | 'collect_evidence'
+  | 'continue_run'
+  | 'finalize'
+  | 'idle';
 
 interface TelemetryHandles {
   runId: string;
@@ -115,6 +122,43 @@ interface RunTelemetryManifest {
   verification: VerificationSummary;
 }
 
+interface RunTelemetryHandoff {
+  schemaVersion: 1;
+  generatedAt: number;
+  runId: string;
+  status: AutonomousRun['status'];
+  nextAction: TelemetryHandoffNextAction;
+  verificationStatus: TelemetryVerificationStatus;
+  durableFailurePresent: boolean;
+  targetLeasePresent: boolean;
+  evidenceCount: number;
+  qualityGate: {
+    latestStatus: AutonomousQualityGateRecord['status'] | null;
+    latestSeq: number | null;
+    selfReviewGrade: AutonomousQualityGateRecord['selfReview']['grade'];
+    independentReviewStatus: AutonomousQualityGateRecord['independentReview']['status'] | null;
+    blockingIssueCount: number;
+  };
+  reviewLane: {
+    total: number;
+    runningCount: number;
+    blockedCount: number;
+    failedCount: number;
+    blockRecommendationCount: number;
+    p1Count: number;
+    p2Count: number;
+    highestPriority: AutonomousReviewLaneRecord['highestPriority'];
+  };
+  counts: {
+    steps: number;
+    evidence: number;
+    targetLeases: number;
+    qualityGates: number;
+    reviewLanes: number;
+    commits: number;
+  };
+}
+
 interface SafeError {
   code: string;
   phase: AutonomousRun['error'] extends infer E
@@ -162,6 +206,7 @@ export function createAutonomousRunTelemetryPackage(
     rootDir: safeRootDir,
     files: [
       jsonFile(safeRootDir, 'manifest.json', createManifest(run, steps, evidence, targetLeases, qualityGates, reviewLanes, verification, commits, generatedAt, handles, verificationSummary)),
+      jsonFile(safeRootDir, 'handoff.json', createHandoffExport(run, steps, evidence, targetLeases, qualityGates, reviewLanes, commits, generatedAt, handles, verificationSummary)),
       jsonFile(safeRootDir, 'checkpoint.json', createCheckpointExport(run, handles)),
       ndjsonFile(safeRootDir, 'steps.ndjson', steps.map((step) => toStepExport(step, handles))),
       ndjsonFile(safeRootDir, 'evidence.ndjson', evidence.map((record) => toEvidenceExport(record, handles))),
@@ -228,6 +273,107 @@ function createManifest(
     budgets: run.budgets,
     verification: verificationSummary,
   };
+}
+
+function createHandoffExport(
+  run: AutonomousRun,
+  steps: readonly AutonomousRunStep[],
+  evidence: readonly AutonomousEvidenceRecord[],
+  targetLeases: readonly AutonomousTargetLease[],
+  qualityGates: readonly AutonomousQualityGateRecord[],
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
+  commits: readonly ReturnType<typeof sanitizeCommits>[number][],
+  generatedAt: number,
+  handles: TelemetryHandles,
+  verificationSummary: VerificationSummary,
+): RunTelemetryHandoff {
+  const latestGate = qualityGates[qualityGates.length - 1] ?? null;
+  const reviewLaneSummary = createReviewLaneHandoffSummary(reviewLanes);
+  return {
+    schemaVersion: 1,
+    generatedAt,
+    runId: handles.runId,
+    status: run.status,
+    nextAction: chooseTelemetryHandoffNextAction(run, evidence, latestGate, reviewLaneSummary, verificationSummary),
+    verificationStatus: verificationSummary.status,
+    durableFailurePresent: verificationSummary.durableFailurePresent,
+    targetLeasePresent: run.targetLeaseId !== null,
+    evidenceCount: evidence.length,
+    qualityGate: {
+      latestStatus: latestGate ? latestGate.status : null,
+      latestSeq: latestGate ? latestGate.seq : null,
+      selfReviewGrade: latestGate ? latestGate.selfReview.grade : null,
+      independentReviewStatus: latestGate ? latestGate.independentReview.status : null,
+      blockingIssueCount: latestGate ? latestGate.independentReview.blockingIssueCount : 0,
+    },
+    reviewLane: reviewLaneSummary,
+    counts: {
+      steps: steps.length,
+      evidence: evidence.length,
+      targetLeases: targetLeases.length,
+      qualityGates: qualityGates.length,
+      reviewLanes: reviewLanes.length,
+      commits: commits.length,
+    },
+  };
+}
+
+function createReviewLaneHandoffSummary(
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
+): RunTelemetryHandoff['reviewLane'] {
+  return {
+    total: reviewLanes.length,
+    runningCount: reviewLanes.filter((lane) => lane.status === 'running').length,
+    blockedCount: reviewLanes.filter((lane) => lane.status === 'blocked').length,
+    failedCount: reviewLanes.filter((lane) => lane.status === 'failed').length,
+    blockRecommendationCount: reviewLanes.filter((lane) => lane.recommendation === 'block').length,
+    p1Count: reviewLanes.filter((lane) => lane.highestPriority === 'P1').length,
+    p2Count: reviewLanes.filter((lane) => lane.highestPriority === 'P2').length,
+    highestPriority: pickHighestReviewLanePriority(reviewLanes),
+  };
+}
+
+function chooseTelemetryHandoffNextAction(
+  run: AutonomousRun,
+  evidence: readonly AutonomousEvidenceRecord[],
+  latestGate: AutonomousQualityGateRecord | null,
+  reviewLane: RunTelemetryHandoff['reviewLane'],
+  verificationSummary: VerificationSummary,
+): TelemetryHandoffNextAction {
+  if (
+    latestGate?.status === 'blocked' ||
+    latestGate?.status === 'failed' ||
+    latestGate?.independentReview.status === 'blocked' ||
+    (latestGate?.independentReview.blockingIssueCount ?? 0) > 0 ||
+    reviewLane.p1Count > 0 ||
+    reviewLane.p2Count > 0 ||
+    reviewLane.blockRecommendationCount > 0 ||
+    reviewLane.blockedCount > 0
+  ) {
+    return 'review_blocker';
+  }
+  if (verificationSummary.status === 'failed' || verificationSummary.durableFailurePresent || reviewLane.failedCount > 0) {
+    return 'inspect_failure';
+  }
+  if (evidence.length === 0 && run.status !== 'succeeded') {
+    return 'collect_evidence';
+  }
+  if (run.status === 'running' || run.status === 'queued' || run.status === 'paused') {
+    return 'continue_run';
+  }
+  if (run.status === 'succeeded' && verificationSummary.status === 'passed') {
+    return 'finalize';
+  }
+  return 'idle';
+}
+
+function pickHighestReviewLanePriority(
+  reviewLanes: readonly AutonomousReviewLaneRecord[],
+): AutonomousReviewLaneRecord['highestPriority'] {
+  if (reviewLanes.some((lane) => lane.highestPriority === 'P1')) return 'P1';
+  if (reviewLanes.some((lane) => lane.highestPriority === 'P2')) return 'P2';
+  if (reviewLanes.some((lane) => lane.highestPriority === 'P3')) return 'P3';
+  return null;
 }
 
 function createCheckpointExport(run: AutonomousRun, handles: TelemetryHandles) {

@@ -2355,10 +2355,11 @@ describe('pet control snapshot', () => {
         status: 'written',
         runId: 'run-secret-raw-id',
         rootDir: '.runs/run-secret-raw-id',
-        fileCount: 11,
+        fileCount: 12,
         contentLength: 1234,
         paths: [
           '.runs/run-secret-raw-id/manifest.json',
+          '.runs/run-secret-raw-id/handoff.json',
           '.runs/run-secret-raw-id/quality-gates.ndjson',
           '.runs/run-secret-raw-id/review-lanes.ndjson',
           '.runs/run-secret-raw-id/.complete.json',
@@ -2403,7 +2404,7 @@ describe('pet control snapshot', () => {
       expect(merged.telemetry).toEqual({
         status: 'written',
         complete: true,
-        fileCount: 11,
+        fileCount: 12,
         contentLength: 1234,
         errorCode: null,
         qualityGatePackagePresent: true,
@@ -2558,7 +2559,7 @@ describe('pet control snapshot', () => {
       expect(merged.telemetry).toEqual({
         status: 'written',
         complete: true,
-        fileCount: 11,
+        fileCount: 12,
         contentLength: 1234,
         errorCode: 'unknown_telemetry_error',
         qualityGatePackagePresent: false,
