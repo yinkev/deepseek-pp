@@ -1,18 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { evaluateAutonomousDocResumptionGate } from '../core/run/doc-resumption-gate';
+import {
+  AUTONOMOUS_DOC_RESUMPTION_MARKERS,
+  evaluateAutonomousDocResumptionGate,
+} from '../core/run/doc-resumption-gate';
 
-const REQUIRED_MARKERS = [
-  'runtime_authorization_required',
-  'background_file_frozen',
-  'step_10_blocked',
-  'contract_coverage_required',
-  'false_positive_probe_required',
-  'self_review_grade_required',
-  'independent_p1p2_review_required',
-  'verification_ladder_required',
-];
+const REQUIRED_MARKERS = [...AUTONOMOUS_DOC_RESUMPTION_MARKERS];
 
 describe('autonomous doc resumption gate', () => {
   it('passes when repo-visible docs contain the autonomous resume contract', () => {
@@ -53,6 +47,21 @@ describe('autonomous doc resumption gate', () => {
       presentMarkerCodes: [],
       missingMarkerCodes: REQUIRED_MARKERS,
     });
+  });
+
+  it('treats the exact current structured contract as authoritative over later prose', () => {
+    const decision = evaluateAutonomousDocResumptionGate({
+      documents: [{
+        text: [
+          createStructuredContract(),
+          'The prose below is not authoritative for the machine gate.',
+          'Example stale claim text: runtime wiring remains blocked is incorrect.',
+        ].join('\n'),
+      }],
+    });
+
+    expect(decision.status).toBe('passed');
+    expect(decision.missingMarkerCodes).toEqual([]);
   });
 
   it('blocks denial phrasing that contains the right keywords without structured markers', () => {

@@ -33,7 +33,7 @@ export interface AutonomousDocResumptionGateDecision {
   missingMarkerCodes: AutonomousDocResumptionMarkerCode[];
 }
 
-const REQUIRED_MARKERS: AutonomousDocResumptionMarkerCode[] = [
+export const AUTONOMOUS_DOC_RESUMPTION_MARKERS: readonly AutonomousDocResumptionMarkerCode[] = [
   'runtime_authorization_required',
   'background_file_frozen',
   'step_10_blocked',
@@ -54,9 +54,9 @@ export function evaluateAutonomousDocResumptionGate(
   const text = documents.join('\n\n');
   const contractCurrent = CURRENT_CONTRACT_PATTERN.test(text) && !STALE_CONTRACT_PATTERN.test(text);
   const presentMarkerCodes = contractCurrent
-    ? REQUIRED_MARKERS.filter((code) => hasStructuredMarker(text, code))
+    ? AUTONOMOUS_DOC_RESUMPTION_MARKERS.filter((code) => hasStructuredMarker(text, code))
     : [];
-  const missingMarkerCodes = REQUIRED_MARKERS.filter((code) => !presentMarkerCodes.includes(code));
+  const missingMarkerCodes = AUTONOMOUS_DOC_RESUMPTION_MARKERS.filter((code) => !presentMarkerCodes.includes(code));
 
   const reason = documents.length === 0
     ? 'no_documents'
@@ -70,7 +70,7 @@ export function evaluateAutonomousDocResumptionGate(
     canResumeFromDocs,
     reason,
     documentCount: documents.length,
-    checkedMarkerCodes: REQUIRED_MARKERS,
+    checkedMarkerCodes: [...AUTONOMOUS_DOC_RESUMPTION_MARKERS],
     presentMarkerCodes,
     missingMarkerCodes,
   };
