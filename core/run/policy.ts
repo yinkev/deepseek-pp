@@ -83,6 +83,20 @@ export interface AutonomousRunActionReview {
   error: AutonomousRunError | null;
 }
 
+export function createAutonomousActionPolicySafetyRedactionSummary(
+  review: Pick<AutonomousRunActionReview, 'decision' | 'error'>,
+): AutonomousSafetyRedactionSummary {
+  return createAutonomousSafetyRedactionSummary({
+    surface: 'action_policy',
+    metadataOnly: true,
+    policyDecision: review.decision,
+    redactionCandidates: [
+      review.error?.code,
+      review.error?.phase,
+    ],
+  });
+}
+
 const BROWSER_MUTATION_TOOLS = new Set<string>([
   'browser_navigate',
   'browser_go_back',
@@ -103,7 +117,7 @@ const BROWSER_MUTATION_TOOLS = new Set<string>([
 ]);
 const SAFETY_REDACTION_ISSUE_LIMIT = 8;
 const GENERIC_URL_PATTERN = /\bhttps?:\/\/[^\s"'<>)}\]]+/i;
-const SECRET_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*[:=]\s*[^\s"' ,;}]+/i;
+const SECRET_ASSIGNMENT_PATTERN = /\b(?:authorization|cookie|set-cookie|api[_-]?key|apiKey|access[_-]?token|accessToken|refresh[_-]?token|refreshToken|token|secret|signed[_-]?path|signedPath)\s*["']?\s*[:=]\s*["']?[^\s"' ,;}]+/i;
 const REDACTION_MARKER_PATTERN = /\[(?:REDACTED|redacted)[^\]]*\]|_redacted(?::|_)/i;
 
 export function createAutonomousSafetyRedactionSummary(

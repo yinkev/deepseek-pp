@@ -57,9 +57,14 @@ describe('autonomous worker prompt contract', () => {
     expect(prompt).toContain('<metadata_only>true</metadata_only>');
     expect(prompt).toContain('<redacted>false</redacted>');
     expect(prompt).toContain('<issue_count>0</issue_count>');
-    expect(extractSafetyRedactionBlock(prompt)).toContain('<code>none</code>');
-    expect(extractSafetyRedactionBlock(prompt)).toContain('<category>none</category>');
-    expect(extractSafetyRedactionBlock(prompt)).toContain('<policy_gate>not_applicable</policy_gate>');
+    const safetyBlock = extractSafetyRedactionBlock(prompt);
+    expect(safetyBlock).toContain('<issue_codes>');
+    expect(safetyBlock).toContain('</issue_codes>');
+    expect(safetyBlock).toContain('<issue_categories>');
+    expect(safetyBlock).toContain('</issue_categories>');
+    expect(safetyBlock).not.toContain('<code>');
+    expect(safetyBlock).not.toContain('<category>');
+    expect(safetyBlock).toContain('<policy_gate>not_applicable</policy_gate>');
     expect(prompt).toContain('Do not touch Chrome/runtime work unless explicitly resumed.');
     expect(prompt).toContain('Do not touch entrypoints/background.ts.');
     expect(prompt).toContain('<step_report>');

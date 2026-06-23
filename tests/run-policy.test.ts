@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createAutonomousActionPolicySafetyRedactionSummary,
   createAutonomousSafetyRedactionSummary,
   reviewAutonomousRunAction,
 } from '../core/run/policy';
@@ -54,6 +55,7 @@ describe('autonomous run policy and budget gate', () => {
         'Authorization: Bearer secret-token',
         'https://example.com/private?token=secret',
         { Cookie: 'sid=secret-session' },
+        { token: 'structured-secret-only' },
       ],
     });
 
@@ -66,7 +68,19 @@ describe('autonomous run policy and budget gate', () => {
       issueCategories: ['privacy'],
       policyGate: 'not_applicable',
     });
-    expect(JSON.stringify(summary)).not.toMatch(/secret-token|token=secret|secret-session|example\.com/);
+    expect(JSON.stringify(summary)).not.toMatch(/secret-token|token=secret|secret-session|structured-secret-only|example\.com/);
+  });
+
+  it('flags JSON-style structured secret candidates without relying on URLs or headers', () => {
+    expect(createAutonomousSafetyRedactionSummary({
+      surface: 'telemetry',
+      metadataOnly: true,
+      redactionCandidates: [{ token: 'structured-secret-only' }],
+    })).toMatchObject({
+      status: 'redacted',
+      redacted: true,
+      issueCodes: ['redaction_applied'],
+    });
   });
 
   it('blocks denied and manual-review policy gates in safety summaries', () => {
@@ -92,6 +106,26 @@ describe('autonomous run policy and budget gate', () => {
       issueCodes: ['manual_review_required'],
       issueCategories: ['policy'],
       policyGate: 'manual_review',
+    });
+  });
+
+  it('creates action-policy safety summaries from real action reviews', () => {
+    const actionReview = reviewAutonomousRunAction(createRun({
+      policy: { ...DEFAULT_AUTONOMOUS_RUN_POLICY, deniedTools: ['bad_tool'] },
+    }), [], {
+      kind: 'tool_call',
+      toolName: 'bad_tool',
+      descriptor: createDescriptor('bad_tool', 'low'),
+    }, NOW);
+
+    expect(createAutonomousActionPolicySafetyRedactionSummary(actionReview)).toMatchObject({
+      status: 'blocked',
+      surface: 'action_policy',
+      metadataOnly: true,
+      redacted: false,
+      issueCodes: ['policy_denied'],
+      issueCategories: ['policy'],
+      policyGate: 'deny',
     });
   });
 

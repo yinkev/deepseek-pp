@@ -189,9 +189,6 @@ function listOrNone(values: readonly string[], tag: 'item' | 'file'): string[] {
 }
 
 function listSafetyValues(values: readonly string[], tag: 'code' | 'category'): string[] {
-  if (values.length === 0) {
-    return [`    <${tag}>none</${tag}>`];
-  }
   return values.map((value) => `    <${tag}>${value}</${tag}>`);
 }
 
