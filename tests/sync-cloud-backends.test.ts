@@ -8,6 +8,7 @@ import {
 } from '../core/sync/oauth-client';
 import { createGDriveBackend } from '../core/sync/gdrive-client';
 import { createOneDriveBackend } from '../core/sync/onedrive-client';
+import type { LocaleMessageKey, MessageParams } from '../core/i18n';
 
 // chrome.identity is read lazily via getRedirectUri(); stub it so imports work.
 beforeEach(() => {
@@ -25,6 +26,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function textResponse(body: string, status = 200): Response {
   return new Response(body, { status, headers: { 'Content-Type': 'text/plain' } });
+}
+
+function testT(key: LocaleMessageKey, params?: MessageParams): string {
+  const suffix = params ? ` ${JSON.stringify(params)}` : '';
+  return `translated:${key}${suffix}`;
 }
 
 describe('createStorageBackend routing', () => {
@@ -71,6 +77,14 @@ describe('oauth token management', () => {
     await getAccessToken('test-key', 'refresh', REFRESH_URL, { client_id: 'c' });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the injected translator for token refresh failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => textResponse('bad token', 500)));
+
+    await expect(
+      getAccessToken('test-key', 'refresh', REFRESH_URL, { client_id: 'c' }, testT),
+    ).rejects.toThrow('translated:background.sync.oauthRefreshFailed {"status":500,"detail":": bad token"}');
   });
 
   it('retries once with a fresh token on 401', async () => {
@@ -121,6 +135,12 @@ describe('Google Drive backend', () => {
 
     const backend = createGDriveBackend(config);
     expect(await backend.get('memories.json')).toBeNull();
+  });
+
+  it('uses the injected translator when Google Drive is not authorized', async () => {
+    const backend = createGDriveBackend({ ...config, refreshToken: undefined }, testT);
+
+    await expect(backend.test()).rejects.toThrow('translated:background.sync.gdriveMissingAuthorization');
   });
 
   it('put creates a file when absent, updates when present', async () => {

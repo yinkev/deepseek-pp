@@ -1,14 +1,14 @@
 # DeepSeek++ Privacy Policy
 
-Effective date: 2026-06-18
+Effective date: 2026-06-24
 
-DeepSeek++ is a browser extension that enhances DeepSeek chat workflows with user-controlled memory, skills, project context, saved items, prompt presets, MCP tools, multimodal media analysis, browser control tools, inline tool execution, local exports, downloadable artifacts, automation, and optional side-panel chat.
+DeepSeek++ is a browser extension that enhances DeepSeek chat workflows with user-controlled memory, skills, project context, saved items, prompt presets, MCP tools, multimodal media analysis, browser control tools, inline tool execution, local exports, downloadable artifacts, optional sync, automation, and optional side-panel chat.
 
 This Privacy Policy explains what data the extension handles, how that data is used, when it may be transferred, and what controls users have.
 
 ## 1. Single Purpose
 
-DeepSeek++ has one purpose: to enhance DeepSeek chat workflows with memory, skills, projects, saved items, presets, tools, multimodal media analysis, browser control, local exports, automation, and optional side-panel chat that the user controls.
+DeepSeek++ has one purpose: to enhance DeepSeek chat workflows with memory, skills, projects, saved items, presets, tools, multimodal media analysis, browser control, local exports, optional sync, automation, and optional side-panel chat that the user controls.
 
 ## 2. Data Handled by the Extension
 
@@ -18,7 +18,7 @@ DeepSeek++ may handle the following data only when needed for its user-facing fe
 - User-created extension data, including memories, skills, project context, project files or source notes, saved snippets, bookmarks, prompt presets, MCP server settings, automation tasks, theme settings, background settings, pet settings, and tool execution history.
 - Optional DeepSeek API Key, when the user configures official API chat in the side panel.
 - Optional OpenAI and Gemini API keys, model names, and request URLs, when the user configures multimodal image or video analysis.
-- Optional WebDAV sync settings, including server URL, username, password, remote path, and sync state, when the user configures WebDAV sync.
+- Optional sync settings, including WebDAV server URL, username, password, remote path, Google Drive or OneDrive OAuth app credentials, sync authorization tokens, provider selection, and sync state, when the user configures sync.
 - Optional MCP configuration, including endpoint URLs, request headers, environment variables, native host names, discovered tool metadata, and tool results, when the user configures MCP tools.
 - User-selected image or video files, file names, MIME types, file sizes, and analysis results, only when the user explicitly attaches media for multimodal analysis.
 - Browser tab titles, URLs, Accessibility Tree snapshots, and browser-control tool results only when the user enables Browser Control and selects or uses a controlled tab.
@@ -39,7 +39,7 @@ DeepSeek++ uses handled data only to provide its disclosed features:
 - Analyze user-selected images or videos through the local Multimodal Native Host and the user's configured OpenAI/Gemini-compatible endpoints when the user attaches media for multimodal analysis.
 - Run automation tasks created by the user.
 - Export the user's DeepSeek conversation history, individual messages, saved items, or generated artifacts into local files when the user starts an export or download.
-- Sync memories, custom skills, and presets to a user-configured WebDAV server when sync is enabled.
+- Sync memories, custom skills, and presets to a user-configured WebDAV server, Google Drive app data area, or OneDrive app folder when sync is enabled.
 - Connect to user-configured MCP endpoints or Native Messaging hosts when the user tests or executes those tools.
 - Control a selected browser tab through Chrome's debugger API when the user enables Browser Control and the AI calls an enabled `browser_*` tool.
 
@@ -62,7 +62,7 @@ Data may be transferred only as part of user-facing features:
 - To DeepSeek, when the user sends a chat message, runs an automation task, or allows the extension to return selected context or tool results to a DeepSeek conversation.
 - To the official DeepSeek API, when the user configures a DeepSeek API Key and sends a side-panel chat message.
 - To the local Multimodal Native Host, and from that host to user-configured OpenAI/Gemini-compatible endpoints, when the user attaches images or videos for multimodal analysis.
-- To a WebDAV server selected and configured by the user, when the user enables sync.
+- To a WebDAV server, Google Drive app data area, or OneDrive app folder selected and configured by the user, when the user enables sync.
 - To MCP endpoints selected and configured by the user, when the user tests or executes MCP tools.
 - To a local Native Messaging host configured by the user, when local/native MCP or multimodal tooling is enabled.
 - To DeepSeek as text tool results, when Browser Control returns the selected tab's Accessibility Tree snapshot or action result to the active conversation.
@@ -80,9 +80,12 @@ DeepSeek++ requests these Chrome permissions for the following purposes:
 - `offscreen`: host an invisible extension document that runs isolated JavaScript, TypeScript, Python, and HTML sandbox requests outside the DeepSeek page, preventing the chat tab from being blocked by sandbox execution.
 - `debugger`: attach to a user-selected browser tab only when Browser Control is enabled, so DeepSeek++ can read an Accessibility Tree snapshot and perform user-visible browser actions requested through `browser_*` tools.
 - `tabs`: list browser tabs and select the target tab for Browser Control. Tab group names may be shown when the browser exposes them without an additional required permission.
+- `identity`: start the user-approved Google Drive or OneDrive OAuth sign-in flow when the user enables one of those sync providers.
 - `sidePanel`: provide the extension management UI in Chrome's side panel.
 - `*://chat.deepseek.com/*`: run on the DeepSeek web app so the extension can apply user-selected context, render tool results, export user-requested conversation history, support local downloads, and support automation inside DeepSeek conversations.
 - `https://api.deepseek.com/*`: send side-panel chat requests to the official DeepSeek API when the user configures an API Key.
+- `https://accounts.google.com/*`, `https://oauth2.googleapis.com/*`, and `https://www.googleapis.com/*`: complete user-approved Google Drive sync sign-in and read/write the extension's sync file in the user's Google Drive app data area.
+- `https://login.microsoftonline.com/*` and `https://graph.microsoft.com/*`: complete user-approved OneDrive sync sign-in and read/write the extension's sync file in the user's OneDrive app folder.
 - Optional `http://*/*` and `https://*/*` host permissions: connect to user-configured WebDAV or MCP endpoints. These permissions are requested for specific origins when needed.
 
 ## 7. User Controls
@@ -101,15 +104,15 @@ Users can manage extension data from the DeepSeek++ side panel. Users can:
 - Enable or disable Browser Control, select the target tab, tune snapshot budgets, and detach from the current tab.
 - Create, pause, run, edit, and delete automation tasks.
 - Configure or remove the DeepSeek API Key used for official API side-panel chat.
-- Configure or remove WebDAV sync settings.
+- Configure or remove WebDAV, Google Drive, or OneDrive sync settings.
 - Clear or change visual settings such as background and pet preferences.
 - Remove the extension or clear browser extension data through Chrome.
 
 ## 8. Security
 
-DeepSeek++ stores extension data locally in the browser by default. Users should only configure trusted WebDAV servers, MCP endpoints, and Native Messaging hosts. HTTPS endpoints are recommended for remote WebDAV and MCP connections.
+DeepSeek++ stores extension data locally in the browser by default. Users should only configure trusted WebDAV servers, cloud sync accounts, MCP endpoints, and Native Messaging hosts. HTTPS endpoints are recommended for remote WebDAV and MCP connections.
 
-The extension does not hardcode third-party credentials. Optional credentials, including DeepSeek API Key and OpenAI/Gemini API keys, are provided by the user and stored locally for the features the user configures.
+The extension does not hardcode third-party credentials. Optional credentials, including DeepSeek API Key, OpenAI/Gemini API keys, WebDAV credentials, and Google/Microsoft OAuth app credentials or sync tokens, are provided by the user and stored locally for the features the user configures.
 
 ## 9. Chrome Web Store Limited Use
 
@@ -140,15 +143,15 @@ For privacy or support questions, open an issue at:
 
 # DeepSeek++ 隐私政策（中文参考）
 
-生效日期：2026-06-18
+生效日期：2026-06-24
 
-DeepSeek++ 是一个浏览器扩展，用于增强 DeepSeek 对话工作流，提供用户可控的长期记忆、技能、项目上下文、保存项、提示词预设、MCP 工具、多模态媒体分析、浏览器控制工具、内联工具执行、本地导出、可下载产物、自动化任务和可选侧边栏对话。
+DeepSeek++ 是一个浏览器扩展，用于增强 DeepSeek 对话工作流，提供用户可控的长期记忆、技能、项目上下文、保存项、提示词预设、MCP 工具、多模态媒体分析、浏览器控制工具、内联工具执行、本地导出、可下载产物、可选同步、自动化任务和可选侧边栏对话。
 
 本隐私政策说明扩展会处理哪些数据、如何使用这些数据、何时可能传输数据，以及用户可以如何控制自己的数据。
 
 ## 1. 单一用途
 
-DeepSeek++ 的单一用途是增强 DeepSeek 对话工作流，提供由用户控制的记忆、技能、项目、保存项、预设、工具、多模态媒体分析、浏览器控制、本地导出、自动化和可选侧边栏对话能力。
+DeepSeek++ 的单一用途是增强 DeepSeek 对话工作流，提供由用户控制的记忆、技能、项目、保存项、预设、工具、多模态媒体分析、浏览器控制、本地导出、可选同步、自动化和可选侧边栏对话能力。
 
 ## 2. 扩展处理的数据
 
@@ -158,7 +161,7 @@ DeepSeek++ 只会在提供用户可见功能所需时处理以下数据：
 - 用户创建的扩展数据，包括记忆、技能、项目上下文、项目文件或资料说明、保存片段、书签、提示词预设、MCP 服务设置、自动化任务、主题设置、背景设置、宠物设置和工具执行历史。
 - 用户配置官方 API 侧边栏对话时提供的 DeepSeek API Key。
 - 用户配置多模态图片或视频分析时提供的 OpenAI 和 Gemini API Key、模型名称和请求地址。
-- 用户配置 WebDAV 同步时提供的同步设置，包括服务器地址、用户名、密码、远程路径和同步状态。
+- 用户配置同步时提供的同步设置，包括 WebDAV 服务器地址、用户名、密码、远程路径、Google Drive 或 OneDrive OAuth 应用凭据、同步授权令牌、同步提供方选择和同步状态。
 - 用户配置 MCP 工具时提供的 MCP 配置，包括端点地址、请求头、环境变量、本机 host 名称、工具元数据和工具结果。
 - 用户明确附加媒体进行多模态分析时选择的图片或视频文件、文件名、MIME 类型、文件大小和分析结果。
 - 用户启用浏览器控制并选择或使用受控标签页时处理的浏览器标签页标题、URL、Accessibility Tree 快照和浏览器控制工具结果。
@@ -179,7 +182,7 @@ DeepSeek++ 只会将数据用于已经披露的功能：
 - 用户附加媒体进行多模态分析时，通过本机多模态 Native Host 和用户配置的 OpenAI/Gemini 兼容端点分析用户选择的图片或视频。
 - 运行用户创建的自动化任务。
 - 在用户主动开始导出或下载时，将 DeepSeek 对话历史、单条消息、保存项或生成产物导出为本地文件。
-- 在用户启用同步时，将记忆、自定义技能和预设同步到用户配置的 WebDAV 服务器。
+- 在用户启用同步时，将记忆、自定义技能和预设同步到用户配置的 WebDAV 服务器、Google Drive 应用数据空间或 OneDrive 应用文件夹。
 - 在用户测试或执行工具时，连接用户配置的 MCP 端点或 Native Messaging host。
 - 用户启用浏览器控制且 AI 调用已启用的 `browser_*` 工具时，通过 Chrome debugger API 控制用户选中的浏览器标签页。
 
@@ -202,7 +205,7 @@ DeepSeek++ 不运营用于收集扩展数据的后台服务。扩展不会出售
 - 当用户发送聊天消息、运行自动化任务，或允许扩展将选定上下文/工具结果回传到 DeepSeek 对话时，传输给 DeepSeek。
 - 用户配置 DeepSeek API Key 并发送侧边栏对话时，传输给 DeepSeek 官方 API。
 - 用户附加图片或视频进行多模态分析时，传输给本机多模态 Native Host，并由该 host 传输给用户配置的 OpenAI/Gemini 兼容端点。
-- 当用户启用同步时，传输给用户选择并配置的 WebDAV 服务器。
+- 当用户启用同步时，传输给用户选择并配置的 WebDAV 服务器、Google Drive 应用数据空间或 OneDrive 应用文件夹。
 - 当用户测试或执行 MCP 工具时，传输给用户选择并配置的 MCP 端点。
 - 当用户启用本机/Native MCP 或多模态工具时，传输给用户配置的本地 Native Messaging host。
 - 当浏览器控制返回受控标签页的 Accessibility Tree 快照或动作结果时，作为文本工具结果传输给 DeepSeek 当前对话。
@@ -220,9 +223,12 @@ DeepSeek++ 请求以下 Chrome 权限：
 - `offscreen`：提供不可见的扩展文档，用于在 DeepSeek 页面之外隔离运行 JavaScript、TypeScript、Python 和 HTML 沙箱请求，避免沙箱执行阻塞聊天标签页。
 - `debugger`：仅在用户启用浏览器控制后附着到用户选择的浏览器标签页，用于读取 Accessibility Tree 快照并执行用户可见的 `browser_*` 工具动作。
 - `tabs`：列出浏览器标签页并选择浏览器控制的目标标签页；如果浏览器无需额外必需权限即可提供标签组名称，界面可能显示该信息帮助用户识别目标标签页。
+- `identity`：当用户启用 Google Drive 或 OneDrive 同步时，启动由用户批准的 OAuth 登录流程。
 - `sidePanel`：在 Chrome 侧边栏中提供扩展管理界面。
 - `*://chat.deepseek.com/*`：在 DeepSeek 网页版中运行，用于应用用户选择的上下文、展示工具结果、导出用户主动请求的对话历史、支持本地下载，并支持 DeepSeek 对话内的自动化。
 - `https://api.deepseek.com/*`：当用户配置 API Key 时，将侧边栏对话请求发送到 DeepSeek 官方 API。
+- `https://accounts.google.com/*`、`https://oauth2.googleapis.com/*` 和 `https://www.googleapis.com/*`：完成用户批准的 Google Drive 同步登录，并在用户的 Google Drive 应用数据空间读写扩展同步文件。
+- `https://login.microsoftonline.com/*` 和 `https://graph.microsoft.com/*`：完成用户批准的 OneDrive 同步登录，并在用户的 OneDrive 应用文件夹读写扩展同步文件。
 - 可选的 `http://*/*` 和 `https://*/*` 主机权限：连接用户配置的 WebDAV 或 MCP 端点。扩展只会在需要时针对具体来源请求权限。
 
 ## 7. 用户控制
@@ -241,15 +247,15 @@ DeepSeek++ 请求以下 Chrome 权限：
 - 启用或停用浏览器控制、选择目标标签页、调整快照预算，并从当前标签页断开附着。
 - 创建、暂停、运行、编辑和删除自动化任务。
 - 配置或移除用于官方 API 侧边栏对话的 DeepSeek API Key。
-- 配置或移除 WebDAV 同步设置。
+- 配置或移除 WebDAV、Google Drive 或 OneDrive 同步设置。
 - 清除或修改背景、宠物等视觉设置。
 - 通过 Chrome 卸载扩展或清除浏览器扩展数据。
 
 ## 8. 安全
 
-DeepSeek++ 默认将扩展数据保存在用户浏览器本地。用户应只配置可信的 WebDAV 服务器、MCP 端点和 Native Messaging host。远程 WebDAV 和 MCP 连接建议使用 HTTPS。
+DeepSeek++ 默认将扩展数据保存在用户浏览器本地。用户应只配置可信的 WebDAV 服务器、云同步账户、MCP 端点和 Native Messaging host。远程 WebDAV 和 MCP 连接建议使用 HTTPS。
 
-扩展不会硬编码第三方凭据。包括 DeepSeek API Key 和 OpenAI/Gemini API Key 在内的可选凭据由用户提供，并仅为用户配置的功能本地保存和使用。
+扩展不会硬编码第三方凭据。包括 DeepSeek API Key、OpenAI/Gemini API Key、WebDAV 凭据以及 Google/Microsoft OAuth 应用凭据或同步令牌在内的可选凭据由用户提供，并仅为用户配置的功能本地保存和使用。
 
 ## 9. Chrome Web Store Limited Use
 

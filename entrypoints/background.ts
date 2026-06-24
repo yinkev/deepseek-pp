@@ -1088,7 +1088,7 @@ async function handleMessage(
     }
 
     case 'WEBDAV_TEST': {
-      const backend = createStorageBackend(message.payload as SyncConfig);
+      const backend = createStorageBackend(message.payload as SyncConfig, backgroundT);
       await backend.test();
       return { ok: true };
     }
@@ -1098,21 +1098,21 @@ async function handleMessage(
       // extension context and cannot be called from a content/offscreen context.
       const draft = message.payload as SyncConfigDraft;
       if (draft.provider === 'gdrive') {
-        const refreshToken = await authorizeGDrive(draft);
+        const refreshToken = await authorizeGDrive(draft, backgroundT);
         return { ok: true, refreshToken };
       }
       if (draft.provider === 'onedrive') {
-        const refreshToken = await authorizeOneDrive(draft);
+        const refreshToken = await authorizeOneDrive(draft, backgroundT);
         return { ok: true, refreshToken };
       }
-      throw new Error('当前同步方式不需要授权');
+      throw new Error(backgroundT('background.sync.authorizationNotRequired'));
     }
 
     case 'WEBDAV_UPLOAD_LOCAL': {
       const config = await getSyncConfig();
       if (!config) throw new Error(backgroundT('background.sync.missingSync'));
 
-      const backend = createStorageBackend(config);
+      const backend = createStorageBackend(config, backgroundT);
       const [, snapshot] = await Promise.all([
         backend.ensureStore(),
         getLocalSyncDataSnapshot(),
@@ -1129,7 +1129,7 @@ async function handleMessage(
       const config = await getSyncConfig();
       if (!config) throw new Error(backgroundT('background.sync.missingSync'));
 
-      const backend = createStorageBackend(config);
+      const backend = createStorageBackend(config, backgroundT);
       const snapshot = await mergeSyncSnapshotWithLocalImports(await getRemoteSyncDataSnapshot(backend));
 
       const replacements: Promise<unknown>[] = [

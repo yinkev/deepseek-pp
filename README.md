@@ -29,7 +29,7 @@
   <a href="#功能速览">功能速览</a> ·
   <a href="#适合场景">适合场景</a> ·
   <a href="#安装">安装</a> ·
-  <a href="#102-变更回顾">1.0.2 变更</a>
+  <a href="#103-变更回顾">1.0.3 变更</a>
 </p>
 
 ## 产品定位
@@ -46,7 +46,7 @@ DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏
 - [功能速览](#功能速览)
 - [适合场景](#适合场景)
 - [核心功能](#核心功能)
-- [1.0.2 变更回顾](#102-变更回顾)
+- [1.0.3 变更回顾](#103-变更回顾)
 - [安装](#安装)
 - [友情链接](#友情链接)
 
@@ -201,7 +201,7 @@ DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏
 - **内置多模态预设** — 可创建 `多模态` 预设，让 DeepSeek 通过 OpenAI 分析多张图片，通过 Gemini 分析视频
 - **输入框媒体附件** — 安装并启用多模态预设后，可在 DeepSeek 输入框添加图片或视频，分析结果会并入本次消息继续生成
 - **用户可控边界** — OpenAI / Gemini Key、模型和请求地址由用户在设置页配置；媒体文件只在用户主动附加并发送时进入多模态分析流程
-- **本地安全** — MCP 配置和密钥保存在浏览器本地，WebDAV 同步不会同步敏感信息
+- **本地安全** — MCP 配置和密钥保存在浏览器本地，同步功能不会同步敏感信息
 
 <p align="center">
   <img src="assets/screenshot-sidepanel-mcp.png" width="300" alt="MCP 管理侧边栏">
@@ -295,7 +295,25 @@ npm run shell:install -- --browser chrome --extension-id <扩展ID>
   <img src="assets/screenshot-sidepanel-automation.png" width="300" alt="自动化任务侧边栏">
 </p>
 
-## 1.0.2 变更回顾
+## 1.0.3 变更回顾
+
+1.0.3 是云同步、提示词复用和 MCP 连接增强版本，重点让保存项可以更快进入对话，让同步来源扩展到 Google Drive / OneDrive，并提升本机 Shell 与 Streamable HTTP MCP 的可靠性。
+
+| 方向 | 主要变化 |
+|------|----------|
+| 保存项插入 | 保存页和资料库中的常用 prompt、片段和书签可直接插入当前聊天输入框，复用固定指令和工作流更顺手。 |
+| 云同步来源 | 同步设置新增 Google Drive 和 OneDrive，继续保留 WebDAV；Drive / OneDrive 使用用户自己的 OAuth 应用配置，数据只在用户启用同步后写入对应云端应用空间。 |
+| MCP 连接 | MCP HTTP 传输支持 Streamable HTTP 会话，远程工具服务的发现、连接和执行状态更稳定。 |
+| Shell 安全边界 | Shell MCP 执行环境改为最小环境变量集，减少主机进程里的敏感变量被本机命令继承；Windows PowerShell 持久会话也更稳定。 |
+| 同步兼容性 | GitHub Skill 从仓库根目录导入后，跨设备同步下载不再因为空 rootPath 校验失败。 |
+| 回归覆盖 | 新增保存项插入、云同步后端、MCP 传输策略、GitHub Skill 同步校验和 Shell 环境隔离测试。 |
+
+感谢本版本贡献者：[@maoxin1234](https://github.com/maoxin1234) 改进 Shell MCP 环境隔离与 Windows 会话稳定性。
+
+<details>
+<summary>展开 1.0.2 变更回顾</summary>
+
+### 1.0.2 变更回顾
 
 1.0.2 是 Shell MCP 和工具结果体验增强版本，重点让本机命令可以在连续会话中保留上下文，并让中英文工具反馈、命令结果和发布校验更稳定。
 
@@ -306,6 +324,8 @@ npm run shell:install -- --browser chrome --extension-id <扩展ID>
 | 工具结果语言 | Skill 草稿、记忆导入和产物相关工具结果卡片继续补齐中英文文案，侧边栏语言切换后可读性更一致。 |
 | 发布脚本可靠性 | 发布、自动化、i18n、manifest 和资产校验脚本在不同运行目录下更稳定，降低跨平台执行时找错项目根目录的风险。 |
 | 回归覆盖 | 补强 Shell 持久会话、命令退出结果、工具结果渲染、shell policy 和发布脚本路径相关测试。 |
+
+</details>
 
 <details>
 <summary>展开 1.0.1 变更回顾</summary>

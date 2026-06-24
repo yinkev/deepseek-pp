@@ -2,9 +2,11 @@ import type { OneDriveSyncConfig } from '../types';
 import type { StorageBackend } from './storage-backend';
 import {
   authedFetch,
+  defaultSyncErrorTranslator,
   exchangeCodeForTokens,
   getRedirectUri,
   runAuthCodeFlow,
+  type SyncErrorTranslator,
 } from './oauth-client';
 
 /**
@@ -46,9 +48,9 @@ function refreshParams(config: OneDriveSyncConfig): Record<string, string> {
   };
 }
 
-function requireRefreshToken(config: OneDriveSyncConfig): string {
+function requireRefreshToken(config: OneDriveSyncConfig, t: SyncErrorTranslator): string {
   if (!config.refreshToken) {
-    throw new Error('OneDrive 尚未授权，请先点击授权登录');
+    throw new Error(t('background.sync.onedriveMissingAuthorization'));
   }
   return config.refreshToken;
 }
@@ -56,35 +58,42 @@ function requireRefreshToken(config: OneDriveSyncConfig): string {
 /**
  * Run first-time authorization and return the durable refresh_token.
  */
-export async function authorizeOneDrive(config: OneDriveAuthInput): Promise<string> {
-  const code = await runAuthCodeFlow(buildAuthUrl(config));
+export async function authorizeOneDrive(
+  config: OneDriveAuthInput,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+): Promise<string> {
+  const code = await runAuthCodeFlow(buildAuthUrl(config), t);
   const tokens = await exchangeCodeForTokens(TOKEN_URL, {
     code,
     client_id: config.clientId,
     client_secret: config.clientSecret,
     redirect_uri: getRedirectUri(),
     scope: SCOPES.join(' '),
-  });
+  }, t);
   if (!tokens.refreshToken) {
-    throw new Error('Microsoft 未返回 refresh_token，请撤销访问后重新授权');
+    throw new Error(t('background.sync.onedriveMissingRefreshToken'));
   }
   return tokens.refreshToken;
 }
 
-export function createOneDriveBackend(config: OneDriveSyncConfig): StorageBackend {
+export function createOneDriveBackend(
+  config: OneDriveSyncConfig,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+): StorageBackend {
   return {
     async test(): Promise<void> {
-      requireRefreshToken(config);
+      requireRefreshToken(config, t);
       const res = await authedFetch(
         cacheKey(config),
-        requireRefreshToken(config),
+        requireRefreshToken(config, t),
         TOKEN_URL,
         refreshParams(config),
         `${API_BASE}?$select=name`,
         { method: 'GET' },
+        t,
       );
-      if (res.status === 401) throw new Error('Microsoft 授权已失效，请重新授权');
-      if (!res.ok) throw new Error(`连接 OneDrive 失败 (HTTP ${res.status})`);
+      if (res.status === 401) throw new Error(t('background.sync.onedriveAuthorizationExpired'));
+      if (!res.ok) throw new Error(t('background.sync.onedriveConnectFailed', { status: res.status }));
     },
 
     async ensureStore(): Promise<void> {
@@ -95,14 +104,15 @@ export function createOneDriveBackend(config: OneDriveSyncConfig): StorageBacken
     async get(key: string): Promise<string | null> {
       const res = await authedFetch(
         cacheKey(config),
-        requireRefreshToken(config),
+        requireRefreshToken(config, t),
         TOKEN_URL,
         refreshParams(config),
         `${API_BASE}:/${encodeURIComponent(key)}:/content`,
         { method: 'GET' },
+        t,
       );
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`下载 ${key} 失败 (HTTP ${res.status})`);
+      if (!res.ok) throw new Error(t('background.sync.onedriveDownloadFailed', { key, status: res.status }));
       return res.text();
     },
 
@@ -110,7 +120,7 @@ export function createOneDriveBackend(config: OneDriveSyncConfig): StorageBacken
       // PUT .../approot:/{key}:/content creates the item if absent, overwrites if present.
       const res = await authedFetch(
         cacheKey(config),
-        requireRefreshToken(config),
+        requireRefreshToken(config, t),
         TOKEN_URL,
         refreshParams(config),
         `${API_BASE}:/${encodeURIComponent(key)}:/content`,
@@ -119,8 +129,9 @@ export function createOneDriveBackend(config: OneDriveSyncConfig): StorageBacken
           headers: { 'Content-Type': 'application/json; charset=utf-8' },
           body: content,
         },
+        t,
       );
-      if (!res.ok) throw new Error(`上传 ${key} 失败 (HTTP ${res.status})`);
+      if (!res.ok) throw new Error(t('background.sync.onedriveUploadFailed', { key, status: res.status }));
     },
   };
 }

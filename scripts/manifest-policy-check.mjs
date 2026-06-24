@@ -11,12 +11,12 @@ const targets = [
   {
     browser: 'chrome',
     manifestPath: 'dist/chrome-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'sidePanel'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'sidePanel'],
   },
   {
     browser: 'edge',
     manifestPath: 'dist/edge-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'sidePanel'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'sidePanel'],
   },
   {
     browser: 'firefox',
@@ -30,6 +30,11 @@ const expectedHostPermissions = [
   'https://api.deepseek.com/*',
   '*://cn.bing.com/*',
   '*://www.bing.com/*',
+  'https://accounts.google.com/*',
+  'https://oauth2.googleapis.com/*',
+  'https://www.googleapis.com/*',
+  'https://login.microsoftonline.com/*',
+  'https://graph.microsoft.com/*',
 ];
 const expectedOptionalHostPermissions = ['http://*/*', 'https://*/*'];
 const expectedLocalizedManifest = {
@@ -98,6 +103,8 @@ assertIncludes(background, 'chrome.sidePanel', 'sidePanel permission must use th
 assertIncludes(browserControlConnection, 'chromeApi.debugger', 'debugger permission must use the debugger API');
 assertIncludes(browserControlService, 'chromeApi.tabs', 'tabs permission must use the tabs API');
 assertIncludes(browserControlService, 'chromeApi.tabGroups', 'tabGroups API must be optional browser-control metadata');
+assertIncludes(wxtConfig, "'identity'", 'identity permission must be declared for cloud sync OAuth');
+assertIncludes(wxtConfig, 'chrome.identity.launchWebAuthFlow', 'identity permission must be tied to user-approved cloud sync OAuth');
 assertIncludes(wxtConfig, 'web_accessible_resources', 'web accessible resources must be declared in manifest config');
 assertIncludes(wxtConfig, "default_locale: 'en'", 'manifest config must declare default locale');
 assertIncludes(wxtConfig, '__MSG_extension_name__', 'manifest config must use localized name');
@@ -105,9 +112,20 @@ assertIncludes(wxtConfig, '__MSG_extension_description__', 'manifest config must
 assertIncludes(wxtConfig, '__MSG_extension_action_title__', 'manifest config must use localized action title');
 assertIncludes(wxtConfig, 'pyodideAssetsPlugin', 'manifest build must bundle Pyodide assets for browser Python sandbox');
 
-for (const permission of ['storage', 'alarms', 'contextMenus', 'nativeMessaging', 'offscreen', 'debugger', 'tabs', 'sidePanel']) {
+for (const permission of ['storage', 'alarms', 'contextMenus', 'nativeMessaging', 'offscreen', 'debugger', 'tabs', 'identity', 'sidePanel']) {
   assertIncludes(privacyPolicy, `\`${permission}\``, `privacy policy must document ${permission}`);
   assertIncludes(submission, `#### \`${permission}\``, `Chrome Web Store submission notes must justify ${permission}`);
+}
+
+for (const hostPermission of [
+  'https://accounts.google.com/*',
+  'https://oauth2.googleapis.com/*',
+  'https://www.googleapis.com/*',
+  'https://login.microsoftonline.com/*',
+  'https://graph.microsoft.com/*',
+]) {
+  assertIncludes(privacyPolicy, `\`${hostPermission}\``, `privacy policy must document ${hostPermission}`);
+  assertIncludes(submission, hostPermission, `Chrome Web Store submission notes must justify ${hostPermission}`);
 }
 
 if (failures.length > 0) {

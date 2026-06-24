@@ -1,3 +1,5 @@
+import { DEFAULT_LOCALE, translate, type LocaleMessageKey, type MessageParams } from '../i18n';
+
 /**
  * Shared OAuth helpers for cloud-sync providers (Google Drive, OneDrive).
  *
@@ -11,6 +13,12 @@
 // and evaluating it at module top-level breaks unit tests that import this
 // module transitively without a chrome mock.
 let cachedRedirectUri: string | null = null;
+
+export type SyncErrorTranslator = (key: LocaleMessageKey, params?: MessageParams) => string;
+
+export function defaultSyncErrorTranslator(key: LocaleMessageKey, params?: MessageParams): string {
+  return translate(DEFAULT_LOCALE, key, params);
+}
 
 export function getRedirectUri(): string {
   if (cachedRedirectUri === null) {
@@ -38,20 +46,23 @@ function parseRedirectUrl(redirectUrl: string): RedirectResult {
  * Run the OAuth authorization-code flow interactively and return the code.
  * Throws if the user cancels or the provider returns an error.
  */
-export async function runAuthCodeFlow(authUrl: string): Promise<string> {
+export async function runAuthCodeFlow(
+  authUrl: string,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+): Promise<string> {
   const redirectUrl = await chrome.identity.launchWebAuthFlow({
     url: authUrl,
     interactive: true,
   });
   if (!redirectUrl) {
-    throw new Error('授权已取消');
+    throw new Error(t('background.sync.oauthCancelled'));
   }
   const result = parseRedirectUrl(redirectUrl);
   if (result.error) {
-    throw new Error(`授权失败: ${result.error}`);
+    throw new Error(t('background.sync.oauthProviderError', { error: result.error }));
   }
   if (!result.code) {
-    throw new Error('授权失败: 未返回授权码');
+    throw new Error(t('background.sync.oauthMissingCode'));
   }
   return result.code;
 }
@@ -93,6 +104,7 @@ export async function getAccessToken(
   refreshToken: string,
   refreshUrl: string,
   tokenParams: Record<string, string>,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
 ): Promise<string> {
   const cached = tokenCache.get(cacheKey);
   if (isCacheValid(cached)) return cached!.accessToken;
@@ -105,7 +117,10 @@ export async function getAccessToken(
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(`刷新访问令牌失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`);
+    throw new Error(t('background.sync.oauthRefreshFailed', {
+      status: res.status,
+      detail: detail ? `: ${detail}` : '',
+    }));
   }
   const token = await res.json() as { access_token: string; expires_in: number };
   const entry: CachedToken = {
@@ -131,15 +146,16 @@ export async function authedFetch(
   refreshParams: Record<string, string>,
   input: string,
   init: RequestInit,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
 ): Promise<Response> {
-  const token = await getAccessToken(cacheKey, refreshToken, refreshUrl, refreshParams);
+  const token = await getAccessToken(cacheKey, refreshToken, refreshUrl, refreshParams, t);
   const res = await fetch(input, {
     ...init,
     headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` },
   });
   if (res.status === 401) {
     invalidateToken(cacheKey);
-    const fresh = await getAccessToken(cacheKey, refreshToken, refreshUrl, refreshParams);
+    const fresh = await getAccessToken(cacheKey, refreshToken, refreshUrl, refreshParams, t);
     return fetch(input, {
       ...init,
       headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${fresh}` },
@@ -154,6 +170,7 @@ export async function authedFetch(
 export async function exchangeCodeForTokens(
   tokenUrl: string,
   params: Record<string, string>,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
 ): Promise<TokenResponse> {
   const body = new URLSearchParams({ ...params, grant_type: 'authorization_code' });
   const res = await fetch(tokenUrl, {
@@ -163,7 +180,10 @@ export async function exchangeCodeForTokens(
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(`获取令牌失败 (HTTP ${res.status})${detail ? `: ${detail}` : ''}`);
+    throw new Error(t('background.sync.oauthTokenExchangeFailed', {
+      status: res.status,
+      detail: detail ? `: ${detail}` : '',
+    }));
   }
   const token = await res.json() as {
     access_token: string;

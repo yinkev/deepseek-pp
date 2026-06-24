@@ -2,9 +2,11 @@ import type { GDriveSyncConfig } from '../types';
 import type { StorageBackend } from './storage-backend';
 import {
   authedFetch,
+  defaultSyncErrorTranslator,
   exchangeCodeForTokens,
   getRedirectUri,
   runAuthCodeFlow,
+  type SyncErrorTranslator,
 } from './oauth-client';
 
 /**
@@ -55,16 +57,19 @@ function refreshParams(config: GDriveSyncConfig): Record<string, string> {
  * Run first-time authorization: opens the consent screen, exchanges the code
  * for tokens, and returns the durable refresh_token (to persist in config).
  */
-export async function authorizeGDrive(config: GDriveAuthInput): Promise<string> {
-  const code = await runAuthCodeFlow(buildAuthUrl(config));
+export async function authorizeGDrive(
+  config: GDriveAuthInput,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+): Promise<string> {
+  const code = await runAuthCodeFlow(buildAuthUrl(config), t);
   const tokens = await exchangeCodeForTokens(TOKEN_URL, {
     code,
     client_id: config.clientId,
     client_secret: config.clientSecret,
     redirect_uri: getRedirectUri(),
-  });
+  }, t);
   if (!tokens.refreshToken) {
-    throw new Error('Google 未返回 refresh_token，请撤销访问后重新授权');
+    throw new Error(t('background.sync.gdriveMissingRefreshToken'));
   }
   return tokens.refreshToken;
 }
@@ -78,6 +83,7 @@ function escapeDriveQueryLiteral(value: string): string {
 async function findFileId(
   config: GDriveSyncConfig,
   name: string,
+  t: SyncErrorTranslator,
 ): Promise<string | null> {
   const params = new URLSearchParams({
     spaces: 'appDataFolder',
@@ -87,19 +93,25 @@ async function findFileId(
   });
   const res = await authedFetch(
     cacheKey(config),
-    requireRefreshToken(config),
+    requireRefreshToken(config, t),
     TOKEN_URL,
     refreshParams(config),
     `${API_BASE}/files?${params.toString()}`,
     { method: 'GET' },
+    t,
   );
-  if (!res.ok) throw new Error(`查询 ${name} 失败 (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(t('background.sync.gdriveQueryFailed', { name, status: res.status }));
   const data = await res.json() as { files?: DriveFileMeta[] };
   const match = (data.files ?? []).find((file) => file.name === name);
   return match?.id ?? null;
 }
 
-async function createFile(config: GDriveSyncConfig, name: string, content: string): Promise<void> {
+async function createFile(
+  config: GDriveSyncConfig,
+  name: string,
+  content: string,
+  t: SyncErrorTranslator,
+): Promise<void> {
   // Multipart upload: metadata (name + parents) + JSON body.
   const boundary = 'deepseek_pp_sync';
   const body =
@@ -112,7 +124,7 @@ async function createFile(config: GDriveSyncConfig, name: string, content: strin
     `\r\n--${boundary}--`;
   const res = await authedFetch(
     cacheKey(config),
-    requireRefreshToken(config),
+    requireRefreshToken(config, t),
     TOKEN_URL,
     refreshParams(config),
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
@@ -121,14 +133,21 @@ async function createFile(config: GDriveSyncConfig, name: string, content: strin
       headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
       body,
     },
+    t,
   );
-  if (!res.ok) throw new Error(`上传 ${name} 失败 (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(t('background.sync.gdriveUploadFailed', { name, status: res.status }));
 }
 
-async function updateFile(config: GDriveSyncConfig, fileId: string, name: string, content: string): Promise<void> {
+async function updateFile(
+  config: GDriveSyncConfig,
+  fileId: string,
+  name: string,
+  content: string,
+  t: SyncErrorTranslator,
+): Promise<void> {
   const res = await authedFetch(
     cacheKey(config),
-    requireRefreshToken(config),
+    requireRefreshToken(config, t),
     TOKEN_URL,
     refreshParams(config),
     `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
@@ -137,33 +156,38 @@ async function updateFile(config: GDriveSyncConfig, fileId: string, name: string
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: content,
     },
+    t,
   );
-  if (!res.ok) throw new Error(`上传 ${name} 失败 (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(t('background.sync.gdriveUploadFailed', { name, status: res.status }));
 }
 
-function requireRefreshToken(config: GDriveSyncConfig): string {
+function requireRefreshToken(config: GDriveSyncConfig, t: SyncErrorTranslator): string {
   if (!config.refreshToken) {
-    throw new Error('Google Drive 尚未授权，请先点击授权登录');
+    throw new Error(t('background.sync.gdriveMissingAuthorization'));
   }
   return config.refreshToken;
 }
 
-export function createGDriveBackend(config: GDriveSyncConfig): StorageBackend {
+export function createGDriveBackend(
+  config: GDriveSyncConfig,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+): StorageBackend {
   return {
     async test(): Promise<void> {
-      requireRefreshToken(config);
+      requireRefreshToken(config, t);
       // A successful appDataFolder list == credentials + token are valid.
       const params = new URLSearchParams({ spaces: 'appDataFolder', pageSize: '1', fields: 'files(id)' });
       const res = await authedFetch(
         cacheKey(config),
-        requireRefreshToken(config),
+        requireRefreshToken(config, t),
         TOKEN_URL,
         refreshParams(config),
         `${API_BASE}/files?${params.toString()}`,
         { method: 'GET' },
+        t,
       );
-      if (res.status === 401) throw new Error('Google 授权已失效，请重新授权');
-      if (!res.ok) throw new Error(`连接 Google Drive 失败 (HTTP ${res.status})`);
+      if (res.status === 401) throw new Error(t('background.sync.gdriveAuthorizationExpired'));
+      if (!res.ok) throw new Error(t('background.sync.gdriveConnectFailed', { status: res.status }));
     },
 
     async ensureStore(): Promise<void> {
@@ -171,27 +195,28 @@ export function createGDriveBackend(config: GDriveSyncConfig): StorageBackend {
     },
 
     async get(key: string): Promise<string | null> {
-      const fileId = await findFileId(config, key);
+      const fileId = await findFileId(config, key, t);
       if (!fileId) return null;
       const res = await authedFetch(
         cacheKey(config),
-        requireRefreshToken(config),
+        requireRefreshToken(config, t),
         TOKEN_URL,
         refreshParams(config),
         `${API_BASE}/files/${fileId}?alt=media`,
         { method: 'GET' },
+        t,
       );
       if (res.status === 404) return null;
-      if (!res.ok) throw new Error(`下载 ${key} 失败 (HTTP ${res.status})`);
+      if (!res.ok) throw new Error(t('background.sync.gdriveDownloadFailed', { key, status: res.status }));
       return res.text();
     },
 
     async put(key: string, content: string): Promise<void> {
-      const fileId = await findFileId(config, key);
+      const fileId = await findFileId(config, key, t);
       if (fileId) {
-        await updateFile(config, fileId, key, content);
+        await updateFile(config, fileId, key, content, t);
       } else {
-        await createFile(config, key, content);
+        await createFile(config, key, content, t);
       }
     },
   };

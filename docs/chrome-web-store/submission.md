@@ -1,6 +1,6 @@
 # Chrome Web Store Submission Runbook
 
-Last updated: 2026-06-19
+Last updated: 2026-06-24
 
 This runbook covers the parts that can be prepared from the repository and the parts that must be confirmed in the Chrome Web Store Developer Dashboard.
 
@@ -14,7 +14,7 @@ Official references:
 
 ## Current Status
 
-- Chrome MV3 package exists at `dist/deepseek-plus-plus-1.0.2-chrome.zip`.
+- Chrome MV3 package exists at `dist/deepseek-plus-plus-1.0.3-chrome.zip`.
 - Package root contains `manifest.json`.
 - Package size is below the Chrome Web Store package limit.
 - Required icon exists at `assets/chrome-web-store-icon-128.png`.
@@ -48,7 +48,7 @@ npm run zip:chrome
 Upload:
 
 ```text
-dist/deepseek-plus-plus-1.0.2-chrome.zip
+dist/deepseek-plus-plus-1.0.3-chrome.zip
 ```
 
 ## Store Listing Fields
@@ -88,7 +88,7 @@ Rationale:
 
 - Website content: the extension runs on and reads/modifies the DeepSeek web chat UI to provide user-facing features.
 - Personal communications: DeepSeek chat prompts and responses may include user communications and are processed to inject memory, skills, tool results, multimodal analysis results, and user-requested local conversation exports. User-selected images or videos may also be processed when the user explicitly attaches them for multimodal analysis.
-- Authentication information: optional DeepSeek API Key, OpenAI/Gemini API keys for multimodal analysis, WebDAV credentials, MCP headers, and native/local tool settings may be stored when the user configures them.
+- Authentication information: optional DeepSeek API Key, OpenAI/Gemini API keys for multimodal analysis, WebDAV credentials, user-provided Google/Microsoft OAuth app credentials and sync tokens, MCP headers, and native/local tool settings may be stored when the user configures them.
 
 Do not select financial/payment, health, location, or browsing history unless a future version adds those data types explicitly.
 
@@ -138,6 +138,12 @@ Enables the optional Browser Control feature. When the user enables Browser Cont
 Lists browser tabs and lets the user choose which tab Browser Control should operate on. Tab titles and URLs are shown only in the extension side panel and returned as browser-control tool context when the user enables the feature. If the browser exposes tab group metadata without an additional permission, DeepSeek++ may show group names only to help users identify the target tab.
 ```
 
+#### `identity`
+
+```text
+Starts the user-approved Google Drive or OneDrive OAuth sign-in flow when the user enables one of those sync providers. DeepSeek++ uses this permission only to connect the user's own OAuth app configuration and stores sync credentials locally.
+```
+
 #### `sidePanel`
 
 ```text
@@ -154,6 +160,18 @@ Runs the extension on the DeepSeek web app so it can apply user-selected context
 
 ```text
 Allows side-panel chat to send user-entered prompts to the official DeepSeek API when the user configures their own DeepSeek API Key. The extension stores the API Key locally and does not use this host unless the user enables the API-key path.
+```
+
+#### Host permissions: `https://accounts.google.com/*`, `https://oauth2.googleapis.com/*`, `https://www.googleapis.com/*`
+
+```text
+Allows optional Google Drive sync to complete user-approved OAuth sign-in and read/write the extension's sync file in the user's Google Drive app data area. This is used only after the user selects Google Drive sync and provides their own OAuth app credentials.
+```
+
+#### Host permissions: `https://login.microsoftonline.com/*`, `https://graph.microsoft.com/*`
+
+```text
+Allows optional OneDrive sync to complete user-approved OAuth sign-in and read/write the extension's sync file in the user's OneDrive app folder. This is used only after the user selects OneDrive sync and provides their own OAuth app credentials.
 ```
 
 #### Optional host permissions: `http://*/*`, `https://*/*`
@@ -186,7 +204,7 @@ Use this reviewer note:
 7. In a DeepSeek conversation, use the DeepSeek++ export button next to the official reply actions such as copy and share. The extension should show format choices, default to HTML, and save the selected current-conversation export formats locally.
 8. In the side panel, create a saved snippet and insert it into chat, then export saved items as Markdown or JSON.
 9. In Capabilities > Browser, enable Browser Control, choose a normal web tab, and verify the page shows a selected target. Browser Control can be disabled or detached from the same page.
-10. Optional MCP/WebDAV/native messaging features require user-provided endpoints or a user-installed local Shell host and are disabled until configured by the user.
+10. Optional MCP/sync/native messaging features require user-provided endpoints, user-provided OAuth app credentials, or a user-installed local Shell host and are disabled until configured by the user.
 11. Optional multimodal media analysis requires the user to install the Multimodal Native Host, configure OpenAI/Gemini settings in Settings > Multimodal API, and attach media manually. If it is not configured, the feature remains unavailable and shows setup guidance.
 ```
 

@@ -1,5 +1,6 @@
 import type { SyncConfig } from '../types';
 import type { WebdavSyncConfig } from '../types';
+import { defaultSyncErrorTranslator, type SyncErrorTranslator } from './oauth-client';
 import { webdavGet, webdavMkcol, webdavPut, webdavTest } from './webdav-client';
 import { createGDriveBackend } from './gdrive-client';
 import { createOneDriveBackend } from './onedrive-client';
@@ -29,14 +30,17 @@ export interface StorageBackend {
   put(key: string, content: string): Promise<void>;
 }
 
-export function createStorageBackend(config: SyncConfig): StorageBackend {
+export function createStorageBackend(
+  config: SyncConfig,
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+): StorageBackend {
   switch (config.provider) {
     case 'webdav':
       return new WebdavBackend(config);
     case 'gdrive':
-      return createGDriveBackend(config);
+      return createGDriveBackend(config, t);
     case 'onedrive':
-      return createOneDriveBackend(config);
+      return createOneDriveBackend(config, t);
   }
 }
 

@@ -29,7 +29,7 @@
   <a href="#feature-overview">Feature Overview</a> ·
   <a href="#use-cases">Use Cases</a> ·
   <a href="#installation">Installation</a> ·
-  <a href="#102-release-highlights">1.0.2 Highlights</a>
+  <a href="#103-release-highlights">1.0.3 Highlights</a>
 </p>
 
 ## Product Positioning
@@ -46,7 +46,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - [Feature Overview](#feature-overview)
 - [Use Cases](#use-cases)
 - [Core Features](#core-features)
-- [1.0.2 Release Highlights](#102-release-highlights)
+- [1.0.3 Release Highlights](#103-release-highlights)
 - [Installation](#installation)
 - [Friendly Links](#friendly-links)
 
@@ -201,7 +201,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - **Built-in multimodal preset** - Create the `Multimodal` preset so DeepSeek can analyze multiple images through OpenAI and videos through Gemini.
 - **Input-box media attachments** - After the Multimodal preset is installed and enabled, add images or videos from the DeepSeek input box and continue the message with the analysis results.
 - **User-controlled boundary** - OpenAI / Gemini keys, models, and request URLs are configured by the user in Settings. Media files enter multimodal analysis only when the user attaches and sends them.
-- **Local security** - MCP configuration and secrets stay in browser-local storage. WebDAV sync does not sync sensitive data.
+- **Local security** - MCP configuration and secrets stay in browser-local storage. Sync does not include sensitive MCP data.
 
 <p align="center">
   <img src="assets/screenshot-sidepanel-mcp.png" width="300" alt="MCP management side panel">
@@ -295,7 +295,25 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
   <img src="assets/screenshot-sidepanel-automation.png" width="300" alt="Automation task side panel">
 </p>
 
-## 1.0.2 Release Highlights
+## 1.0.3 Release Highlights
+
+1.0.3 improves cloud sync, saved prompt reuse, and MCP connectivity, making saved items easier to insert into chat, adding Google Drive / OneDrive sync options, and tightening local Shell and Streamable HTTP MCP reliability.
+
+| Area | Main changes |
+|------|--------------|
+| Saved item insertion | Saved prompts, snippets, and bookmarks from Saved and Library pages can be inserted directly into the current chat input for faster reuse of fixed instructions and workflows. |
+| Cloud sync providers | Sync settings now support Google Drive and OneDrive alongside WebDAV. Drive / OneDrive use the user's own OAuth app configuration, and data is written to the selected cloud app storage only after the user enables sync. |
+| MCP connectivity | MCP HTTP transport supports Streamable HTTP sessions, improving remote tool discovery, connection, and execution state handling. |
+| Shell security boundary | Shell MCP commands now run with a minimal environment variable set, reducing accidental inheritance of sensitive host-process variables. Windows PowerShell persistent sessions are more stable as well. |
+| Sync compatibility | GitHub Skills imported from a repository root can be downloaded during sync without failing empty-rootPath validation. |
+| Regression coverage | Adds tests for saved item insertion, cloud sync backends, MCP transport policy, GitHub Skill sync validation, and Shell environment isolation. |
+
+Thanks to [@maoxin1234](https://github.com/maoxin1234) for improving Shell MCP environment isolation and Windows session stability.
+
+<details>
+<summary>Show 1.0.2 release highlights</summary>
+
+### 1.0.2 Release Highlights
 
 1.0.2 improves Shell MCP sessions and tool-result readability, letting local commands keep context across multi-step work while keeping bilingual feedback, command results, and release checks more reliable.
 
@@ -306,6 +324,8 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
 | Tool-result language | Expands English and Simplified Chinese copy for Skill draft, memory import, and artifact-related tool result cards so side-panel language choices stay more consistent. |
 | Release script reliability | Makes release, automation, i18n, manifest, and asset validation scripts more stable when run from different working directories, reducing cross-platform project-root mistakes. |
 | Regression coverage | Adds coverage for persistent shell sessions, command-exit results, tool-result rendering, shell policy, and release script project-root handling. |
+
+</details>
 
 <details>
 <summary>Show 1.0.1 release highlights</summary>
