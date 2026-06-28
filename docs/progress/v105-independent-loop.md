@@ -107,6 +107,12 @@ Independently implement parity-or-better behavior for the scoped upstream v1.0.5
 - `git diff --check` -> passed.
 - `npm run verify:manifest-policy` -> passed.
 - `npm run verify:extension-utf8` -> passed, 84 files scanned.
+- `npm version 1.0.3 --no-git-tag-version` -> updated `package.json` and `package-lock.json` to the next local MIT release after `1.0.2`, keeping upstream `v1.0.5` only as the behavior-parity scope.
+- Updated `docs/chrome-web-store/listing.md` package version and upload artifact name to `1.0.3`.
+- `npm run build:all` -> passed with package version `1.0.3`; rebuilt Chrome, Edge, and Firefox manifests.
+- `npm run verify:manifest-policy` -> passed after the `1.0.3` correction.
+- Generated manifest versions checked directly: Chrome, Edge, and Firefox all emitted `1.0.3`.
+- `node -p "require('./package.json').license + ' ' + require('./package.json').version"` -> `MIT 1.0.3`.
 
 ## Advisor Log
 
@@ -152,6 +158,7 @@ Independently implement parity-or-better behavior for the scoped upstream v1.0.5
 - Full Vitest suite passed.
 - Chrome production build passed.
 - Manifest policy, extension UTF-8, and whitespace diff checks passed.
+- Release version truth sources now point at local version `1.0.3`; WXT will emit manifest version `1.0.3` from `package.json`.
 - Runtime/browser behavior not yet verified for current branch.
 
 ## Remaining Work
@@ -261,3 +268,12 @@ Independently implement parity-or-better behavior for the scoped upstream v1.0.5
   - No dependencies, permissions, or storage schema version changes.
 - Decision: add optional provider/OAuth config shape and normalization; keep WebDAV as default for legacy configs and wipe legacy password fields from non-WebDAV provider configs.
 - Verified: sync config, sync schema, and local-skill merge tests passed.
+
+### Release Version Bump
+
+- Desired behavior:
+  - User-visible extension version reflects a local MIT-clean release after `1.0.2`.
+  - Upstream `v1.0.5` remains only the behavior-parity target, not our release number.
+  - Chrome Web Store draft points at the matching release artifact name.
+- Decision: use `1.0.3`, the next local release number after `1.0.2`, to avoid claiming the same release number as upstream.
+- Verified: package metadata is `MIT 1.0.3`; Chrome, Edge, and Firefox builds emitted manifest version `1.0.3`; manifest policy check passed.
