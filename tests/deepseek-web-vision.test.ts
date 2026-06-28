@@ -105,6 +105,128 @@ describe('DeepSeek Web Vision upload', () => {
     });
   });
 
+  it('passes the abort signal through PoW and upload/status fetches', async () => {
+    const controller = new AbortController();
+    let powSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn<FetchImpl>(async (input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      const url = String(input);
+      if (url.endsWith(DEEPSEEK_WEB_FILE_UPLOAD_PATH)) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              id: 'file-signal',
+              status: 'PENDING',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          biz_code: 0,
+          biz_data: {
+            files: [{
+              id: 'file-signal',
+              status: 'SUCCESS',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+            }],
+          },
+        },
+      });
+    });
+
+    await uploadDeepSeekWebVisionImage({
+      file: new File(['probe'], 'probe.png', { type: 'image/png' }),
+      clientHeaders: { Authorization: 'Bearer token' },
+      createPowHeaders: async (_targetPath, signal) => {
+        powSignal = signal;
+        return {};
+      },
+      fetchImpl,
+      pollIntervalMs: 0,
+      signal: controller.signal,
+    });
+
+    expect(powSignal).toBe(controller.signal);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('aborts while waiting between pending file status polls', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let statusPolled: (() => void) | undefined;
+    const statusPoll = new Promise<void>((resolve) => {
+      statusPolled = resolve;
+    });
+    const fetchImpl = vi.fn<FetchImpl>(async (input) => {
+      const url = String(input);
+      if (url.endsWith(DEEPSEEK_WEB_FILE_UPLOAD_PATH)) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              id: 'file-pending-abort',
+              status: 'PENDING',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+            },
+          },
+        });
+      }
+      statusPolled?.();
+      return jsonResponse({
+        code: 0,
+        data: {
+          biz_code: 0,
+          biz_data: {
+            files: [{
+              id: 'file-pending-abort',
+              status: 'PENDING',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+            }],
+          },
+        },
+      });
+    });
+
+    try {
+      const promise = uploadDeepSeekWebVisionImage({
+        file: new File(['probe'], 'probe.png', { type: 'image/png' }),
+        clientHeaders: {},
+        createPowHeaders: async () => ({}),
+        fetchImpl,
+        pollIntervalMs: 1000,
+        maxPollAttempts: 2,
+        signal: controller.signal,
+      });
+      await statusPoll;
+      await flushMicrotasks(4);
+
+      controller.abort();
+
+      await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects non-image files before uploading', async () => {
     const fetchImpl = vi.fn<FetchImpl>();
 
@@ -479,4 +601,10 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
     ...init,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+async function flushMicrotasks(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve();
+  }
 }

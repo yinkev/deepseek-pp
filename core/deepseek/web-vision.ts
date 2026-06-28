@@ -48,7 +48,7 @@ export interface DeepSeekWebVisionUploadResult {
 export interface DeepSeekWebVisionUploadInput {
   file: File;
   clientHeaders: Record<string, string>;
-  createPowHeaders: (targetPath: string) => Promise<Record<string, string>>;
+  createPowHeaders: (targetPath: string, signal?: AbortSignal) => Promise<Record<string, string>>;
   fetchImpl?: FetchImpl;
   baseUrl?: string;
   pollIntervalMs?: number;
@@ -102,10 +102,12 @@ export async function uploadDeepSeekWebVisionImage(
   input: DeepSeekWebVisionUploadInput,
 ): Promise<DeepSeekWebVisionUploadResult> {
   validateVisionImage(input.file);
+  throwIfVisionUploadAborted(input.signal);
 
   const fetchImpl = input.fetchImpl ?? ((resource, init) => fetch(resource, init));
   const baseUrl = input.baseUrl ?? DEFAULT_BASE_URL;
-  const powHeaders = await input.createPowHeaders(DEEPSEEK_WEB_FILE_UPLOAD_PATH);
+  const powHeaders = await input.createPowHeaders(DEEPSEEK_WEB_FILE_UPLOAD_PATH, input.signal);
+  throwIfVisionUploadAborted(input.signal);
   const form = new FormData();
   form.append('file', input.file);
 
@@ -122,6 +124,7 @@ export async function uploadDeepSeekWebVisionImage(
     },
     body: form,
   });
+  throwIfVisionUploadAborted(input.signal);
   const uploadJson = await readJsonResponse(uploadResponse, 'DeepSeek Vision upload');
   const uploadData = uploadJson?.data;
   const refFileId = firstString(
@@ -305,6 +308,7 @@ async function waitForVisionFile(input: DeepSeekWebVisionUploadInput & {
   let lastMetadata: DeepSeekWebVisionFileMetadata | null = null;
 
   for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+    throwIfVisionUploadAborted(input.signal);
     const response = await input.fetchImpl(createFileFetchUrl(input.baseUrl, input.refFileId), {
       method: 'GET',
       credentials: 'include',
@@ -314,6 +318,7 @@ async function waitForVisionFile(input: DeepSeekWebVisionUploadInput & {
         ...input.clientHeaders,
       },
     });
+    throwIfVisionUploadAborted(input.signal);
     const json = await readJsonResponse(response, 'DeepSeek Vision file status');
     const data = json?.data;
 
@@ -341,7 +346,7 @@ async function waitForVisionFile(input: DeepSeekWebVisionUploadInput & {
     }
 
     if (attempt < maxPollAttempts - 1 && pollIntervalMs > 0) {
-      await delay(pollIntervalMs);
+      await delay(pollIntervalMs, input.signal);
     }
   }
 
@@ -438,8 +443,27 @@ function firstBoolean(...values: unknown[]): boolean | null {
   return null;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfVisionUploadAborted(signal);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(createVisionUploadAbortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function throwIfVisionUploadAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw createVisionUploadAbortError();
+}
+
+function createVisionUploadAbortError(): DOMException {
+  return new DOMException('DeepSeek Vision upload was cancelled.', 'AbortError');
 }
 
 function formatBytes(bytes: number): string {

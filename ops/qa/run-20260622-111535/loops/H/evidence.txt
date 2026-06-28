@@ -1,0 +1,11 @@
+Loop H: Preset & Saved Items Tests (P2)
+Date: 2026-06-22
+Status: PASS
+
+File Created (1):
+1. tests/preset-crud.test.ts — 9 tests
+   - Preset CRUD operations
+   - Name uniqueness, content update, deletion
+   - Saved items: search, markdown/JSON export
+
+Grade: B

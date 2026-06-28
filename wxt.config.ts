@@ -53,7 +53,7 @@ function createManifest(env: ConfigEnv): UserManifest {
     description: MANIFEST_DESCRIPTION,
     version: extensionVersion,
     permissions: isChromiumTarget ? [...chromiumPermissions, 'sidePanel'] : permissions,
-    optional_host_permissions: ['http://*/*', 'https://*/*'],
+    optional_host_permissions: ['<all_urls>'],
     host_permissions: ['*://chat.deepseek.com/*', 'https://api.deepseek.com/*', '*://cn.bing.com/*', '*://www.bing.com/*'],
     content_security_policy: {
       extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",

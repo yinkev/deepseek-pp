@@ -1,8 +1,8 @@
 # Project Overview
 
-## Preliminary Direction
+## Implemented Direction
 
-Implement Gemini-Nexus parity browser control in DeepSeek++: a Chromium-owned CDP runtime with `chrome.debugger`, Accessibility Tree UID snapshots, controlled tab and tab group scope, browser action tools, sidepanel controls, permission governance, and verification. This is intentionally the full parity path, not a small MVP.
+DeepSeek++ now has Gemini-Nexus parity browser-control infrastructure implemented locally: a Chromium-owned CDP runtime with `chrome.debugger`, Accessibility Tree UID snapshots, controlled tab and tab group scope, browser action tools, sidepanel controls, permission governance, and automated validation. The remaining release gate is live Chrome sidepanel/browser-control smoke in the user's real Chrome profile.
 
 ## Current Architecture
 
@@ -17,13 +17,13 @@ graph TD
     BG --> RT["core/tool/runtime.ts"]
     RT --> Local["local tools: memory, web, artifact, skill, import"]
     RT --> MCP["core/mcp transports"]
-    BG -. proposed .-> BC["core/browser-control service"]
-    BC -. proposed .-> Chrome["chrome.debugger / tabs / tabGroups / CDP / AX tree"]
+    BG --> BC["core/browser-control service"]
+    BC --> Chrome["chrome.debugger / tabs / tabGroups / CDP / AX tree"]
 ```
 
-The current codebase has a mature tool-call and continuation loop, but it has no browser-control runtime. There is no `chrome.debugger` usage, no controlled tab registry, no CDP connection layer, no Accessibility Tree UID mapping, and no browser action descriptors.
+The current codebase has a mature tool-call and continuation loop plus a background-owned browser-control runtime. Browser-control code lives under `core/browser-control/*`, uses Chromium debugger/tabs APIs, exposes `browser_*` descriptors through the local tool runtime, and is wired into manual chat, sidepanel chat, inline agent, and automation paths.
 
-The correct ownership boundary is background-owned browser control. `entrypoints/background.ts` is already the owner of runtime messages, permission requests, tool execution, sidepanel chat loops, automation, alarms, and offscreen sandbox. Browser control should be extracted into `core/browser-control/*` and called from background rather than implemented inside `entrypoints/content.ts` or the DeepSeek fetch hook.
+The ownership boundary is background-owned browser control. `entrypoints/background.ts` owns runtime messages, permission requests, tool execution, sidepanel chat loops, automation, alarms, and offscreen sandbox; it calls `core/browser-control/*` rather than implementing CDP state inside `entrypoints/content.ts` or the DeepSeek fetch hook.
 
 ## Technology Stack
 
@@ -32,24 +32,24 @@ The correct ownership boundary is background-owned browser control. `entrypoints
 | Language | TypeScript | TypeScript |
 | Extension Framework | WXT MV3 | WXT MV3, Chromium browser-control capability gated |
 | UI | React 19 + Tailwind | React sidepanel Browser Control surface |
-| Tool Protocol | DeepSeek++ direct XML tool tags via `ToolDescriptor` | Same protocol, with browser-control descriptors |
-| Browser Automation | None | `chrome.debugger` + CDP + `chrome.tabs` + `chrome.tabGroups` |
-| Page Observation | Existing DeepSeek page text/context only | CDP Accessibility Tree snapshot with stable UID mapping |
-| Storage | `chrome.storage.local`, Dexie-backed feature stores | Existing storage plus browser-control settings/state/history |
+| Tool Protocol | DeepSeek++ direct XML tool tags via `ToolDescriptor` | Same protocol, with browser-control descriptors implemented |
+| Browser Automation | `chrome.debugger` + CDP + `chrome.tabs` + optional `chrome.tabGroups` | Live Chrome smoke pending |
+| Page Observation | Existing DeepSeek page text/context plus CDP Accessibility Tree snapshots | Live Chrome smoke pending |
+| Storage | `chrome.storage.local`, Dexie-backed feature stores, browser-control settings/state/history | unchanged |
 | Package Manager | npm workspaces | unchanged |
 
 ## Entry Points
 
 | Entry | Current Responsibility | Browser-Control Relevance |
 |:--|:--|:--|
-| `wxt.config.ts` | Manifest construction, permissions, CSP, browser targets, asset plugins | Add Chromium-only `debugger`, `tabs`, `tabGroups`; keep unsupported paths explicit |
-| `entrypoints/background.ts` | Background RPC, tool runtime execution, sidepanel chat loop, automation, permissions, broadcasts | Own CDP service lifecycle, controlled tabs, tab groups, browser-control messages |
-| `entrypoints/content.ts` | DeepSeek page coordination, tool cards, inline agent UI, content-side artifact fast path | Should not own CDP state; may only render status/tool cards and request background execution |
+| `wxt.config.ts` | Manifest construction, permissions, CSP, browser targets, asset plugins | Declares Chromium browser-control permissions and unsupported paths |
+| `entrypoints/background.ts` | Background RPC, tool runtime execution, sidepanel chat loop, automation, permissions, broadcasts | Owns browser-control service lifecycle, browser-control messages, and screenshot/Vision routing |
+| `entrypoints/content.ts` | DeepSeek page coordination, tool cards, inline agent UI, content-side artifact fast path | Does not own CDP state; renders status/tool cards and requests background execution |
 | `entrypoints/main-world.content.ts` | MAIN world fetch hook bridge | No direct browser-control implementation; receives descriptors through existing hook state |
-| `core/tool/runtime.ts` | Tool descriptor aggregation and execution dispatch | Add browser-control local provider and execution path |
-| `core/tool-loop/engine.ts` | Sequential tool execution and continuation helper | Reuse for browser actions; add result-size and observation contracts upstream |
-| `core/inline-agent/loop.ts` | Manual-chat inline agent continuation | Must allow browser-control tools and preserve snapshot observation discipline |
-| `entrypoints/sidepanel/*` | React UI for chat, tools, MCP, settings, automation, projects | Add Browser Control management page under Capabilities |
+| `core/tool/runtime.ts` | Tool descriptor aggregation and execution dispatch | Includes browser-control local provider and execution path |
+| `core/tool-loop/engine.ts` | Sequential tool execution and continuation helper | Reused for browser actions with result-size and stop-reason contracts |
+| `core/inline-agent/loop.ts` | Manual-chat inline agent continuation | Allows browser-control tools while preserving snapshot observation discipline |
+| `entrypoints/sidepanel/*` | React UI for chat, tools, MCP, settings, automation, projects | Includes Browser Control management page under Capabilities |
 
 ## Build & Run
 
@@ -80,16 +80,14 @@ Existing tests cover:
 - inline agent prompts and renderer behavior
 - sidepanel navigation and product surfaces
 - manifest policy and release asset checks through npm scripts
+- browser-control settings, descriptors, CDP connection, tab target state, snapshot leases, actions, screenshot/Vision routing, result budgets, and unsupported-platform behavior
+- sidepanel/browser-control chat lifecycle, stream ids, terminal timeout handling, and compact tool disclosure source contracts
 
-Missing for browser-control parity:
+Remaining browser-control verification:
 
-- mock `chrome.debugger` attach/detach/sendCommand tests
-- `chrome.tabs` and `chrome.tabGroups` lifecycle tests
-- Accessibility Tree formatting and UID stability tests
-- action tests for click, hover, fill, form fill, key press, file attach, dialog handling, wait, evaluate
-- result budget tests for large snapshots
-- unsupported Firefox and Android behavior tests
-- real Chrome smoke against a fixture page
+- real Chrome smoke against the user's profile after `npm run smoke:chrome-preflight` returns `GO`
+- final visual audit of sidepanel disclosure state after the live smoke
+- service-worker lifetime and Chrome Task Manager evidence if memory/lag remains suspicious
 
 ## Project Governance Baseline
 
@@ -110,9 +108,9 @@ Missing for browser-control parity:
 - Chrome extension APIs: existing `storage`, `alarms`, `nativeMessaging`, `contextMenus`, `offscreen`, `sidePanel`; browser-control parity adds Chromium-specific `debugger`, `tabs`, and `tabGroups`.
 - Android WebView bridge, currently non-extension and explicitly lacks native browser extension APIs.
 
-## Phase 1 Finding
+## Browser-Control Invariants
 
-Browser control should be introduced as a new platform capability plus local tool provider, not as an extension of MCP or a content-script patch. The key invariants are:
+Browser control is a platform capability plus local tool provider, not an extension of MCP or a content-script patch. The key invariants are:
 
 - one background-owned debugger session manager
 - one controlled tab and tab group registry

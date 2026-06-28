@@ -34,13 +34,16 @@ describe('active chat loop marker', () => {
     const { chromeStub } = createSessionStorageStub();
     vi.stubGlobal('chrome', chromeStub);
 
-    await markChatLoopStarted('web');
+    const id = await markChatLoopStarted('web', 'loop-1', 'stream-1');
 
     const marker = await getActiveChatLoop();
+    expect(id).toBe('loop-1');
     expect(marker).toEqual({
       active: true,
+      id: 'loop-1',
       startedAt: expect.any(Number),
       provider: 'web',
+      streamId: 'stream-1',
     });
   });
 
@@ -51,6 +54,26 @@ describe('active chat loop marker', () => {
     await markChatLoopStarted('official-api');
     await markChatLoopFinished();
 
+    expect(await getActiveChatLoop()).toBeNull();
+  });
+
+  it('does not clear a newer marker when an older loop finishes late', async () => {
+    const { chromeStub } = createSessionStorageStub();
+    vi.stubGlobal('chrome', chromeStub);
+
+    await markChatLoopStarted('web', 'old-loop', 'old-stream');
+    await markChatLoopStarted('web', 'new-loop', 'new-stream');
+
+    expect(await markChatLoopFinished('old-loop')).toBe(false);
+    expect(await getActiveChatLoop()).toEqual({
+      active: true,
+      id: 'new-loop',
+      startedAt: expect.any(Number),
+      provider: 'web',
+      streamId: 'new-stream',
+    });
+
+    expect(await markChatLoopFinished('new-loop')).toBe(true);
     expect(await getActiveChatLoop()).toBeNull();
   });
 
@@ -81,7 +104,7 @@ describe('reconcileInterruptedChatLoop', () => {
     const { storage, chromeStub } = createSessionStorageStub();
     vi.stubGlobal('chrome', chromeStub);
     const startedAt = 1_000_000;
-    storage.set(STORAGE_KEY, { active: true, startedAt, provider: 'official-api' });
+    storage.set(STORAGE_KEY, { active: true, id: 'loop-1', startedAt, provider: 'official-api', streamId: 'stream-1' });
 
     // 20s elapsed — past the threshold, e.g. a SW restart.
     const result = await reconcileInterruptedChatLoop(startedAt + 20_000);
@@ -90,6 +113,7 @@ describe('reconcileInterruptedChatLoop', () => {
       provider: 'official-api',
       startedAt,
       interruptedAt: startedAt + 20_000,
+      streamId: 'stream-1',
     });
     expect(storage.has(STORAGE_KEY)).toBe(false);
   });

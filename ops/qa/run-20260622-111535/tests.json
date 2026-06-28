@@ -1,0 +1,831 @@
+{
+  "run_id": "run-20260622-111535",
+  "generated_at": "2026-06-22T11:45:00Z",
+  "test_inventory": [
+    {
+      "file": "tests/artifact.test.ts",
+      "feature_id": "F-011",
+      "approach": "unit",
+      "covers": "Artifact creation and bundling",
+      "coverage_gaps": "Download generation, artifact history"
+    },
+    {
+      "file": "tests/automation-runner-pow.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "PoW challenge solving for automation",
+      "coverage_gaps": "Full automation runner lifecycle"
+    },
+    {
+      "file": "tests/automation-store-reconcile.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation store reconciliation",
+      "coverage_gaps": "Automation scheduling, retry logic"
+    },
+    {
+      "file": "tests/automation-auth.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation auth header handling",
+      "coverage_gaps": "Auth header expiry during automation"
+    },
+    {
+      "file": "tests/automation-chain.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation chaining",
+      "coverage_gaps": "Chain depth limit enforcement"
+    },
+    {
+      "file": "tests/automation-preflight.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation readiness preflight",
+      "coverage_gaps": "Preflight scoring accuracy"
+    },
+    {
+      "file": "tests/automation-readiness.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation readiness checks",
+      "coverage_gaps": "Readiness state transitions"
+    },
+    {
+      "file": "tests/automation-replay.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation replay functionality",
+      "coverage_gaps": "Replay with auth changes"
+    },
+    {
+      "file": "tests/automation-runner-auth.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation runner auth handling",
+      "coverage_gaps": "Runner auth recovery"
+    },
+    {
+      "file": "tests/automation-workflow-templates.test.ts",
+      "feature_id": "F-007",
+      "approach": "unit",
+      "covers": "Automation workflow templates",
+      "coverage_gaps": "Template customization"
+    },
+    {
+      "file": "tests/autopilot-ledger.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Autopilot ledger functionality",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/background-memory-bounds.test.ts",
+      "feature_id": "F-002",
+      "approach": "unit",
+      "covers": "Memory bounds in background context",
+      "coverage_gaps": "Memory injection into prompt"
+    },
+    {
+      "file": "tests/bridge-schema.test.ts",
+      "feature_id": "F-004",
+      "approach": "contract",
+      "covers": "Bridge message schema validation",
+      "coverage_gaps": "Bridge connection lifecycle"
+    },
+    {
+      "file": "tests/browser-control.test.ts",
+      "feature_id": "F-006",
+      "approach": "unit",
+      "covers": "Browser control tool definitions and basic execution",
+      "coverage_gaps": "CDP lifecycle, tab registry, snapshot budget, act-verify, platform gating, target lock, dialog handling"
+    },
+    {
+      "file": "tests/chat-active-loop.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Active chat loop logic",
+      "coverage_gaps": "Chat loop state management"
+    },
+    {
+      "file": "tests/chat-provider.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Chat provider functionality",
+      "coverage_gaps": "Chat provider integration"
+    },
+    {
+      "file": "tests/chrome-runtime-preflight.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Chrome runtime preflight checks",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/content-vision-media-validation.test.ts",
+      "feature_id": "F-012",
+      "approach": "unit",
+      "covers": "Vision media validation",
+      "coverage_gaps": "Vision upload end-to-end"
+    },
+    {
+      "file": "tests/conversation-export.test.ts",
+      "feature_id": "F-013",
+      "approach": "unit",
+      "covers": "Conversation export functionality",
+      "coverage_gaps": "Export abort handling, large export performance"
+    },
+    {
+      "file": "tests/deepseek-adapter-pow.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "DeepSeek adapter PoW handling",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/deepseek-adapter-stream.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "DeepSeek adapter streaming",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/deepseek-official-api.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "DeepSeek official API integration",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/deepseek-web-origin.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "DeepSeek web origin handling",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/deepseek-web-vision.test.ts",
+      "feature_id": "F-012",
+      "approach": "unit",
+      "covers": "DeepSeek web vision functionality",
+      "coverage_gaps": "Vision upload end-to-end"
+    },
+    {
+      "file": "tests/history-cleanup.test.ts",
+      "feature_id": "F-001",
+      "approach": "unit",
+      "covers": "History cleanup for tool calls",
+      "coverage_gaps": "History cleanup in various contexts"
+    },
+    {
+      "file": "tests/i18n.test.ts",
+      "feature_id": "F-019",
+      "approach": "unit",
+      "covers": "i18n translation functionality",
+      "coverage_gaps": "Locale change propagation"
+    },
+    {
+      "file": "tests/injected-theme.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Injected theme functionality",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/inline-agent-loop.test.ts",
+      "feature_id": "F-008",
+      "approach": "unit",
+      "covers": "Inline agent loop logic",
+      "coverage_gaps": "Agent loop termination, agent abort handling"
+    },
+    {
+      "file": "tests/inline-agent-prompt.test.ts",
+      "feature_id": "F-008",
+      "approach": "unit",
+      "covers": "Inline agent prompt building",
+      "coverage_gaps": "Agent prompt edge cases"
+    },
+    {
+      "file": "tests/inline-agent-renderer.test.ts",
+      "feature_id": "F-008",
+      "approach": "unit",
+      "covers": "Inline agent renderer",
+      "coverage_gaps": "Agent trace state management"
+    },
+    {
+      "file": "tests/inline-markdown.test.ts",
+      "feature_id": "F-008",
+      "approach": "unit",
+      "covers": "Inline markdown rendering",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/local-skill-importer.test.ts",
+      "feature_id": "F-003",
+      "approach": "unit",
+      "covers": "Local skill import",
+      "coverage_gaps": "Skill import error handling"
+    },
+    {
+      "file": "tests/mcp-execution-policy.test.ts",
+      "feature_id": "F-004",
+      "approach": "unit",
+      "covers": "MCP execution policy",
+      "coverage_gaps": "MCP server connection lifecycle"
+    },
+    {
+      "file": "tests/mcp-native-multimodal-env.test.ts",
+      "feature_id": "F-004",
+      "approach": "unit",
+      "covers": "MCP native multimodal environment",
+      "coverage_gaps": "MCP transport failure recovery"
+    },
+    {
+      "file": "tests/mcp-page-collapse.test.ts",
+      "feature_id": "F-004",
+      "approach": "unit",
+      "covers": "MCP page collapse",
+      "coverage_gaps": "MCP tool discovery caching"
+    },
+    {
+      "file": "tests/mcp-transport-common.test.ts",
+      "feature_id": "F-004",
+      "approach": "unit",
+      "covers": "MCP transport common functionality",
+      "coverage_gaps": "MCP tool execution timeout"
+    },
+    {
+      "file": "tests/memory-scope.test.ts",
+      "feature_id": "F-002",
+      "approach": "unit",
+      "covers": "Memory scope functionality",
+      "coverage_gaps": "Memory injection into prompt"
+    },
+    {
+      "file": "tests/memory-tool.test.ts",
+      "feature_id": "F-002",
+      "approach": "unit",
+      "covers": "Memory tool execution",
+      "coverage_gaps": "Memory selection algorithm"
+    },
+    {
+      "file": "tests/multimodal-media.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Multimodal media handling",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/multimodal-policy.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Multimodal policy",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/multimodal-settings.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Multimodal settings",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/p1-interactive-tools.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Interactive tools priority 1",
+      "coverage_gaps": "Tool dispatch routing"
+    },
+    {
+      "file": "tests/persisted-data-i18n.test.ts",
+      "feature_id": "F-019",
+      "approach": "unit",
+      "covers": "Persisted data i18n",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/phase5-product-surfaces.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Phase 5 product surfaces",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/platform-capabilities.test.ts",
+      "feature_id": "F-020",
+      "approach": "unit",
+      "covers": "Platform capabilities",
+      "coverage_gaps": "Platform detection accuracy, unsupported platform error handling"
+    },
+    {
+      "file": "tests/project-context.test.ts",
+      "feature_id": "F-015",
+      "approach": "unit",
+      "covers": "Project context functionality",
+      "coverage_gaps": "Project context injection"
+    },
+    {
+      "file": "tests/project-sidebar-organizer.test.ts",
+      "feature_id": "F-015",
+      "approach": "unit",
+      "covers": "Project sidebar organizer",
+      "coverage_gaps": "Project-conversation binding lifecycle"
+    },
+    {
+      "file": "tests/projects-page.test.ts",
+      "feature_id": "F-015",
+      "approach": "unit",
+      "covers": "Projects page UI",
+      "coverage_gaps": "Project deletion cascading"
+    },
+    {
+      "file": "tests/read-history-snapshot.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Read history snapshot",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/request-augmentation.test.ts",
+      "feature_id": "F-001",
+      "approach": "unit",
+      "covers": "Request augmentation logic",
+      "coverage_gaps": "Fetch hook lifecycle end-to-end"
+    },
+    {
+      "file": "tests/runtime-broadcast.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Runtime broadcast functionality",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/runtime-doctor.test.ts",
+      "feature_id": "F-018",
+      "approach": "unit",
+      "covers": "Runtime doctor diagnostics",
+      "coverage_gaps": "Subsystem status accuracy"
+    },
+    {
+      "file": "tests/scenario-localization.test.ts",
+      "feature_id": "F-019",
+      "approach": "unit",
+      "covers": "Scenario localization",
+      "coverage_gaps": "Tool description localization coverage"
+    },
+    {
+      "file": "tests/shell-host-local-skill-preview.test.ts",
+      "feature_id": "F-003",
+      "approach": "unit",
+      "covers": "Shell host local skill preview",
+      "coverage_gaps": "Skill name conflict resolution"
+    },
+    {
+      "file": "tests/shell-policy.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Shell policy",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/sidepanel-chat-attachments.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Sidepanel chat attachments",
+      "coverage_gaps": "Attachment upload flow"
+    },
+    {
+      "file": "tests/sidepanel-chat-job-runner.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Sidepanel chat job runner",
+      "coverage_gaps": "Chat loop state management"
+    },
+    {
+      "file": "tests/sidepanel-interactions.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Sidepanel interactions",
+      "coverage_gaps": "Sidepanel chat end-to-end"
+    },
+    {
+      "file": "tests/sidepanel-navigation.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Sidepanel navigation",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/sidepanel-polish.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Sidepanel polish",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/sidepanel-tool-sanitize.test.ts",
+      "feature_id": "F-009",
+      "approach": "unit",
+      "covers": "Sidepanel tool sanitization",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/skill-localization.test.ts",
+      "feature_id": "F-003",
+      "approach": "unit",
+      "covers": "Skill localization",
+      "coverage_gaps": "Skill template injection"
+    },
+    {
+      "file": "tests/skill-popup.test.ts",
+      "feature_id": "F-003",
+      "approach": "unit",
+      "covers": "Skill popup UI",
+      "coverage_gaps": "Skill creator tool execution"
+    },
+    {
+      "file": "tests/streaming-tool-call-parser.test.ts",
+      "feature_id": "F-001",
+      "approach": "unit",
+      "covers": "Streaming tool call parser",
+      "coverage_gaps": "Concurrent request handling"
+    },
+    {
+      "file": "tests/streaming-tool-text.test.ts",
+      "feature_id": "F-001",
+      "approach": "unit",
+      "covers": "Streaming tool text accumulator",
+      "coverage_gaps": "Bridge connection failure recovery"
+    },
+    {
+      "file": "tests/sync-local-skill-merge.test.ts",
+      "feature_id": "F-003",
+      "approach": "unit",
+      "covers": "Sync local skill merge",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/sync-schema.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Sync schema validation",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/token-speed.test.ts",
+      "feature_id": "F-001",
+      "approach": "unit",
+      "covers": "Token speed tracking",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/tool-block-style.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool block style rendering",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/tool-execution-restore.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool execution restore",
+      "coverage_gaps": "Tool execution abort handling"
+    },
+    {
+      "file": "tests/tool-history.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool history management",
+      "coverage_gaps": "Tool call history persistence"
+    },
+    {
+      "file": "tests/tool-parser.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool call parsing from XML",
+      "coverage_gaps": "Tool call parsing edge cases"
+    },
+    {
+      "file": "tests/tool-restore-block.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool restore block",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/tool-result-renderer.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool result renderer",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/tool-scan-gate.test.ts",
+      "feature_id": "F-005",
+      "approach": "unit",
+      "covers": "Tool scan gate",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/usage-stats.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Usage statistics",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/vision-evidence.test.ts",
+      "feature_id": "F-012",
+      "approach": "unit",
+      "covers": "Vision evidence packs",
+      "coverage_gaps": "Evidence pack assembly"
+    },
+    {
+      "file": "tests/web-chat-session.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Web chat session",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/whats-new-panel.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Whats new panel",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/whats-new.test.ts",
+      "feature_id": null,
+      "approach": "unit",
+      "covers": "Whats new functionality",
+      "coverage_gaps": null
+    },
+    {
+      "file": "tests/xml-tool-stream-filter.test.ts",
+      "feature_id": "F-001",
+      "approach": "unit",
+      "covers": "XML tool stream filter",
+      "coverage_gaps": "XHR interception path"
+    }
+  ],
+  "test_gaps": [
+    {
+      "id": "TG-001",
+      "feature_id": "F-001",
+      "gap": "Fetch hook lifecycle end-to-end",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for the complete fetch interception lifecycle including XHR and IndexedDB hooks"
+    },
+    {
+      "id": "TG-002",
+      "feature_id": "F-001",
+      "gap": "Bridge connection failure recovery",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for bridge connection failure and recovery"
+    },
+    {
+      "id": "TG-003",
+      "feature_id": "F-001",
+      "gap": "Concurrent request handling",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for concurrent fetch interception"
+    },
+    {
+      "id": "TG-004",
+      "feature_id": "F-002",
+      "gap": "Memory injection into prompt",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for memory injection into prompt augmentation"
+    },
+    {
+      "id": "TG-005",
+      "feature_id": "F-002",
+      "gap": "Memory selection algorithm",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for memory selection by budget and relevance"
+    },
+    {
+      "id": "TG-006",
+      "feature_id": "F-002",
+      "gap": "Memory archival lifecycle",
+      "risk": "low",
+      "priority": "P3",
+      "description": "No test for 90-day memory archival"
+    },
+    {
+      "id": "TG-007",
+      "feature_id": "F-003",
+      "gap": "Skill template injection into prompt",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for skill template injection into prompt"
+    },
+    {
+      "id": "TG-008",
+      "feature_id": "F-003",
+      "gap": "Skill creator tool execution",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for skill creator tool execution"
+    },
+    {
+      "id": "TG-009",
+      "feature_id": "F-004",
+      "gap": "MCP server connection lifecycle",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for MCP server connection, discovery, and health monitoring"
+    },
+    {
+      "id": "TG-010",
+      "feature_id": "F-004",
+      "gap": "MCP tool discovery caching",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for MCP tool cache TTL and refresh"
+    },
+    {
+      "id": "TG-011",
+      "feature_id": "F-004",
+      "gap": "MCP transport failure recovery",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for MCP transport connection failures"
+    },
+    {
+      "id": "TG-012",
+      "feature_id": "F-005",
+      "gap": "Tool dispatch routing",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for tool dispatch by name to correct provider"
+    },
+    {
+      "id": "TG-013",
+      "feature_id": "F-005",
+      "gap": "Tool execution abort handling",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for tool execution abort via AbortSignal"
+    },
+    {
+      "id": "TG-014",
+      "feature_id": "F-005",
+      "gap": "Tool result truncation",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for tool result size limits and truncation"
+    },
+    {
+      "id": "TG-015",
+      "feature_id": "F-006",
+      "gap": "CDP connection lifecycle",
+      "risk": "critical",
+      "priority": "P0",
+      "description": "No test for CDP connection, detach, and error handling"
+    },
+    {
+      "id": "TG-016",
+      "feature_id": "F-006",
+      "gap": "Tab registry management",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for controlled tab registry"
+    },
+    {
+      "id": "TG-017",
+      "feature_id": "F-006",
+      "gap": "Snapshot budget enforcement",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for AX snapshot node/byte limits"
+    },
+    {
+      "id": "TG-018",
+      "feature_id": "F-006",
+      "gap": "Platform gating",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for Firefox/Android unsupported state"
+    },
+    {
+      "id": "TG-019",
+      "feature_id": "F-006",
+      "gap": "Target lock behavior",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for target lock/unlock lifecycle"
+    },
+    {
+      "id": "TG-020",
+      "feature_id": "F-006",
+      "gap": "Dialog handling",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for browser dialog detection and handling"
+    },
+    {
+      "id": "TG-021",
+      "feature_id": "F-007",
+      "gap": "Automation scheduling accuracy",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for cron/rrule scheduling accuracy"
+    },
+    {
+      "id": "TG-022",
+      "feature_id": "F-007",
+      "gap": "Automation runner end-to-end",
+      "risk": "high",
+      "priority": "P1",
+      "description": "No test for complete automation execution lifecycle"
+    },
+    {
+      "id": "TG-023",
+      "feature_id": "F-007",
+      "gap": "Automation retry logic",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for automation retry on failure"
+    },
+    {
+      "id": "TG-024",
+      "feature_id": "F-009",
+      "gap": "Sidepanel chat end-to-end",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for complete sidepanel chat flow"
+    },
+    {
+      "id": "TG-025",
+      "feature_id": "F-009",
+      "gap": "Chat history persistence",
+      "risk": "low",
+      "priority": "P3",
+      "description": "No test for chat history persistence and sync"
+    },
+    {
+      "id": "TG-026",
+      "feature_id": "F-010",
+      "gap": "Web search execution",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for web search execution via Bing"
+    },
+    {
+      "id": "TG-027",
+      "feature_id": "F-010",
+      "gap": "Web page content extraction",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for web page content extraction"
+    },
+    {
+      "id": "TG-028",
+      "feature_id": "F-014",
+      "gap": "Preset CRUD operations",
+      "risk": "low",
+      "priority": "P3",
+      "description": "No test for preset create/read/update/delete"
+    },
+    {
+      "id": "TG-029",
+      "feature_id": "F-014",
+      "gap": "Preset injection into prompt",
+      "risk": "low",
+      "priority": "P3",
+      "description": "No test for preset injection into prompt"
+    },
+    {
+      "id": "TG-030",
+      "feature_id": "F-016",
+      "gap": "Saved items CRUD",
+      "risk": "low",
+      "priority": "P3",
+      "description": "No test for saved items create/read/update/delete"
+    },
+    {
+      "id": "TG-031",
+      "feature_id": "F-020",
+      "gap": "Platform detection accuracy",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for platform detection across browsers"
+    },
+    {
+      "id": "TG-032",
+      "feature_id": "F-020",
+      "gap": "Unsupported platform error handling",
+      "risk": "medium",
+      "priority": "P2",
+      "description": "No test for unsupported platform error messages"
+    }
+  ]
+}

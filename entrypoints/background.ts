@@ -90,6 +90,11 @@ import {
   truncateSidepanelToolString,
 } from '../core/tool/sidepanel';
 import {
+  isSidepanelChatJobAbortError,
+  runSidepanelChatSubmitJobWithTimeout,
+  throwIfSidepanelChatJobAborted,
+} from '../core/chat/sidepanel-job-runner';
+import {
   addConversationToProject,
   bindPendingProjectConversation,
   createProjectContext,
@@ -250,6 +255,7 @@ import {
   DeepSeekSessionError,
   createChatSession,
   createPowHeaders,
+  readHistorySnapshot,
   submitPromptStreaming,
   rememberDeepSeekClientHeaders,
   saveClientHeadersToStorage,
@@ -315,10 +321,18 @@ const SIDEPANEL_TOOL_CALLS_PER_STEP_LIMIT = 8;
 const SIDEPANEL_TOOL_CALLS_PER_TURN_LIMIT = 40;
 const SIDEPANEL_WEB_TURN_TIMEOUT_MS = 90_000;
 const SIDEPANEL_CHAT_JOB_TIMEOUT_MS = SIDEPANEL_WEB_TURN_TIMEOUT_MS + 5_000;
+const AUTH_STATUS_BROADCAST_SOURCE = 'deepseek_pp_background_auth_status';
 let chatSessionId: string | null = null;
 let chatParentMessageId: number | null = null;
 let officialApiChatMessages: OfficialDeepSeekMessage[] = [];
 let sidepanelChatSubmitPromise: Promise<void> | null = null;
+const sidepanelRunningToolEvents = new Map<string, {
+  id: string;
+  call: ToolCall;
+  excludeTabId?: number;
+  streamId?: string;
+  startedAt: number;
+}>();
 const conversationExportControllers = new Map<string, AbortController>();
 let currentBackgroundLocale: SupportedLocale = DEFAULT_LOCALE;
 let currentBackgroundTranslator = createTranslator(DEFAULT_LOCALE);
@@ -335,6 +349,10 @@ const browserSandboxRuntime: SandboxToolRuntime = {
 
 function backgroundT(key: LocaleMessageKey, params?: MessageParams): string {
   return currentBackgroundTranslator.t(key, params);
+}
+
+function isBackgroundAuthStatusBroadcast(message: { type: string; payload?: unknown }): boolean {
+  return (message as { broadcastSource?: unknown }).broadcastSource === AUTH_STATUS_BROADCAST_SOURCE;
 }
 
 async function refreshBackgroundLocale(): Promise<void> {
@@ -380,6 +398,11 @@ type EnsurePersonalRuntimeReadyResult = {
   report: RuntimeDoctorReport;
 };
 
+type RuntimeDoctorStorageAudit = {
+  snapshot: Awaited<ReturnType<typeof getRuntimeDoctorStorageSnapshot>>;
+  storage: ReturnType<typeof scanRuntimeDoctorStorage>;
+};
+
 type PersonalAutopilotRepairResult = {
   ok: true;
   ready: boolean;
@@ -412,7 +435,6 @@ export default defineBackground(() => {
   ensureAutomationWakeAlarm().catch((error) => reportBackgroundStartupError('automation_alarm_create_failed', error));
   reconcileInterruptedChatLoopOnWake().catch((error) => reportBackgroundStartupError('chat_loop_reconcile_failed', error));
   scrubStoredClientHeaders().catch((error) => reportBackgroundStartupError('client_header_scrub_failed', error));
-  ensurePersonalRuntimeReady(undefined, 'startup').catch((error) => reportBackgroundStartupError('personal_runtime_ready_failed', error));
   scanDueAutomationsFromWake().catch((error) => reportBackgroundStartupError('automation_startup_scan_failed', error));
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -911,7 +933,13 @@ async function handleMessage(
       return getBrowserControlSettings();
 
     case 'SAVE_BROWSER_CONTROL_SETTINGS': {
-      const settings = await saveBrowserControlSettings(message.payload as Partial<BrowserControlSettings>);
+      const patch = message.payload as Partial<BrowserControlSettings>;
+      if (patch.enabled === false || Object.prototype.hasOwnProperty.call(patch, 'targetTabId')) {
+        await browserControlService.detach();
+      } else {
+        browserControlService.invalidateSnapshotLease();
+      }
+      const settings = await saveBrowserControlSettings(patch);
       await broadcastToolDescriptorsUpdate(sender.tab?.id);
       await broadcastBrowserControlUpdate(sender.tab?.id);
       return settings;
@@ -1331,6 +1359,7 @@ async function handleMessage(
       }
       if (!text?.trim() && imagePayloads.length === 0) return { ok: false, error: 'empty_prompt' };
       if (sidepanelChatSubmitPromise) return { ok: false, error: 'chat_busy' };
+      const controller = new AbortController();
       // Fire and forget — the streaming response is broadcast.
       const job = handleChatSubmitPrompt(
         text?.trim() || 'Describe the attached image.',
@@ -1338,8 +1367,9 @@ async function handleMessage(
         sender.tab?.id,
         imagePayloads,
         chatStreamId,
+        controller.signal,
       );
-      sidepanelChatSubmitPromise = runSidepanelChatSubmitJob(job, sender.tab?.id, chatStreamId)
+      sidepanelChatSubmitPromise = runSidepanelChatSubmitJob(job, sender.tab?.id, chatStreamId, controller)
         .finally(() => {
           sidepanelChatSubmitPromise = null;
         });
@@ -1425,6 +1455,7 @@ async function handleMessage(
     }
 
     case 'AUTH_STATUS_CHANGED': {
+      if (isBackgroundAuthStatusBroadcast(message)) return { ok: true };
       await broadcastChatAuthStatus(sender.tab?.id);
       return { ok: true };
     }
@@ -1433,11 +1464,13 @@ async function handleMessage(
       const payload = message.payload as { headers?: unknown };
       const headers = normalizeStoredClientHeaders(payload.headers);
       if (!headers) return { ok: false, error: 'invalid_client_headers' };
+      const previousHeaders = await loadClientHeadersFromStorage();
+      const headersChanged = !areStoredClientHeadersEqual(previousHeaders, headers);
       rememberDeepSeekClientHeaders(headers);
       const ok = await saveClientHeadersToStorage();
       if (ok) await clearSidepanelWebAuthRejected();
-      await broadcastChatAuthStatus(sender.tab?.id);
-      return { ok };
+      if (ok && headersChanged) await broadcastChatAuthStatus();
+      return { ok, changed: headersChanged };
     }
 
     case 'GET_AUTOMATIONS':
@@ -1566,6 +1599,18 @@ function normalizeStoredClientHeaders(value: unknown): Record<string, string> | 
     if (typeof entry === 'string' && entry) normalized[key] = entry;
   }
   return normalized;
+}
+
+function areStoredClientHeadersEqual(
+  current: Record<string, string> | null,
+  next: Record<string, string>,
+): boolean {
+  if (!current) return false;
+  const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (current[key] !== next[key]) return false;
+  }
+  return true;
 }
 
 async function refreshClientHeadersFromDeepSeekTabs(preferredTabId?: number): Promise<boolean> {
@@ -1791,9 +1836,11 @@ async function getChatAuthStatus(preferredTabId?: number) {
 async function getRuntimeDoctorReport(
   preferredTabId?: number,
   readinessOverride?: RuntimeDoctorReadiness,
+  storageAudit?: RuntimeDoctorStorageAudit,
 ): Promise<RuntimeDoctorReport> {
-  const storageSnapshot = await getRuntimeDoctorStorageSnapshot();
-  const storage = scanRuntimeDoctorStorage(storageSnapshot);
+  const audit = storageAudit ?? await getRuntimeDoctorStorageAudit();
+  const storageSnapshot = audit.snapshot;
+  const storage = audit.storage;
   const [
     chatEnabled,
     hasApiKey,
@@ -1937,6 +1984,14 @@ async function getRuntimeDoctorReport(
     readiness,
     failureExplanations: createRuntimeDoctorFailureExplanations(readiness.blockers),
     storage,
+  };
+}
+
+async function getRuntimeDoctorStorageAudit(): Promise<RuntimeDoctorStorageAudit> {
+  const snapshot = await getRuntimeDoctorStorageSnapshot();
+  return {
+    snapshot,
+    storage: scanRuntimeDoctorStorage(snapshot),
   };
 }
 
@@ -2339,8 +2394,8 @@ async function runEnsurePersonalRuntimeReady(
   const contentScripts = await getDeepSeekContentScriptHealth(deepSeekTabs);
   if (contentScripts.staleTabs > 0) blockers.add('deepseek_content_script_stale');
 
-  const storageSnapshot = await getRuntimeDoctorStorageSnapshot();
-  const storage = scanRuntimeDoctorStorage(storageSnapshot);
+  const storageAudit = await getRuntimeDoctorStorageAudit();
+  const storage = storageAudit.storage;
   if (!storage.ok) {
     blockers.add(storage.issues.some((issue) => issue.reason === 'storage_read_failed')
       ? 'storage_scan_failed'
@@ -2361,7 +2416,7 @@ async function runEnsurePersonalRuntimeReady(
     noLeak: storage.ok,
   });
   lastPersonalRuntimeReadiness = readiness;
-  let report = await getRuntimeDoctorReport(preferredTabId, readiness);
+  let report = await getRuntimeDoctorReport(preferredTabId, readiness, storageAudit);
   if (source !== 'repair') {
     const run = await recordAutopilotRunFromReport(source, preparedAt, Date.now(), report, []);
     report = attachAutopilotRunToReport(report, run);
@@ -2505,7 +2560,11 @@ async function readStorageAreaSnapshot(
 
 async function broadcastChatAuthStatus(preferredTabId?: number) {
   const status = await getChatAuthStatus(preferredTabId);
-  chrome.runtime.sendMessage({ type: 'AUTH_STATUS_CHANGED', ...status }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: 'AUTH_STATUS_CHANGED',
+    broadcastSource: AUTH_STATUS_BROADCAST_SOURCE,
+    ...status,
+  }).catch(() => {});
 }
 
 async function broadcastConversationExportProgress(
@@ -2567,7 +2626,7 @@ async function maybeAttachActVerifyCapture(
     throwIfRuntimeToolAborted(signal);
     const capture = await browserControlService.captureScreenshotForVision();
     throwIfRuntimeToolAborted(signal);
-    const uploaded = await uploadBrowserScreenshotCapture(capture);
+    const uploaded = await uploadBrowserScreenshotCapture(capture, signal);
     throwIfRuntimeToolAborted(signal);
     const evidencePack = settings.collectEvidencePacks
       ? createDeepSeekWebVisionEvidencePack({
@@ -2605,6 +2664,7 @@ async function maybeAttachActVerifyCapture(
       }),
     };
   } catch (err) {
+    if (signal?.aborted || isAbortLikeError(err)) throw err;
     const error = normalizeVisionCaptureToolError(err);
     return {
       ...result,
@@ -2646,6 +2706,16 @@ async function captureBrowserControlTargetImage(): Promise<{
   image: DeepSeekWebVisionSerializedImage;
   tab: { id: number; windowId: number };
 }> {
+  const prepared = await browserControlService.preparePersonalTarget({ allowActiveFallback: true });
+  if (prepared.status === 'unsupported') {
+    throw new Error('Browser Control is not available in this browser.');
+  }
+  if (prepared.status === 'missing') {
+    throw new Error('Select a controllable Browser Control target, or make a non-DeepSeek tab active, then try Browser view again.');
+  }
+  if (prepared.status === 'not_controllable') {
+    throw new Error('The selected Browser Control target cannot be captured. Select a controllable browser tab, then try again.');
+  }
   const capture = await browserControlService.captureScreenshotForVision();
   return {
     image: createCapturedTabSerializedImage(
@@ -2665,7 +2735,7 @@ async function executeBrowserScreenshotVisionTool(call: ToolCall, signal?: Abort
     throwIfRuntimeToolAborted(signal);
     const capture = await browserControlService.captureScreenshotForVision();
     throwIfRuntimeToolAborted(signal);
-    const uploaded = await uploadBrowserScreenshotCapture(capture);
+    const uploaded = await uploadBrowserScreenshotCapture(capture, signal);
     throwIfRuntimeToolAborted(signal);
     const settings = await getBrowserControlSettings();
     throwIfRuntimeToolAborted(signal);
@@ -2708,6 +2778,7 @@ async function executeBrowserScreenshotVisionTool(call: ToolCall, signal?: Abort
       durationMs: completedAt - startedAt,
     };
   } catch (err) {
+    if (signal?.aborted || isAbortLikeError(err)) throw err;
     const completedAt = Date.now();
     const error = normalizeVisionCaptureToolError(err);
     return {
@@ -2727,18 +2798,20 @@ async function executeBrowserScreenshotVisionTool(call: ToolCall, signal?: Abort
 
 async function uploadBrowserScreenshotCapture(
   capture: BrowserScreenshotCaptureResult,
+  signal?: AbortSignal,
 ): Promise<{
   image: { name: string; mimeType: string; sizeBytes: number };
   upload: { refFileId: string; metadata: DeepSeekWebVisionFileMetadata };
 }> {
   const headers = await loadOrRefreshClientHeaders();
   if (!headers) throw new DeepSeekAuthError(backgroundT('background.auth.missingDeepSeek'));
-  return uploadBrowserScreenshotCaptureWithHeaders(capture, headers);
+  return uploadBrowserScreenshotCaptureWithHeaders(capture, headers, signal);
 }
 
 async function uploadBrowserScreenshotCaptureWithHeaders(
   capture: BrowserScreenshotCaptureResult,
   headers: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<{
   image: { name: string; mimeType: string; sizeBytes: number };
   upload: { refFileId: string; metadata: DeepSeekWebVisionFileMetadata };
@@ -2751,7 +2824,8 @@ async function uploadBrowserScreenshotCaptureWithHeaders(
   const upload = await uploadDeepSeekWebVisionImage({
     file,
     clientHeaders: headers,
-    createPowHeaders: (targetPath) => createPowHeaders(headers, { targetPath }),
+    createPowHeaders: (targetPath, powSignal) => createPowHeaders(headers, { targetPath, signal: powSignal }),
+    signal,
   });
   return {
     image: {
@@ -3394,7 +3468,9 @@ async function executeAutomationWithContext(
 
     const beforeRefCount = workingRequest.promptOptions.refFileIds.length;
     const beforeEvidenceCount = workingRequest.promptOptions.visualEvidencePacks?.length ?? 0;
-    workingRequest = await prepareAutomationRuntimeMonitorRequest(workingRequest, resolvedHeaders.headers);
+    throwIfRuntimeToolAborted(context?.signal);
+    workingRequest = await prepareAutomationRuntimeMonitorRequest(workingRequest, resolvedHeaders.headers, context?.signal);
+    throwIfRuntimeToolAborted(context?.signal);
     const attachedRefCount = Math.max(0, workingRequest.promptOptions.refFileIds.length - beforeRefCount);
     const evidencePackCount = Math.max(0, (workingRequest.promptOptions.visualEvidencePacks?.length ?? 0) - beforeEvidenceCount);
     recorder = {
@@ -3465,8 +3541,10 @@ async function executeAutomationWithContext(
       executeToolCall: (call, signal) => executeBackgroundRuntimeToolCall(call, 'automation', { signal }),
       signal: context?.signal,
     });
+    throwIfRuntimeToolAborted(context?.signal);
     recorder = finalizeAutomationFlightRecorder(recorder, result);
     await updateAutomationRun(workingRequest.runId, { flightRecorder: recorder });
+    throwIfRuntimeToolAborted(context?.signal);
     if (result.ok) {
       await rememberDeepSeekWebSession({
         chatSessionId: result.chatSessionId,
@@ -3620,13 +3698,17 @@ function finalizeAutomationFlightRecorder(
 async function prepareAutomationRuntimeMonitorRequest(
   request: AutomationRunnerRequest,
   clientHeaders: Record<string, string> | null,
+  signal?: AbortSignal,
 ): Promise<AutomationRunnerRequest> {
   const monitor = request.promptOptions.visualMonitor;
   if (!monitor?.enabled) return request;
   if (!clientHeaders) throw new DeepSeekAuthError(backgroundT('background.auth.missingDeepSeek'));
 
+  throwIfRuntimeToolAborted(signal);
   const capture = await browserControlService.captureScreenshotForVision();
-  const uploaded = await uploadBrowserScreenshotCaptureWithHeaders(capture, clientHeaders);
+  throwIfRuntimeToolAborted(signal);
+  const uploaded = await uploadBrowserScreenshotCaptureWithHeaders(capture, clientHeaders, signal);
+  throwIfRuntimeToolAborted(signal);
   const existingRefFileIds = normalizeDeepSeekWebVisionRefFileIds(request.promptOptions.refFileIds ?? []);
   const refFileIds = normalizeDeepSeekWebVisionRefFileIds([
     ...existingRefFileIds,
@@ -3674,6 +3756,7 @@ async function prepareAutomationRuntimeMonitorRequest(
       visualEvidencePacks,
     },
   };
+  throwIfRuntimeToolAborted(signal);
   await updateAutomationRun(request.runId, { request: preparedRequest });
   return preparedRequest;
 }
@@ -3965,31 +4048,36 @@ async function handleChatSubmitPrompt(
   excludeTabId?: number,
   images: DeepSeekWebVisionSerializedImage[] = [],
   streamId?: string,
+  signal?: AbortSignal,
 ) {
+  throwIfSidepanelChatJobAborted(signal);
   const [apiKey, webHeaders] = await Promise.all([
     getDeepSeekApiKey(),
     loadOrRefreshClientHeaders(excludeTabId),
   ]);
+  throwIfSidepanelChatJobAborted(signal);
   const provider = selectSidepanelChatProvider({
     hasApiKey: !!apiKey,
     hasWebHeaders: !!webHeaders,
     hasImages: images.length > 0,
   });
   const loopProvider: ChatLoopProvider = provider === 'official-api' ? 'official-api' : 'web';
-  await markChatLoopStarted(loopProvider);
+  const loopId = await markChatLoopStarted(loopProvider, streamId, streamId);
   try {
     if (provider === 'official-api' && apiKey) {
       const config = configInput
         ? normalizeOfficialApiChatConfig(configInput)
         : await getOfficialApiChatConfig();
-      await handleOfficialApiChatSubmitPrompt(prompt, apiKey, config, excludeTabId, streamId);
+      throwIfSidepanelChatJobAborted(signal);
+      await handleOfficialApiChatSubmitPrompt(prompt, apiKey, config, excludeTabId, streamId, signal);
       return;
     }
 
+    throwIfSidepanelChatJobAborted(signal);
     broadcastSidepanelWebStatusEvent('Preparing DeepSeek Web session', excludeTabId, streamId);
-    await handleWebChatSubmitPrompt(prompt, excludeTabId, images, webHeaders, streamId);
+    await handleWebChatSubmitPrompt(prompt, excludeTabId, images, webHeaders, streamId, signal);
   } finally {
-    await markChatLoopFinished();
+    await markChatLoopFinished(loopId);
   }
 }
 
@@ -3997,32 +4085,18 @@ async function runSidepanelChatSubmitJob(
   job: Promise<void>,
   excludeTabId: number | undefined,
   streamId: string,
+  controller: AbortController,
 ): Promise<void> {
-  let timedOut = false;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<void>((resolve) => {
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      broadcastChatChunk({
-        text: '',
-        done: true,
-        error: 'DeepSeek Web did not respond within 95 seconds. Refresh chat.deepseek.com and try again.',
-      }, excludeTabId, streamId);
-      resolve();
-    }, SIDEPANEL_CHAT_JOB_TIMEOUT_MS);
+  return runSidepanelChatSubmitJobWithTimeout({
+    job,
+    excludeTabId,
+    streamId,
+    controller,
+    timeoutMs: SIDEPANEL_CHAT_JOB_TIMEOUT_MS,
+    timeoutError: 'DeepSeek Web did not respond within 95 seconds. Refresh chat.deepseek.com and try again.',
+    broadcastTerminalError: broadcastSidepanelTerminalError,
+    markChatLoopFinished,
   });
-  const guardedJob = job.catch((err) => {
-    if (timedOut) return;
-    const msg = err instanceof Error ? err.message : String(err);
-    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId, streamId);
-  });
-  try {
-    await Promise.race([guardedJob, timeout]);
-  } finally {
-    if (timeoutId !== null) {
-      clearTimeout(timeoutId);
-    }
-  }
 }
 
 async function handleWebChatSubmitPrompt(
@@ -4031,11 +4105,15 @@ async function handleWebChatSubmitPrompt(
   images: DeepSeekWebVisionSerializedImage[] = [],
   clientHeaders?: Record<string, string> | null,
   streamId?: string,
+  signal?: AbortSignal,
 ) {
+  throwIfSidepanelChatJobAborted(signal);
   const headers = clientHeaders ?? await loadOrRefreshClientHeaders(excludeTabId);
+  throwIfSidepanelChatJobAborted(signal);
   if (!headers) {
     await clearSidepanelChatSession();
-    broadcastChatChunk({ text: '', done: true, error: backgroundT('background.auth.missingDeepSeek') }, excludeTabId, streamId);
+    const error = backgroundT('background.auth.missingDeepSeek');
+    broadcastSidepanelTerminalError(error, excludeTabId, streamId, error);
     return;
   }
 
@@ -4044,23 +4122,29 @@ async function handleWebChatSubmitPrompt(
       chatSessionId,
       parentMessageId: chatParentMessageId,
     });
+    throwIfSidepanelChatJobAborted(signal);
     const sessionState = await getOrCreateSidepanelWebChatSession({
       chatSessionId: preferredSession.chatSessionId,
       parentMessageId: preferredSession.parentMessageId,
     }, () => createChatSession(headers));
+    throwIfSidepanelChatJobAborted(signal);
     chatSessionId = sessionState.chatSessionId;
     chatParentMessageId = sessionState.parentMessageId;
     broadcastSidepanelWebStatusEvent('Preparing prompt', excludeTabId, streamId);
 
     const { augmented, enabledDescriptors } = await buildSidepanelPrompt(prompt);
+    throwIfSidepanelChatJobAborted(signal);
     const uploadResults = [];
     for (const image of images) {
+      throwIfSidepanelChatJobAborted(signal);
       const file = createDeepSeekWebVisionFileFromSerializedImage(image);
       uploadResults.push(await uploadDeepSeekWebVisionImage({
         file,
         clientHeaders: headers,
-        createPowHeaders: (targetPath) => createPowHeaders(headers, { targetPath }),
+        createPowHeaders: (targetPath, powSignal) => createPowHeaders(headers, { targetPath, signal: powSignal }),
+        signal,
       }));
+      throwIfSidepanelChatJobAborted(signal);
     }
     const route = createDeepSeekWebVisionRoute({
       modelType: null,
@@ -4081,10 +4165,11 @@ async function handleWebChatSubmitPrompt(
     };
 
     broadcastSidepanelWebStatusEvent('Waiting for model', excludeTabId, streamId);
-    await runSidepanelToolLoop(initialInput, enabledDescriptors, excludeTabId, streamId);
+    await runSidepanelToolLoop(initialInput, enabledDescriptors, excludeTabId, streamId, signal);
   } catch (err) {
+    if (signal?.aborted) throw err;
     const msg = formatSidepanelChatError(err, images.length > 0);
-    broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId, streamId);
+    broadcastSidepanelTerminalError(msg, excludeTabId, streamId, msg);
     if (shouldResetSidepanelChatSession(err, msg)) {
       await clearSidepanelWebAuthState(excludeTabId);
     }
@@ -4126,11 +4211,17 @@ function formatSidepanelChatError(err: unknown, hasImages = false): string {
       return 'DeepSeek Web Vision verification failed. Refresh chat.deepseek.com and try again.';
     }
     if (err instanceof DeepSeekPayloadError) {
-      return 'DeepSeek Web Vision request failed. Refresh chat.deepseek.com and try again.';
+      return formatDeepSeekWebVisionPayloadError(err);
     }
     return 'DeepSeek Web Vision request failed. Refresh chat.deepseek.com and try again.';
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+function formatDeepSeekWebVisionPayloadError(err: DeepSeekPayloadError): string {
+  const detail = err.message.replace(/\s+/g, ' ').trim().slice(0, 240);
+  if (!detail) return 'DeepSeek Web Vision request failed. Refresh chat.deepseek.com and try again.';
+  return `DeepSeek Web Vision request failed: ${detail}`;
 }
 
 function shouldResetSidepanelChatSession(err: unknown, message: string): boolean {
@@ -4151,16 +4242,19 @@ async function handleOfficialApiChatSubmitPrompt(
   config: OfficialApiChatConfig,
   excludeTabId?: number,
   streamId?: string,
+  signal?: AbortSignal,
 ) {
   try {
+    throwIfSidepanelChatJobAborted(signal);
     const promptContext = await buildSidepanelPrompt(prompt);
+    throwIfSidepanelChatJobAborted(signal);
 
     const initialMessages = pruneOfficialApiChatMessages([
       ...officialApiChatMessages,
       { role: 'user', content: promptContext.augmented },
     ]);
 
-    officialApiChatMessages = pruneOfficialApiChatMessages(await runOfficialApiToolLoop(
+    const nextMessages = pruneOfficialApiChatMessages(await runOfficialApiToolLoop(
       {
         apiKey,
         config,
@@ -4169,8 +4263,12 @@ async function handleOfficialApiChatSubmitPrompt(
       promptContext.enabledDescriptors,
       excludeTabId,
       streamId,
+      signal,
     ));
+    throwIfSidepanelChatJobAborted(signal);
+    officialApiChatMessages = nextMessages;
   } catch (err) {
+    if (signal?.aborted) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     broadcastChatChunk({ text: '', done: true, error: msg }, excludeTabId, streamId);
   }
@@ -4214,6 +4312,8 @@ function withBrowserControlChatGuidance(prompt: string, descriptors: readonly To
   return [
     'Browser-control operating rule:',
     '- You are controlling the user\'s already-open browser target. Prefer browser_list_tabs, browser_select_tab, and browser_snapshot before browser_navigate.',
+    '- When using a browser_snapshot element uid such as e12, include the snapshotId and targetLeaseId from that same browser_snapshot result.',
+    '- If the page changed or the snapshot is stale, run browser_snapshot again instead of reusing an old uid.',
     '- If the user names an existing visible chat, session, sidebar item, project, or tab, select or click that existing item instead of opening a new chat.',
     '- Use browser_navigate only when the requested page is not already visible or the user explicitly asks to open a URL.',
     '- Keep tool calls silent. After tools finish, summarize the result naturally and briefly.',
@@ -4236,12 +4336,14 @@ async function runOfficialApiToolLoop(
   toolDescriptors: ToolDescriptor[],
   excludeTabId?: number,
   streamId?: string,
+  signal?: AbortSignal,
 ): Promise<OfficialDeepSeekMessage[]> {
   const MAX_STEPS = 20;
   let currentMessages = [...input.messages];
   let executedToolCallCount = 0;
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    throwIfSidepanelChatJobAborted(signal);
     let accumulated = '';
     let reasoningAccumulated = '';
     let streamedText = false;
@@ -4261,7 +4363,8 @@ async function runOfficialApiToolLoop(
         reasoningAccumulated = fullText;
         visibleReasoningText.append(newText);
       },
-    });
+    }, signal);
+    throwIfSidepanelChatJobAborted(signal);
 
     const fullText = accumulated || turn.assistantText;
     if (!streamedText && fullText) {
@@ -4301,7 +4404,16 @@ async function runOfficialApiToolLoop(
 
     const execs: ToolExecutionRecord[] = [];
     for (let index = 0; index < selectedToolCalls.allowed.length; index += 1) {
-      execs.push(await executeSidepanelChatToolCall(selectedToolCalls.allowed[index], step, index, excludeTabId, streamId));
+      throwIfSidepanelChatJobAborted(signal);
+      execs.push(await executeSidepanelChatToolCall(
+        selectedToolCalls.allowed[index],
+        step,
+        index,
+        excludeTabId,
+        streamId,
+        signal,
+      ));
+      throwIfSidepanelChatJobAborted(signal);
     }
     executedToolCallCount += execs.length;
 
@@ -4334,17 +4446,20 @@ async function runSidepanelToolLoop(
   toolDescriptors: ToolDescriptor[],
   excludeTabId?: number,
   streamId?: string,
+  signal?: AbortSignal,
 ) {
   const MAX_STEPS = 20;
   let currentInput = input;
   let executedToolCallCount = 0;
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    throwIfSidepanelChatJobAborted(signal);
     let accumulated = '';
     let streamedText = false;
     const visibleText = createSidepanelVisibleTextBuffer(toolDescriptors);
     broadcastSidepanelWebStatusEvent('Solving DeepSeek verification', excludeTabId, streamId);
-    const powHeaders = await createPowHeaders(currentInput.clientHeaders);
+    const powHeaders = await createPowHeaders(currentInput.clientHeaders, { signal });
+    throwIfSidepanelChatJobAborted(signal);
     broadcastSidepanelWebStatusEvent('Waiting for model stream', excludeTabId, streamId);
     const turn = await submitSidepanelWebTurnWithTimeout({
       ...currentInput,
@@ -4355,15 +4470,18 @@ async function runSidepanelToolLoop(
         streamedText = true;
         visibleText.append(newText);
       },
-    });
+    }, signal);
+    throwIfSidepanelChatJobAborted(signal);
 
-    if (turn.responseMessageId === null) {
+    const streamedFullText = accumulated || turn.assistantText;
+    const resolvedTurn = await resolveSidepanelWebTurnResult(turn, currentInput, streamedFullText, signal);
+    if (resolvedTurn.responseMessageId === null) {
       await clearSidepanelChatSession();
       throw new DeepSeekPayloadError('DeepSeek Web response did not include a response message id.');
     }
-    chatParentMessageId = turn.responseMessageId;
+    chatParentMessageId = resolvedTurn.responseMessageId;
     await persistSidepanelChatSession();
-    const fullText = accumulated || turn.assistantText;
+    const fullText = streamedFullText || resolvedTurn.assistantText;
     if (!streamedText && fullText) {
       visibleText.append(fullText);
     }
@@ -4399,7 +4517,16 @@ async function runSidepanelToolLoop(
     const execs: ToolExecutionRecord[] = [];
     broadcastSidepanelWebStatusEvent('Using browser tools', excludeTabId, streamId);
     for (let index = 0; index < selectedToolCalls.allowed.length; index += 1) {
-      execs.push(await executeSidepanelChatToolCall(selectedToolCalls.allowed[index], step, index, excludeTabId, streamId));
+      throwIfSidepanelChatJobAborted(signal);
+      execs.push(await executeSidepanelChatToolCall(
+        selectedToolCalls.allowed[index],
+        step,
+        index,
+        excludeTabId,
+        streamId,
+        signal,
+      ));
+      throwIfSidepanelChatJobAborted(signal);
     }
     executedToolCallCount += execs.length;
 
@@ -4427,16 +4554,56 @@ async function runSidepanelToolLoop(
   broadcastChatChunk({ text: backgroundT('background.chat.maxToolSteps'), done: true }, excludeTabId, streamId);
 }
 
+async function resolveSidepanelWebTurnResult(
+  turn: { responseMessageId: number | null },
+  input: {
+    chatSessionId: string;
+    parentMessageId: number | null;
+    clientHeaders: Record<string, string>;
+  },
+  streamedFullText: string,
+  signal?: AbortSignal,
+): Promise<{ responseMessageId: number | null; assistantText: string }> {
+  if (turn.responseMessageId !== null && streamedFullText) {
+    return { responseMessageId: turn.responseMessageId, assistantText: '' };
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    throwIfSidepanelChatJobAborted(signal);
+    if (attempt > 0) await delay(250, signal);
+    const history = await readHistorySnapshot(input.chatSessionId, null, {
+      clientHeaders: input.clientHeaders,
+      signal,
+    }).catch(() => null);
+    const candidate = history?.assistantMessageId ?? null;
+    if (candidate !== null && candidate !== input.parentMessageId) {
+      return {
+        responseMessageId: turn.responseMessageId ?? candidate,
+        assistantText: streamedFullText ? '' : history?.assistantText ?? '',
+      };
+    }
+  }
+
+  return { responseMessageId: turn.responseMessageId, assistantText: '' };
+}
+
 async function submitSidepanelWebTurnWithTimeout(
   input: Parameters<typeof submitPromptStreaming>[0],
   callbacks: Parameters<typeof submitPromptStreaming>[1],
+  signal?: AbortSignal,
 ): Promise<Awaited<ReturnType<typeof submitPromptStreaming>>> {
   const controller = new AbortController();
+  const abortTurn = () => controller.abort();
+  if (signal?.aborted) {
+    abortTurn();
+  } else {
+    signal?.addEventListener('abort', abortTurn, { once: true });
+  }
   const timeout = setTimeout(() => controller.abort(), SIDEPANEL_WEB_TURN_TIMEOUT_MS);
   try {
     return await submitPromptStreaming(input, callbacks, controller.signal);
   } catch (err) {
-    if (isAbortLikeError(err)) {
+    if (isAbortLikeError(err) && !signal?.aborted) {
       throw new DeepSeekPayloadError(
         'DeepSeek Web did not respond within 90 seconds. Refresh chat.deepseek.com and try again.',
         { retryable: true },
@@ -4445,12 +4612,30 @@ async function submitSidepanelWebTurnWithTimeout(
     throw err;
   } finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortTurn);
   }
 }
 
 function isAbortLikeError(err: unknown): boolean {
   return err instanceof DOMException && err.name === 'AbortError'
     || err instanceof Error && err.name === 'AbortError';
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 function selectSidepanelToolCallsForStep(
@@ -4500,6 +4685,40 @@ function broadcastSidepanelWebStatusEvent(
       summary,
     }],
   }, excludeTabId, streamId);
+}
+
+function broadcastSidepanelTerminalError(
+  error: string,
+  excludeTabId?: number,
+  streamId?: string,
+  statusSummary = error,
+): void {
+  finalizeRunningSidepanelToolEvents(statusSummary, excludeTabId, streamId);
+  broadcastSidepanelWebStatusEvent(statusSummary, excludeTabId, streamId, 'error');
+  broadcastChatChunk({ text: '', done: true, error }, excludeTabId, streamId);
+}
+
+function finalizeRunningSidepanelToolEvents(
+  summary: string,
+  excludeTabId?: number,
+  streamId?: string,
+): void {
+  for (const [eventKey, event] of Array.from(sidepanelRunningToolEvents.entries())) {
+    if (streamId && event.streamId !== streamId) continue;
+    broadcastChatChunk({
+      text: '',
+      done: false,
+      toolEvents: [{
+        id: event.id,
+        name: event.call.name,
+        status: 'error',
+        title: getSidepanelToolEventTitle(event.call.name),
+        summary,
+        durationMs: Date.now() - event.startedAt,
+      }],
+    }, excludeTabId ?? event.excludeTabId, streamId ?? event.streamId);
+    sidepanelRunningToolEvents.delete(eventKey);
+  }
 }
 
 function createSidepanelVisibleTextEmitter(
@@ -4565,9 +4784,13 @@ async function executeSidepanelChatToolCall(
   index: number,
   excludeTabId?: number,
   streamId?: string,
+  signal?: AbortSignal,
 ): Promise<ToolExecutionRecord> {
+  throwIfSidepanelChatJobAborted(signal);
   const eventId = `${step}-${index}-${call.id || call.name}`;
+  const eventKey = streamId ? `${streamId}:${eventId}` : eventId;
   const startedAt = Date.now();
+  sidepanelRunningToolEvents.set(eventKey, { id: eventId, call, excludeTabId, streamId, startedAt });
   broadcastChatChunk({
     text: '',
     done: false,
@@ -4575,14 +4798,20 @@ async function executeSidepanelChatToolCall(
   }, excludeTabId, streamId);
 
   try {
-    const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat');
+    const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat', { signal });
+    throwIfSidepanelChatJobAborted(signal);
     broadcastChatChunk({
       text: '',
       done: false,
       toolEvents: [createSidepanelToolEvent(eventId, call, result.ok ? 'success' : 'error', result, startedAt)],
     }, excludeTabId, streamId);
+    sidepanelRunningToolEvents.delete(eventKey);
     return createSidepanelToolExecutionRecord(call, result);
   } catch (err) {
+    if (signal?.aborted || isSidepanelChatJobAbortError(err)) {
+      sidepanelRunningToolEvents.delete(eventKey);
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     broadcastChatChunk({
       text: '',
@@ -4597,6 +4826,7 @@ async function executeSidepanelChatToolCall(
         durationMs: Date.now() - startedAt,
       }],
     }, excludeTabId, streamId);
+    sidepanelRunningToolEvents.delete(eventKey);
     throw err;
   }
 }
@@ -4716,7 +4946,8 @@ async function reconcileInterruptedChatLoopOnWake() {
   if (!interrupted) return;
   await clearSidepanelChatSession();
   officialApiChatMessages = [];
-  broadcastChatChunk({ text: '', done: true, error: backgroundT('background.chat.interrupted') });
+  const error = backgroundT('background.chat.interrupted');
+  broadcastSidepanelTerminalError(error, undefined, interrupted.streamId);
 }
 
 async function persistSidepanelChatSession(): Promise<void> {

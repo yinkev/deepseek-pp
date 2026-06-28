@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import type { ChatMessage as ChatMessageType, ChatToolEvent } from '../../../core/types';
 import { useI18n } from '../i18n';
+import type { LocaleMessageKey, MessageParams } from '../../../core/i18n';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -66,7 +67,8 @@ export default function ChatMessage({ message, isStreaming }: ChatMessageProps) 
 }
 
 function ToolEventsDisclosure({ events }: { events: ChatToolEvent[] }) {
-  const summary = formatToolEventsSummary(events);
+  const { t } = useI18n();
+  const summary = formatToolEventsSummary(events, t);
   return (
     <details className="ds-chat-tool-event">
       <summary>
@@ -79,7 +81,7 @@ function ToolEventsDisclosure({ events }: { events: ChatToolEvent[] }) {
           <div key={event.id} className={`ds-chat-tool-detail-item ds-chat-tool-detail-item-${event.status}`}>
             <div className="ds-chat-tool-detail-head">
               <span>{event.title}</span>
-              <span>{formatToolEventStatus(event)}</span>
+              <span>{formatToolEventStatus(event, t)}</span>
             </div>
             {event.detail?.trim() && (
               <div className="ds-chat-tool-detail-body">{event.detail.trim()}</div>
@@ -91,10 +93,10 @@ function ToolEventsDisclosure({ events }: { events: ChatToolEvent[] }) {
   );
 }
 
-function formatToolEventsSummary(events: ChatToolEvent[]): string {
+function formatToolEventsSummary(events: ChatToolEvent[], t: (key: LocaleMessageKey, params?: MessageParams) => string): string {
   if (events.length === 1) {
     const event = events[0];
-    const status = formatToolEventStatus(event);
+    const status = formatToolEventStatus(event, t);
     return status ? `${event.title} - ${status}` : event.title;
   }
   const runningCount = events.filter((event) => event.status === 'running').length;
@@ -104,9 +106,9 @@ function formatToolEventsSummary(events: ChatToolEvent[]): string {
   return `Used ${events.length} tools`;
 }
 
-function formatToolEventStatus(event: ChatToolEvent): string {
-  if (event.status === 'running') return event.summary || 'Running';
-  if (event.status === 'error') return event.summary || 'Failed';
+function formatToolEventStatus(event: ChatToolEvent, t: (key: LocaleMessageKey, params?: MessageParams) => string): string {
+  if (event.status === 'running') return event.summary || t('sidepanel.chatPage.toolRunning');
+  if (event.status === 'error') return event.summary || t('sidepanel.chatPage.toolFailed');
   if (event.durationMs && event.durationMs >= 1000) return `${(event.durationMs / 1000).toFixed(1)}s`;
-  return event.summary || 'Done';
+  return event.summary || t('sidepanel.chatPage.toolDone');
 }

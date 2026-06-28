@@ -1,0 +1,386 @@
+{
+  "run_id": "run-20260622-111535",
+  "generated_at": "2026-06-22T11:30:00Z",
+  "features": [
+    {
+      "id": "F-001",
+      "name": "Fetch Interception & Prompt Augmentation",
+      "entry_points": ["core/interceptor/fetch-hook.ts:82", "core/interceptor/request-augmentation.ts:38", "core/prompt/augmentation.ts:34"],
+      "relevant_files": ["core/interceptor/fetch-hook.ts", "core/interceptor/request-augmentation.ts", "core/prompt/augmentation.ts", "entrypoints/main-world.content.ts", "entrypoints/content.ts:675"],
+      "user_story": "When I send a message on chat.deepseek.com, the extension intercepts my request, injects memory context and tool definitions into the prompt, and strips internal XML tool calls from the visible response.",
+      "observed_behavior": "Replaces window.fetch with hooked version; captures DeepSeek client headers; sends AUGMENT_REQUEST_BODY to content script; augments prompt with memories, tools, skills, presets; parses SSE response to extract tool calls and strip XML blocks from visible text; tracks token speed.",
+      "data_read_write": {
+        "read": ["memories (IndexedDB)", "skills (chrome.storage)", "active preset", "tool descriptors", "prompt injection settings", "project context"],
+        "write": ["memory accessCount + lastAccessedAt", "request message count (in-memory)"]
+      },
+      "auth_assumptions": "User logged into chat.deepseek.com; valid Authorization token in DeepSeek client headers",
+      "external_dependencies": ["DeepSeek API: POST /api/v0/chat/completion", "DeepSeek API: POST /api/v0/chat/create_pow_challenge"],
+      "edge_cases": ["INITIAL_HOOK_STATE_WAIT_MS 1.5s timeout", "Bridge connection polling 50ms x 100 attempts", "pendingMainWorldMessages queue capped at 100", "RESPONSE_TOOL_FALLBACK_PARSE_MAX_CHARS 120k chars", "X-DPP-Bypass-Hook header bypass"],
+      "existing_tests": ["request-augmentation.test.ts", "xml-tool-stream-filter.test.ts", "streaming-tool-text.test.ts", "streaming-tool-call-parser.test.ts", "tool-parser.test.ts", "tool-scan-gate.test.ts", "history-cleanup.test.ts"],
+      "missing_tests": ["Fetch hook lifecycle end-to-end", "XHR interception path", "IndexedDB interception path", "Bridge connection failure recovery", "Concurrent request handling"],
+      "risk_level": "critical",
+      "evidence_paths": ["core/interceptor/fetch-hook.ts:82-162", "core/interceptor/fetch-hook.ts:126-162", "core/interceptor/fetch-hook.ts:1112-1204"]
+    },
+    {
+      "id": "F-002",
+      "name": "Memory System",
+      "entry_points": ["core/memory/store.ts", "core/memory/injector.ts", "core/memory/selector.ts", "core/tool/memory.ts"],
+      "relevant_files": ["core/memory/store.ts", "core/memory/injector.ts", "core/memory/selector.ts", "core/memory/scope.ts", "core/memory/import-tool.ts", "core/memory/importer.ts", "core/tool/memory.ts"],
+      "user_story": "The extension remembers my preferences and project context across conversations, automatically saving and injecting relevant memories based on conversation scope.",
+      "observed_behavior": "Memories stored in IndexedDB; selected by budget and relevance; injected into prompt augmentation; supports global and project-scoped memories; memory_save tool parses XML from AI response; archiveStaleMemories archives memories untouched for 90+ days.",
+      "data_read_write": {
+        "read": ["IndexedDB memories", "chrome.storage.local (memory settings)"],
+        "write": ["IndexedDB memories", "memory accessCount", "memory lastAccessedAt"]
+      },
+      "auth_assumptions": "None - local storage only",
+      "external_dependencies": ["IndexedDB", "Dexie.js"],
+      "edge_cases": ["Memory budget limits", "Project-scoped vs global memory", "Memory import from file", "Stale memory archival", "Memory search and filtering"],
+      "existing_tests": ["memory-tool.test.ts", "memory-scope.test.ts", "background-memory-bounds.test.ts"],
+      "missing_tests": ["Memory injection into prompt", "Memory selection algorithm", "Memory archival lifecycle", "Memory import validation", "Concurrent memory writes"],
+      "risk_level": "high",
+      "evidence_paths": ["core/memory/store.ts", "core/memory/injector.ts", "core/memory/selector.ts"]
+    },
+    {
+      "id": "F-003",
+      "name": "Skill System",
+      "entry_points": ["core/skill/registry.ts", "core/skill/parser.ts", "core/skill/builtin.ts"],
+      "relevant_files": ["core/skill/registry.ts", "core/skill/parser.ts", "core/skill/builtin.ts", "core/skill/creator-tool.ts", "core/skill/github-importer.ts", "core/skill/local-importer.ts", "core/skill/officecli-library.ts"],
+      "user_story": "I can create, import, and use skills (prompt templates) to switch between different AI behaviors and task modes.",
+      "observed_behavior": "Skills stored in chrome.storage; /skill-name prefix triggers skill template injection; supports builtin, custom, and GitHub-imported skills; skill creator tool allows AI to create new skills; officecli library integration.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (skills)", "GitHub API (skill import)"],
+        "write": ["chrome.storage.local (skills)"]
+      },
+      "auth_assumptions": "GitHub token for skill import (optional)",
+      "external_dependencies": ["GitHub API", "chrome.storage"],
+      "edge_cases": ["Skill template parsing", "Skill name conflicts", "Skill import from GitHub", "Skill localization", "Skill preview"],
+      "existing_tests": ["skill-localization.test.ts", "skill-popup.test.ts", "local-skill-importer.test.ts", "sync-local-skill-merge.test.ts", "shell-host-local-skill-preview.test.ts"],
+      "missing_tests": ["Skill template injection into prompt", "Skill creator tool execution", "Skill name conflict resolution", "Skill import error handling"],
+      "risk_level": "medium",
+      "evidence_paths": ["core/skill/registry.ts", "core/skill/parser.ts", "core/skill/builtin.ts"]
+    },
+    {
+      "id": "F-004",
+      "name": "MCP Integration",
+      "entry_points": ["core/mcp/discovery.ts", "core/mcp/client.ts", "core/mcp/store.ts"],
+      "relevant_files": ["core/mcp/discovery.ts", "core/mcp/client.ts", "core/mcp/store.ts", "core/mcp/types.ts", "core/mcp/transports/"],
+      "user_story": "I can connect to external MCP servers to extend the AI's capabilities with custom tools and services.",
+      "observed_behavior": "MCP servers configured via sidepanel; tool discovery via JSON-RPC; multiple transport types (HTTP, SSE, stdio, native messaging); tool execution with timeout and result limits; tool allowlist/denylist policy; health monitoring.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (MCP servers)", "MCP server connections"],
+        "write": ["chrome.storage.local (MCP servers)", "MCP tool cache"]
+      },
+      "auth_assumptions": "MCP server authentication (bearer, basic, header)",
+      "external_dependencies": ["MCP servers (HTTP, SSE, stdio, native messaging)", "chrome.runtime.connectNative"],
+      "edge_cases": ["Server connection failures", "Tool discovery timeouts", "Result size limits", "Concurrent tool execution", "Server health monitoring"],
+      "existing_tests": ["mcp-execution-policy.test.ts", "mcp-native-multimodal-env.test.ts", "mcp-page-collapse.test.ts", "mcp-transport-common.test.ts"],
+      "missing_tests": ["MCP server connection lifecycle", "MCP tool discovery caching", "MCP transport failure recovery", "MCP tool execution timeout", "MCP server health check"],
+      "risk_level": "high",
+      "evidence_paths": ["core/mcp/discovery.ts", "core/mcp/client.ts", "core/mcp/store.ts"]
+    },
+    {
+      "id": "F-005",
+      "name": "Tool Execution Pipeline",
+      "entry_points": ["core/tool/runtime.ts:101", "core/tool/index.ts"],
+      "relevant_files": ["core/tool/runtime.ts", "core/tool/types.ts", "core/tool/history.ts", "core/tool/invocation.ts", "core/tool/xml-tags.ts", "core/tool/redaction.ts", "core/tool/restore-block.ts", "core/tool/execution-restore.ts"],
+      "user_story": "The AI can invoke tools (memory, web search, artifacts, browser control, MCP) and I can see the results in the chat interface.",
+      "observed_behavior": "Tool calls parsed from XML in AI response; dispatched by name to appropriate provider; results appended to tool call history; supports auto/manual/disabled execution modes; tool call restore for conversation reload.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (tool history)", "Tool provider state"],
+        "write": ["chrome.storage.local (tool history)", "Tool execution records"]
+      },
+      "auth_assumptions": "Depends on tool type (DeepSeek auth for vision, Chrome APIs for browser control, MCP auth for external tools)",
+      "external_dependencies": ["Multiple tool providers (memory, web search, artifact, skill creator, browser control, MCP)"],
+      "edge_cases": ["Tool call parsing errors", "Tool execution timeouts", "Tool result size limits", "Tool execution abort", "Tool call restore from history"],
+      "existing_tests": ["tool-parser.test.ts", "tool-history.test.ts", "tool-block-style.test.ts", "tool-execution-restore.test.ts", "tool-restore-block.test.ts", "tool-result-renderer.test.ts", "tool-scan-gate.test.ts"],
+      "missing_tests": ["Tool dispatch routing", "Tool execution abort handling", "Tool result truncation", "Tool call history persistence", "Tool provider registry"],
+      "risk_level": "high",
+      "evidence_paths": ["core/tool/runtime.ts:101-170", "core/tool/types.ts", "core/tool/history.ts"]
+    },
+    {
+      "id": "F-006",
+      "name": "Browser Control",
+      "entry_points": ["core/browser-control/service.ts", "core/browser-control/cdp.ts", "core/browser-control/tool.ts"],
+      "relevant_files": ["core/browser-control/service.ts", "core/browser-control/cdp.ts", "core/browser-control/tool.ts", "core/browser-control/snapshot.ts", "core/browser-control/act-verify.ts", "core/browser-control/settings.ts", "core/browser-control/types.ts"],
+      "user_story": "The AI can control my browser - navigate pages, click elements, fill forms, take snapshots, and interact with web content through CDP.",
+      "observed_behavior": "Chromium CDP connection for browser control; Accessibility Tree UID snapshots; controlled tab registry; browser action tools (navigate, click, fill, etc.); act-verify captures; screenshot vision capture; target locking; platform gating (Chromium only).",
+      "data_read_write": {
+        "read": ["chrome.storage.local (browser control settings)", "CDP connection state", "Tab state"],
+        "write": ["chrome.storage.local (browser control settings)", "CDP connection state", "Tab targeting state"]
+      },
+      "auth_assumptions": "Chromium browser with debugger permission; user must enable browser control",
+      "external_dependencies": ["chrome.debugger API", "chrome.tabs API", "chrome.tabGroups API", "CDP protocol"],
+      "edge_cases": ["CDP connection failures", "Tab detach events", "Stale snapshot UIDs", "Restricted URL access", "Firefox/Android unsupported", "Snapshot size budget", "Concurrent tab operations"],
+      "existing_tests": ["browser-control.test.ts"],
+      "missing_tests": ["CDP connection lifecycle", "Tab registry management", "Snapshot budget enforcement", "Act-verify capture", "Platform gating", "Target lock behavior", "Dialog handling"],
+      "risk_level": "critical",
+      "evidence_paths": ["core/browser-control/service.ts", "core/browser-control/cdp.ts", "core/browser-control/tool.ts"]
+    },
+    {
+      "id": "F-007",
+      "name": "Automation System",
+      "entry_points": ["core/automation/runner.ts", "core/automation/store.ts", "core/automation/scheduler.ts"],
+      "relevant_files": ["core/automation/runner.ts", "core/automation/store.ts", "core/automation/scheduler.ts", "core/automation/schedule.ts", "core/automation/types.ts", "core/automation/auth.ts", "core/automation/pow.ts", "core/automation/readiness.ts", "core/automation/replay.ts", "core/automation/messages.ts", "core/automation/workflow-templates.ts"],
+      "user_story": "I can create automated tasks that run on a schedule, chain tasks together, and track their execution history.",
+      "observed_behavior": "Automation stored in chrome.storage; cron/rrule scheduling; manual/automatic execution; task chaining with depth limits; flight recorder for execution trace; retry on failure; auth header capture; PoW challenge solving; visual monitor support.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (automations)", "chrome.alarms", "DeepSeek auth headers"],
+        "write": ["chrome.storage.local (automations)", "chrome.alarms", "Automation run history"]
+      },
+      "auth_assumptions": "DeepSeek auth headers captured from browser session; PoW challenge solving",
+      "external_dependencies": ["chrome.alarms API", "DeepSeek API", "Content script bridge"],
+      "edge_cases": ["Schedule expression parsing", "Concurrent automation runs", "Auth header expiry", "PoW challenge failures", "Chain depth limits", "Tab lifecycle during automation"],
+      "existing_tests": ["automation-runner-pow.test.ts", "automation-store-reconcile.test.ts", "automation-auth.test.ts", "automation-chain.test.ts", "automation-preflight.test.ts", "automation-readiness.test.ts", "automation-replay.test.ts", "automation-runner-auth.test.ts", "automation-workflow-templates.test.ts"],
+      "missing_tests": ["Automation scheduling accuracy", "Automation runner end-to-end", "Flight recorder state transitions", "Automation retry logic", "Visual monitor integration"],
+      "risk_level": "high",
+      "evidence_paths": ["core/automation/runner.ts", "core/automation/store.ts", "core/automation/scheduler.ts"]
+    },
+    {
+      "id": "F-008",
+      "name": "Inline Agent Loop",
+      "entry_points": ["core/inline-agent/loop.ts", "core/inline-agent/prompt.ts"],
+      "relevant_files": ["core/inline-agent/loop.ts", "core/inline-agent/prompt.ts", "core/inline-agent/renderer.ts", "core/inline-agent/markdown.ts", "core/inline-agent/types.ts"],
+      "user_story": "After I send a message, the AI can automatically continue with multi-step tool execution without me having to approve each step.",
+      "observed_behavior": "Multi-step continuation loop; nudge and finalization prompts; tool call detection and execution; inline agent trace rendering; abort signal support.",
+      "data_read_write": {
+        "read": ["Tool call results", "Conversation state"],
+        "write": ["Tool execution records", "Agent trace state"]
+      },
+      "auth_assumptions": "Same as manual chat - DeepSeek auth headers",
+      "external_dependencies": ["DeepSeek API", "Tool execution pipeline", "Content script DOM renderer"],
+      "edge_cases": ["Loop termination conditions", "Max iteration limits", "Abort signal handling", "Tool call parsing in agent context", "Agent trace rendering"],
+      "existing_tests": ["inline-agent-loop.test.ts", "inline-agent-prompt.test.ts", "inline-agent-renderer.test.ts", "inline-markdown.test.ts"],
+      "missing_tests": ["Agent loop termination", "Agent prompt building", "Agent trace state management", "Agent abort handling"],
+      "risk_level": "high",
+      "evidence_paths": ["core/inline-agent/loop.ts", "core/inline-agent/prompt.ts"]
+    },
+    {
+      "id": "F-009",
+      "name": "Sidepanel Chat",
+      "entry_points": ["entrypoints/sidepanel/pages/ChatPage.tsx", "entrypoints/background.ts:handleMessage"],
+      "relevant_files": ["entrypoints/sidepanel/pages/ChatPage.tsx", "entrypoints/sidepanel/components/ChatMessage.tsx", "entrypoints/sidepanel/components/PromptControlPanel.tsx", "core/chat/active-loop.ts", "core/chat/sidepanel-job-runner.ts"],
+      "user_story": "I can chat with the AI from the extension sidepanel, with full tool support and conversation management.",
+      "observed_behavior": "Sidepanel chat submits messages to background; background forwards to content script; tool execution in background; conversation history in chrome.storage; attachments and multimodal support; job runner for background execution.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (chat history)", "Tool descriptors", "Memory", "Presets"],
+        "write": ["chrome.storage.local (chat history)", "Tool execution records", "Chat state"]
+      },
+      "auth_assumptions": "DeepSeek auth headers from browser session",
+      "external_dependencies": ["Content script bridge", "Background message handler", "DeepSeek API"],
+      "edge_cases": ["Concurrent chat submissions (mutex)", "Chat history sync", "Attachment handling", "Tool execution in background", "Chat loop interruption"],
+      "existing_tests": ["sidepanel-chat-attachments.test.ts", "sidepanel-chat-job-runner.test.ts", "sidepanel-interactions.test.ts", "sidepanel-navigation.test.ts", "sidepanel-polish.test.ts", "sidepanel-tool-sanitize.test.ts", "chat-active-loop.test.ts", "chat-provider.test.ts"],
+      "missing_tests": ["Sidepanel chat end-to-end", "Chat history persistence", "Attachment upload flow", "Chat loop state management"],
+      "risk_level": "medium",
+      "evidence_paths": ["entrypoints/sidepanel/pages/ChatPage.tsx", "core/chat/active-loop.ts"]
+    },
+    {
+      "id": "F-010",
+      "name": "Web Search",
+      "entry_points": ["core/tool/web-search.ts", "core/tool/web-settings.ts"],
+      "relevant_files": ["core/tool/web-search.ts", "core/tool/web-settings.ts"],
+      "user_story": "The AI can search the web and read web pages to answer questions with current information.",
+      "observed_behavior": "Web search via Bing; web page content extraction; search results injected into conversation; configurable per-search settings.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (web tool settings)", "Bing search API"],
+        "write": ["Search results (in-memory)"]
+      },
+      "auth_assumptions": "None - uses Bing search API",
+      "external_dependencies": ["Bing search API", "Web page fetching"],
+      "edge_cases": ["Search rate limits", "Web page extraction failures", "Search result relevance", "Concurrent searches"],
+      "existing_tests": [],
+      "missing_tests": ["Web search execution", "Web page content extraction", "Search result formatting", "Search settings persistence"],
+      "risk_level": "medium",
+      "evidence_paths": ["core/tool/web-search.ts", "core/tool/web-settings.ts"]
+    },
+    {
+      "id": "F-011",
+      "name": "Artifact System",
+      "entry_points": ["core/artifact/", "core/tool/"],
+      "relevant_files": ["core/artifact/", "core/tool/runtime.ts"],
+      "user_story": "The AI can create downloadable artifacts (scripts, markdown, HTML, project bundles) that I can save.",
+      "observed_behavior": "Artifact creation from tool calls; file bundling; download generation; artifact history tracking.",
+      "data_read_write": {
+        "read": ["Artifact data"],
+        "write": ["Artifact files", "Artifact history"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["File system APIs", "Download APIs"],
+      "edge_cases": ["Large artifact handling", "File type validation", "Download failures"],
+      "existing_tests": ["artifact.test.ts"],
+      "missing_tests": ["Artifact bundling", "Artifact download", "Artifact history management"],
+      "risk_level": "low",
+      "evidence_paths": ["core/artifact/"]
+    },
+    {
+      "id": "F-012",
+      "name": "DeepSeek Vision",
+      "entry_points": ["core/deepseek/web-vision.ts", "core/deepseek/vision-evidence.ts"],
+      "relevant_files": ["core/deepseek/web-vision.ts", "core/deepseek/vision-evidence.ts", "core/deepseek/adapter.ts"],
+      "user_story": "I can attach images to my messages and the AI can analyze them using DeepSeek's vision capabilities.",
+      "observed_behavior": "Image upload to DeepSeek Vision API; vision evidence packs; file metadata management; vision capture for browser control.",
+      "data_read_write": {
+        "read": ["DeepSeek Vision API", "Image data"],
+        "write": ["Vision file metadata", "Evidence packs"]
+      },
+      "auth_assumptions": "DeepSeek auth headers with vision API access",
+      "external_dependencies": ["DeepSeek Vision API"],
+      "edge_cases": ["Image upload failures", "Vision API rate limits", "Large image handling", "Evidence pack assembly"],
+      "existing_tests": ["deepseek-web-vision.test.ts", "vision-evidence.test.ts", "content-vision-media-validation.test.ts"],
+      "missing_tests": ["Vision upload end-to-end", "Evidence pack assembly", "Vision capture integration"],
+      "risk_level": "medium",
+      "evidence_paths": ["core/deepseek/web-vision.ts", "core/deepseek/vision-evidence.ts"]
+    },
+    {
+      "id": "F-013",
+      "name": "Conversation Export",
+      "entry_points": ["core/deepseek/conversation-export.ts"],
+      "relevant_files": ["core/deepseek/conversation-export.ts"],
+      "user_story": "I can export my conversations in various formats (HTML, Markdown, PDF).",
+      "observed_behavior": "Export in multiple formats; attachment reference preservation; metadata export; export abort controllers.",
+      "data_read_write": {
+        "read": ["Conversation history", "Tool call history"],
+        "write": ["Export files"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["File system APIs"],
+      "edge_cases": ["Large conversation export", "Export format errors", "Attachment handling", "Export abort"],
+      "existing_tests": ["conversation-export.test.ts"],
+      "missing_tests": ["Export format validation", "Export abort handling", "Large export performance"],
+      "risk_level": "low",
+      "evidence_paths": ["core/deepseek/conversation-export.ts"]
+    },
+    {
+      "id": "F-014",
+      "name": "Preset System",
+      "entry_points": ["entrypoints/sidepanel/pages/PresetPage.tsx"],
+      "relevant_files": ["entrypoints/sidepanel/pages/PresetPage.tsx", "entrypoints/sidepanel/components/PresetCard.tsx", "entrypoints/sidepanel/components/PresetForm.tsx"],
+      "user_story": "I can create and manage system prompt presets to customize the AI's behavior.",
+      "observed_behavior": "Presets stored in chrome.storage; preset injection into prompts; preset form for creation/editing; preset card for display.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (presets)"],
+        "write": ["chrome.storage.local (presets)"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["chrome.storage"],
+      "edge_cases": ["Preset name conflicts", "Preset injection frequency", "Preset deletion", "Preset import/export"],
+      "existing_tests": [],
+      "missing_tests": ["Preset CRUD operations", "Preset injection into prompt", "Preset conflict resolution"],
+      "risk_level": "low",
+      "evidence_paths": ["entrypoints/sidepanel/pages/PresetPage.tsx"]
+    },
+    {
+      "id": "F-015",
+      "name": "Project Context",
+      "entry_points": ["core/project/", "entrypoints/sidepanel/pages/ProjectsPage.tsx"],
+      "relevant_files": ["core/project/", "entrypoints/sidepanel/pages/ProjectsPage.tsx", "entrypoints/content/adapters/project-sidebar-organizer.ts"],
+      "user_story": "I can organize conversations into projects and have project-specific context injected automatically.",
+      "observed_behavior": "Project storage in chrome.storage; project-conversation binding; project context injection; sidebar organizer for project management.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (projects)", "chrome.storage.local (conversations)"],
+        "write": ["chrome.storage.local (projects)", "chrome.storage.local (conversations)"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["chrome.storage"],
+      "edge_cases": ["Project-conversation binding", "Project context injection", "Project deletion cascading", "Project sidebar organization"],
+      "existing_tests": ["project-context.test.ts", "project-sidebar-organizer.test.ts", "projects-page.test.ts"],
+      "missing_tests": ["Project context injection", "Project-conversation binding lifecycle", "Project deletion cascading"],
+      "risk_level": "low",
+      "evidence_paths": ["core/project/", "entrypoints/sidepanel/pages/ProjectsPage.tsx"]
+    },
+    {
+      "id": "F-016",
+      "name": "Saved Items",
+      "entry_points": ["entrypoints/sidepanel/pages/SavedPage.tsx"],
+      "relevant_files": ["entrypoints/sidepanel/pages/SavedPage.tsx"],
+      "user_story": "I can save snippets, bookmarks, and常用 prompts for quick access.",
+      "observed_behavior": "Saved items stored in chrome.storage; search and filter; insert into conversation; export as Markdown/JSON.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (saved items)"],
+        "write": ["chrome.storage.local (saved items)"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["chrome.storage"],
+      "edge_cases": ["Search performance", "Export format", "Insert into conversation", "Item deletion"],
+      "existing_tests": [],
+      "missing_tests": ["Saved items CRUD", "Search functionality", "Export functionality"],
+      "risk_level": "low",
+      "evidence_paths": ["entrypoints/sidepanel/pages/SavedPage.tsx"]
+    },
+    {
+      "id": "F-017",
+      "name": "Settings & Configuration",
+      "entry_points": ["entrypoints/sidepanel/pages/SettingsPage.tsx"],
+      "relevant_files": ["entrypoints/sidepanel/pages/SettingsPage.tsx", "entrypoints/sidepanel/components/settings/"],
+      "user_story": "I can configure the extension's behavior, language, API keys, and feature toggles.",
+      "observed_behavior": "Settings stored in chrome.storage; language preference (zh-CN/en); API key configuration; feature toggles; sync configuration; voice settings.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (settings)", "chrome.storage.sync"],
+        "write": ["chrome.storage.local (settings)", "chrome.storage.sync"]
+      },
+      "auth_assumptions": "API key for official DeepSeek API (optional)",
+      "external_dependencies": ["chrome.storage", "chrome.storage.sync"],
+      "edge_cases": ["Settings sync", "API key validation", "Language change propagation", "Feature toggle state"],
+      "existing_tests": ["i18n.test.ts", "persisted-data-i18n.test.ts", "scenario-localization.test.ts"],
+      "missing_tests": ["Settings persistence", "Language change propagation", "API key validation", "Sync behavior"],
+      "risk_level": "low",
+      "evidence_paths": ["entrypoints/sidepanel/pages/SettingsPage.tsx"]
+    },
+    {
+      "id": "F-018",
+      "name": "Runtime Doctor",
+      "entry_points": ["entrypoints/sidepanel/pages/RuntimeDoctorPage.tsx"],
+      "relevant_files": ["entrypoints/sidepanel/pages/RuntimeDoctorPage.tsx"],
+      "user_story": "I can diagnose extension runtime issues and see the current state of all subsystems.",
+      "observed_behavior": "Runtime health check; subsystem status display; diagnostic information collection.",
+      "data_read_write": {
+        "read": ["Extension runtime state", "Chrome API state"],
+        "write": ["None (read-only)"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["Chrome runtime APIs"],
+      "edge_cases": ["Runtime state inconsistencies", "Chrome API availability", "Extension reload detection"],
+      "existing_tests": ["runtime-doctor.test.ts"],
+      "missing_tests": ["Runtime doctor diagnostics", "Subsystem status accuracy"],
+      "risk_level": "low",
+      "evidence_paths": ["entrypoints/sidepanel/pages/RuntimeDoctorPage.tsx"]
+    },
+    {
+      "id": "F-019",
+      "name": "i18n & Localization",
+      "entry_points": ["core/i18n/", "entrypoints/sidepanel/i18n.tsx"],
+      "relevant_files": ["core/i18n/resources/en.ts", "core/i18n/resources/zh-CN.ts", "entrypoints/sidepanel/i18n.tsx"],
+      "user_story": "The extension supports Chinese and English, with consistent localization across all UI elements and tool descriptions.",
+      "observed_behavior": "Two locales: en and zh-CN; translate() function; locale preference in chrome.storage; locale change broadcasts; i18n coverage audit.",
+      "data_read_write": {
+        "read": ["chrome.storage.local (locale preference)"],
+        "write": ["chrome.storage.local (locale preference)"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["None"],
+      "edge_cases": ["Missing translation keys", "Locale change propagation", "Tool description localization", "Error message localization"],
+      "existing_tests": ["i18n.test.ts", "persisted-data-i18n.test.ts", "scenario-localization.test.ts", "skill-localization.test.ts"],
+      "missing_tests": ["Locale change propagation", "Tool description localization coverage", "Error message localization"],
+      "risk_level": "low",
+      "evidence_paths": ["core/i18n/resources/en.ts", "core/i18n/resources/zh-CN.ts"]
+    },
+    {
+      "id": "F-020",
+      "name": "Platform Detection & Capabilities",
+      "entry_points": ["core/platform/"],
+      "relevant_files": ["core/platform/", "wxt.config.ts"],
+      "user_story": "The extension detects the browser platform and adjusts capabilities accordingly (Chromium full features, Firefox limited, Android limited).",
+      "observed_behavior": "Platform detection via chrome.runtime API; capability gating for browser control, MCP, sidepanel; Chromium/Edge/Firefox/Android differentiation.",
+      "data_read_write": {
+        "read": ["Chrome runtime APIs", "Browser detection"],
+        "write": ["None (read-only)"]
+      },
+      "auth_assumptions": "None",
+      "external_dependencies": ["Chrome runtime APIs"],
+      "edge_cases": ["Firefox missing APIs", "Android WebView limitations", "Edge compatibility", "Platform-specific builds"],
+      "existing_tests": ["platform-capabilities.test.ts"],
+      "missing_tests": ["Platform detection accuracy", "Capability gating behavior", "Unsupported platform error handling"],
+      "risk_level": "medium",
+      "evidence_paths": ["core/platform/", "wxt.config.ts"]
+    }
+  ]
+}

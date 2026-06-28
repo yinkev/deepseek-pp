@@ -65,6 +65,35 @@ describe('createStreamingToolTextAccumulator', () => {
     expect(stream.flush()).toBe('Before  after');
   });
 
+  it('suppresses plain legacy tool-call wrappers across chunk boundaries', () => {
+    const stream = createStreamingToolTextAccumulator(descriptors);
+
+    expect(stream.append('Before <tool_')).toBe('Before ');
+    expect(stream.append('calls><invoke name="memory_save">')).toBe('Before ');
+    expect(stream.append('<parameter name="name">n</parameter>')).toBe('Before ');
+    expect(stream.append('</invoke></tool_')).toBe('Before ');
+    expect(stream.append('calls> after')).toBe('Before  after');
+    expect(stream.flush()).toBe('Before  after');
+  });
+
+  it('suppresses whitespace-padded plain legacy wrappers across chunk boundaries', () => {
+    const stream = createStreamingToolTextAccumulator(descriptors);
+
+    expect(stream.append('Before < tool_')).toBe('Before ');
+    expect(stream.append('calls >< invoke name="memory_save" >')).toBe('Before ');
+    expect(stream.append('< parameter name="name" >n</ parameter >')).toBe('Before ');
+    expect(stream.append('</ invoke ></ tool_')).toBe('Before ');
+    expect(stream.append('calls > after')).toBe('Before  after');
+    expect(stream.flush()).toBe('Before  after');
+  });
+
+  it('releases false-positive partial plain wrapper tags on flush', () => {
+    const stream = createStreamingToolTextAccumulator(descriptors);
+
+    expect(stream.append('literal <tool_')).toBe('literal ');
+    expect(stream.flush()).toBe('literal <tool_');
+  });
+
   it('suppresses internal tool-result envelopes across chunk boundaries', () => {
     const stream = createStreamingToolTextAccumulator(descriptors);
 

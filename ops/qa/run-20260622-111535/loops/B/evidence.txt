@@ -1,0 +1,17 @@
+Loop B: Fix Long-Running Automations (P1)
+Date: 2026-06-22
+Status: PASS
+
+Changes:
+1. core/automation/types.ts: Added `timeoutMs?: number` to AutomationSchedule interface
+2. core/automation/scheduler.ts: AUTOMATION_RUN_TIMEOUT_MS 180_000 -> 600_000 (3min -> 10min)
+   - executeWithRetry now accepts optional timeoutMs parameter
+   - Uses automation.schedule.timeoutMs ?? AUTOMATION_RUN_TIMEOUT_MS as deadline
+3. core/automation/runner.ts: AUTOMATION_MCP_CONTINUATION_LIMIT 3 -> 5
+4. tests/automation-runner-pow.test.ts: Updated 2 tests to match new limit of 5
+   - Added 2 extra mock responses per test
+   - Updated depth/executedToolCount/submitPrompt call count assertions
+
+Test Results: 9 files, 50 tests — ALL PASS
+
+Grade: B

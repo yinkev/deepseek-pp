@@ -59,6 +59,42 @@ describe('DeepSeek web adapter PoW headers', () => {
       target_path: '/api/v0/file/upload_file',
     });
   });
+
+  it('preserves abort errors from cancelled PoW work', async () => {
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      code: 0,
+      data: {
+        biz_code: 0,
+        biz_data: {
+          challenge: {
+            algorithm: 'DeepSeekHashV1',
+            challenge: 'a'.repeat(64),
+            salt: 'salt',
+            difficulty: 144000,
+            signature: 'signature',
+            expire_at: 1781948243138,
+            expire_after: 300000,
+          },
+        },
+      },
+    })));
+    powMocks.solvePowChallengeLocally.mockImplementationOnce(async (challenge: any) => {
+      controller.abort();
+      return {
+        algorithm: challenge.algorithm,
+        challenge: challenge.challenge,
+        salt: challenge.salt,
+        answer: 42,
+        signature: challenge.signature,
+      };
+    });
+
+    await expect(createPowHeaders(
+      { Authorization: 'Bearer token' },
+      { targetPath: '/api/v0/file/upload_file', signal: controller.signal },
+    )).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });
 
 function jsonResponse(body: unknown): Response {

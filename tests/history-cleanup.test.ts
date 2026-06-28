@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { stripToolCallsFromHistory } from '../core/interceptor/history-cleanup';
 import { createArtifactToolDescriptors } from '../core/artifact';
 import { createDefaultToolDescriptors } from '../core/tool';
+import { createBrowserControlToolDescriptors } from '../core/browser-control/tool';
 
 describe('history cleanup', () => {
   it('keeps inline-agent continuation prompt nodes but hides their internal prompt text', () => {
@@ -188,6 +189,178 @@ describe('history cleanup', () => {
     expect(json.data.biz_data.chat_messages[0].content).toBe(content);
   });
 
+  it('strips nested browser tool blocks from message_content parts without browser descriptors', () => {
+    const records: unknown[] = [];
+    const json = {
+      data: {
+        biz_data: {
+          chat_messages: [
+            {
+              message_id: 50,
+              message_role: 'assistant',
+              message_content: {
+                parts: [
+                  {
+                    content: 'Before < browser_snapshot >{} </ browser_snapshot > after',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    stripToolCallsFromHistory(json, {
+      toolDescriptors: createDefaultToolDescriptors(),
+      onToolCallsRestored: (next) => records.push(...next),
+    });
+
+    expect(json.data.biz_data.chat_messages[0].message_content.parts[0].content).toBe('Before  after');
+    expect(JSON.stringify(json)).not.toContain('browser_snapshot');
+    expect(records).toHaveLength(0);
+  });
+
+  it('restores nested browser tool records when browser descriptors are available', () => {
+    const records: any[] = [];
+    const json = {
+      data: {
+        biz_data: {
+          chat_messages: [
+            {
+              message_id: 51,
+              message_role: 'assistant',
+              parent_message_id: 49,
+              message_content: {
+                parts: [
+                  {
+                    content: 'Before <browser_snapshot>{}</browser_snapshot> after',
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    stripToolCallsFromHistory(json, {
+      toolDescriptors: [
+        ...createDefaultToolDescriptors(),
+        ...createBrowserControlToolDescriptors('en'),
+      ],
+      onToolCallsRestored: (next) => records.push(...next),
+    });
+
+    expect(json.data.biz_data.chat_messages[0].message_content.parts[0].content).toBe('Before  after');
+    expect(records).toHaveLength(1);
+    expect(records[0].calls[0].name).toBe('browser_snapshot');
+    expect(records[0].metadata).toMatchObject({
+      messageId: 51,
+      parentMessageId: 49,
+      role: 'assistant',
+    });
+  });
+
+  it('restores and strips plain legacy browser wrapper records', () => {
+    const records: any[] = [];
+    const json = {
+      data: {
+        biz_data: {
+          chat_messages: [
+            {
+              message_id: 54,
+              message_role: 'assistant',
+              parent_message_id: 49,
+              message_content: {
+                parts: [
+                  {
+                    content: [
+                      'Before ',
+                      '<tool_calls>',
+                      '<invoke name="browser_snapshot">',
+                      '<parameter name="targetLeaseId"></parameter>',
+                      '<parameter name="snapshotId"></parameter>',
+                      '</invoke>',
+                      '<invoke name="browser_evaluate_script">',
+                      '<parameter name="script"></parameter>',
+                      '</invoke>',
+                      '</tool_calls>',
+                      ' after',
+                    ].join(''),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    stripToolCallsFromHistory(json, {
+      toolDescriptors: [
+        ...createDefaultToolDescriptors(),
+        ...createBrowserControlToolDescriptors('en'),
+      ],
+      onToolCallsRestored: (next) => records.push(...next),
+    });
+
+    expect(json.data.biz_data.chat_messages[0].message_content.parts[0].content).toBe('Before  after');
+    expect(JSON.stringify(json)).not.toContain('tool_calls');
+    expect(records).toHaveLength(1);
+    expect(records[0].calls).toHaveLength(1);
+    expect(records[0].calls[0].name).toBe('browser_snapshot');
+    expect(records[0].calls[0].payload).toEqual({});
+  });
+
+  it('replaces inline-agent task_complete markers inside nested message_content parts', () => {
+    const json = {
+      data: {
+        biz_data: {
+          chat_messages: [
+            {
+              message_id: 52,
+              message_role: 'user',
+              message_content: {
+                parts: [{
+                  content: [
+                    '以下是工具续跑任务刚刚执行的工具结果。请像真正的 Agent 一样继续推进。',
+                    '',
+                    '<original_task>',
+                    '整理回答',
+                    '</original_task>',
+                    '',
+                    '<tool_results>',
+                    '[]',
+                    '</tool_results>',
+                  ].join('\n'),
+                }],
+              },
+            },
+            {
+              message_id: 53,
+              message_role: 'assistant',
+              parent_message_id: 52,
+              message_content: {
+                parts: [{
+                  content: '<task_complete>{"summary":"回答已经整理完成。","artifacts":[]}</task_complete>',
+                }],
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    stripToolCallsFromHistory(json, {
+      toolDescriptors: createDefaultToolDescriptors(),
+      onToolCallsRestored: () => undefined,
+    });
+
+    expect(json.data.biz_data.chat_messages[0].message_content.parts[0].content).toBe('\u200b');
+    expect(json.data.biz_data.chat_messages[1].message_content.parts[0].content).toBe('回答已经整理完成。');
+  });
+
   it('does not parse or pass huge artifact payloads back through restore records', () => {
     const records: any[] = [];
     const html = '<!doctype html><html><body>' + 'x'.repeat(250_000) + '</body></html>';
@@ -248,6 +421,43 @@ describe('history cleanup', () => {
                 '</｜DSML｜parameter>',
                 '</｜DSML｜invoke>',
                 '</｜DSML｜tool_calls>',
+              ].join(''),
+            },
+          ],
+        },
+      },
+    };
+
+    stripToolCallsFromHistory(json, {
+      toolDescriptors: createDefaultToolDescriptors(),
+      onToolCallsRestored: (next) => records.push(...next),
+    });
+
+    expect(json.data.biz_data.chat_messages[0].content).toBe('Saved.');
+    expect(records).toHaveLength(1);
+    expect(records[0].calls[0].name).toBe('memory_save');
+    expect(records[0].calls[0].raw).toBe('<memory_save>\n...[restore payload omitted]\n</memory_save>');
+    expect(records[0].calls[0].payload).toEqual({});
+  });
+
+  it('strips huge whitespace-padded plain wrapper blocks without parsing payload content', () => {
+    const records: any[] = [];
+    const json = {
+      data: {
+        biz_data: {
+          chat_messages: [
+            {
+              message_id: 31,
+              message_role: 'assistant',
+              content: [
+                'Saved.',
+                '< tool_calls >',
+                '< invoke name="memory_save" >',
+                '< parameter name="content" >',
+                'x'.repeat(130_000),
+                '</ parameter >',
+                '</ invoke >',
+                '</ tool_calls >',
               ].join(''),
             },
           ],

@@ -20,6 +20,9 @@ interface AxNode {
 
 interface SnapshotInput {
   axNodes: AxNode[];
+  snapshotId: string;
+  targetLeaseId: string;
+  capturedAt: number;
   url: string;
   title: string;
   maxNodes: number;
@@ -48,7 +51,7 @@ export function formatAccessibilitySnapshot(input: SnapshotInput): FormattedSnap
 
   const nodes: BrowserSnapshotNode[] = [];
   const seen = new Set<string>();
-  let text = `URL: ${input.url || '(unknown)'}\nTitle: ${input.title || '(untitled)'}\n`;
+  let text = `Snapshot ID: ${input.snapshotId}\nTarget Lease ID: ${input.targetLeaseId}\nURL: ${input.url || '(unknown)'}\nTitle: ${input.title || '(untitled)'}\n`;
   let truncated = false;
 
   while (queue.length > 0) {
@@ -86,6 +89,9 @@ export function formatAccessibilitySnapshot(input: SnapshotInput): FormattedSnap
 
   return {
     result: {
+      snapshotId: input.snapshotId,
+      targetLeaseId: input.targetLeaseId,
+      capturedAt: input.capturedAt,
       url: input.url,
       title: input.title,
       text,

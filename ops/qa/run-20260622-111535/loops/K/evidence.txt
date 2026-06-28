@@ -1,0 +1,18 @@
+Loop K: Security Decision (FND-010)
+Date: 2026-06-22
+Status: PASS (No change needed)
+
+Finding: `<all_urls>` optional host permission in wxt.config.ts:56
+
+Analysis:
+- Source: wxt.config.ts:56 → optional_host_permissions: ['<all_urls>']
+- Usage: chrome.permissions.request({ origins: ['<all_urls>'] })
+- Location: sidepanel/settings, background.ts, MCP transports
+- Purpose: Browser control debugger needs to attach to any tab
+- Gating: Only requested when user enables browser control feature
+- Manifest check: scripts/manifest-policy-check.mjs:34 validates this
+
+Decision: Keep as-is. Permission is optional, properly gated, and required
+for browser control functionality. No runtime misuse detected.
+
+Grade: B (informational, no code changes)

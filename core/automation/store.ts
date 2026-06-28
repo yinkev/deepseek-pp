@@ -14,6 +14,7 @@ import type {
   AutomationRunCreateInput,
   AutomationRunId,
   AutomationRunListOptions,
+  AutomationRunStatus,
   AutomationRunnerRequest,
   AutomationRunnerResult,
   AutomationRunUpdateInput,
@@ -32,6 +33,13 @@ const DEFAULT_RUN_HISTORY_LIMIT = 100;
 const DEFAULT_CHAIN_MAX_DEPTH = 3;
 const MAX_CHAIN_DEPTH = 8;
 const MAX_CHAIN_FOLLOW_UPS = 12;
+const TERMINAL_AUTOMATION_RUN_STATUSES = new Set<AutomationRunStatus>([
+  'succeeded',
+  'failed',
+  'timeout',
+  'cancelled',
+  'skipped',
+]);
 
 interface AutomationStorageState {
   version: number;
@@ -155,8 +163,14 @@ export async function updateAutomationRun(
   const state = await readState();
   const safePatch = sanitizeAutomationRunUpdate(patch);
   let updatedRun: AutomationRun | null = null;
+  let skippedTerminalUpdate = false;
   const runs = state.runs.map((run) => {
     if (run.id !== id) return run;
+    if (isTerminalAutomationRunStatus(run.status)) {
+      updatedRun = run;
+      skippedTerminalUpdate = true;
+      return run;
+    }
     updatedRun = {
       ...run,
       ...safePatch,
@@ -166,6 +180,7 @@ export async function updateAutomationRun(
   });
 
   if (!updatedRun) return null;
+  if (skippedTerminalUpdate) return updatedRun;
   await writeState({ ...state, runs: pruneRunHistory(runs) });
   return updatedRun;
 }
@@ -402,11 +417,13 @@ function normalizePromptOptions(value: AutomationPromptOptions | undefined): Aut
     ? value.refFileIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : [];
   const refSet = new Set(refFileIds);
+  const maxToolContinuationTurns = normalizeToolContinuationBudget(value?.maxToolContinuationTurns);
   return {
     modelType: typeof value?.modelType === 'string' ? value.modelType : null,
     searchEnabled: value?.searchEnabled === true,
     thinkingEnabled: value?.thinkingEnabled === true,
     refFileIds,
+    ...(maxToolContinuationTurns === undefined ? {} : { maxToolContinuationTurns }),
     webVisionFiles: Array.isArray(value?.webVisionFiles)
       ? value.webVisionFiles
         .map(normalizeWebVisionFileMetadata)
@@ -425,6 +442,11 @@ function normalizePromptOptions(value: AutomationPromptOptions | undefined): Aut
         .filter((pack): pack is DeepSeekWebVisionEvidencePack => pack !== null)
       : [],
   };
+}
+
+function normalizeToolContinuationBudget(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(1, Math.min(50, Math.floor(value)));
 }
 
 function normalizeWebVisionFileMetadata(value: unknown): DeepSeekWebVisionFileMetadata | null {
@@ -508,6 +530,7 @@ function normalizeRunResult(result: AutomationRun['result']): AutomationRun['res
           ...result.history,
           parentMessageId: normalizeStoredMessageId(result.history.parentMessageId),
           assistantMessageId: normalizeStoredMessageId(result.history.assistantMessageId),
+          assistantText: redactDurableToolString(result.history.assistantText) ?? '',
         }
         : null,
     };
@@ -788,6 +811,10 @@ function normalizeStoredMessageId(value: unknown): number | null {
     if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 0xFFFFFFFF) return parsed;
   }
   return null;
+}
+
+function isTerminalAutomationRunStatus(status: AutomationRunStatus): boolean {
+  return TERMINAL_AUTOMATION_RUN_STATUSES.has(status);
 }
 
 function pruneRunHistory(runs: AutomationRun[]): AutomationRun[] {

@@ -3,7 +3,7 @@ import type { Memory, MemoryType, NewMemory } from '../../../core/types';
 import MemoryCard from '../components/MemoryCard';
 import MemoryForm from '../components/MemoryForm';
 import PageIntro from '../components/PageIntro';
-import { SegmentedControl, SkeletonList, useConfirm } from '../components/settings/primitives';
+import { SegmentedControl, SkeletonList, useBanner, useConfirm } from '../components/settings/primitives';
 import { MEMORY_TYPE_CONFIG } from '../constants';
 import { useI18n } from '../i18n';
 
@@ -15,11 +15,17 @@ export default function MemoryPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
   const { confirm, node: confirmNode } = useConfirm();
+  const banner = useBanner();
 
   const load = async () => {
-    const list: Memory[] = await chrome.runtime.sendMessage({ type: 'GET_MEMORIES' });
-    setMemories((list ?? []).filter((memory) => memory.scope !== 'project'));
-    setLoading(false);
+    try {
+      const list: Memory[] = await chrome.runtime.sendMessage({ type: 'GET_MEMORIES' });
+      setMemories((list ?? []).filter((memory) => memory.scope !== 'project'));
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -62,22 +68,30 @@ export default function MemoryPage() {
       cancelLabel: t('common.cancel'),
     });
     if (!ok) return;
-    await chrome.runtime.sendMessage({ type: 'DELETE_MEMORY', payload: { id } });
-    load();
+    try {
+      await chrome.runtime.sendMessage({ type: 'DELETE_MEMORY', payload: { id } });
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleSave = async (mem: NewMemory) => {
-    if (editingMemory?.id) {
-      await chrome.runtime.sendMessage({
-        type: 'UPDATE_MEMORY',
-        payload: { ...editingMemory, ...mem, updatedAt: Date.now() },
-      });
-    } else {
-      await chrome.runtime.sendMessage({ type: 'SAVE_MEMORY', payload: mem });
+    try {
+      if (editingMemory?.id) {
+        await chrome.runtime.sendMessage({
+          type: 'UPDATE_MEMORY',
+          payload: { ...editingMemory, ...mem, updatedAt: Date.now() },
+        });
+      } else {
+        await chrome.runtime.sendMessage({ type: 'SAVE_MEMORY', payload: mem });
+      }
+      setShowForm(false);
+      setEditingMemory(null);
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
     }
-    setShowForm(false);
-    setEditingMemory(null);
-    load();
   };
 
   const handleEdit = (mem: Memory) => {
@@ -86,11 +100,15 @@ export default function MemoryPage() {
   };
 
   const handleTogglePin = async (mem: Memory) => {
-    await chrome.runtime.sendMessage({
-      type: 'UPDATE_MEMORY',
-      payload: { ...mem, pinned: !mem.pinned },
-    });
-    load();
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'UPDATE_MEMORY',
+        payload: { ...mem, pinned: !mem.pinned },
+      });
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
@@ -121,6 +139,7 @@ export default function MemoryPage() {
       </div>
 
       {confirmNode}
+      {banner.node}
 
       {showForm && (
         <div className="animate-slide-down">

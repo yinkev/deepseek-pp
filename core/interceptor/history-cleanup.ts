@@ -1,4 +1,5 @@
 import { DPP_MANAGED_AGENT_PROMPT_MARKER } from '../constants';
+import { BROWSER_CONTROL_TOOL_NAMES } from '../browser-control/types';
 import { replaceTaskCompleteBlocks } from '../inline-agent/prompt';
 import { sanitizeInternalPromptText } from '../prompt';
 import type { ToolCall, ToolCallRestoreRecord, ToolDescriptor } from '../types';
@@ -25,11 +26,26 @@ const RESTORE_PAYLOAD_ARRAY_MAX_ITEMS = 20;
 const RESTORE_PAYLOAD_OBJECT_MAX_KEYS = 40;
 const RESTORE_PAYLOAD_MAX_DEPTH = 6;
 const RESTORE_OMITTED_PAYLOAD_RAW = '...[restore payload omitted]';
+const STRUCTURED_HISTORY_ROOT_KEYS = ['content', 'message_content', 'messageContent'] as const;
+const STRUCTURED_HISTORY_CHILD_KEYS = ['parts', 'fragments', 'segments', 'children', 'contents'] as const;
+const STRUCTURED_HISTORY_TEXT_KEYS = ['content', 'text', 'markdown', 'value', 'message', 'body'] as const;
+const RENDERED_HISTORY_TOOL_TAG_FALLBACKS = [...BROWSER_CONTROL_TOOL_NAMES];
+const LEGACY_XML_TOOL_CALLS_MARKER_RE = /<\s*\/?\s*tool_calls\s*>/;
+const LEGACY_XML_TOOL_CALLS_OPEN_RE = /<\s*tool_calls\s*>/g;
+const LEGACY_XML_TOOL_CALLS_CLOSE_RE = /<\s*\/\s*tool_calls\s*>/g;
+const LEGACY_XML_INVOKE_NAME_RE = /<\s*invoke\s+name=(["'])([^"']+)\1/g;
 
 interface LightweightToolBlock {
   start: number;
   end: number;
   invocationNames: string[];
+}
+
+interface StoredHistoryTextEntry {
+  owner: Record<string, unknown>;
+  key: string;
+  content: string;
+  restoreKey: string;
 }
 
 export interface HistoryCleanupOptions {
@@ -101,14 +117,14 @@ function stripMessageToolCalls(
     const currentAssistantMessageIndex = isAssistant ? assistantMessageIndex++ : null;
     const metadata = createMessageRestoreMetadata(msg, index, currentAssistantMessageIndex);
     const messageKey = getMessageRestoreKey(msg, index);
-    if (typeof msg.content === 'string' && hasToolCallMarker(msg.content, toolDescriptors)) {
+    if (typeof msg.content === 'string' && hasHistoryToolMarker(msg.content, toolDescriptors)) {
       const record = collectToolCallRestoreRecord(msg.content, `${messageKey}:content`, toolDescriptors, metadata);
       if (record) restoredRecords.push(record);
       msg.content = stripToolCallsForHistoryText(msg.content, toolDescriptors);
     }
     if (msg.fragments && Array.isArray(msg.fragments)) {
       msg.fragments.forEach((frag: any, fragIndex: number) => {
-        if (typeof frag.content === 'string' && hasToolCallMarker(frag.content, toolDescriptors)) {
+        if (typeof frag.content === 'string' && hasHistoryToolMarker(frag.content, toolDescriptors)) {
           const record = collectToolCallRestoreRecord(
             frag.content,
             `${messageKey}:fragment:${fragIndex}`,
@@ -120,14 +136,82 @@ function stripMessageToolCalls(
         }
       });
     }
+    for (const entry of collectStructuredStoredTextEntries(msg, messageKey)) {
+      if (!hasHistoryToolMarker(entry.content, toolDescriptors)) continue;
+      const record = collectToolCallRestoreRecord(entry.content, entry.restoreKey, toolDescriptors, metadata);
+      if (record) restoredRecords.push(record);
+      entry.owner[entry.key] = stripToolCallsForHistoryText(entry.content, toolDescriptors);
+    }
   });
+}
+
+function hasHistoryToolMarker(text: string, toolDescriptors: readonly ToolDescriptor[]): boolean {
+  return hasToolCallMarker(text, toolDescriptors) || hasRenderedHistoryToolFallbackMarker(text);
 }
 
 function hasToolCallMarker(text: string, toolDescriptors: readonly ToolDescriptor[]): boolean {
   if (!text.includes('<')) return false;
-  if (text.includes('｜DSML｜')) return true;
+  if (text.includes('｜DSML｜') || LEGACY_XML_TOOL_CALLS_MARKER_RE.test(text)) return true;
   const catalog = createToolInvocationCatalog(toolDescriptors);
   return hasXmlToolMarkerInText(text, catalog);
+}
+
+function hasRenderedHistoryToolFallbackMarker(text: string): boolean {
+  if (!text.includes('browser_')) return false;
+  return RENDERED_HISTORY_TOOL_TAG_FALLBACKS.some(
+    (name) => new RegExp(`<\\s*/?\\s*${escapeRegExp(name)}\\s*>`).test(text),
+  );
+}
+
+function collectStructuredStoredTextEntries(msg: any, messageKey: string): StoredHistoryTextEntry[] {
+  if (!msg || typeof msg !== 'object') return [];
+  const entries: StoredHistoryTextEntry[] = [];
+  const seen = new WeakSet<object>();
+  for (const key of STRUCTURED_HISTORY_ROOT_KEYS) {
+    const value = msg[key];
+    if (!value || typeof value === 'string') continue;
+    collectStoredTextEntries(value, `${messageKey}:${key}`, entries, seen);
+  }
+  return entries;
+}
+
+function collectStoredTextEntries(
+  value: unknown,
+  restoreKey: string,
+  entries: StoredHistoryTextEntry[],
+  seen: WeakSet<object>,
+) {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectStoredTextEntries(item, `${restoreKey}:${index}`, entries, seen));
+    return;
+  }
+  if (typeof value !== 'object') return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  const object = value as Record<string, unknown>;
+  for (const key of STRUCTURED_HISTORY_TEXT_KEYS) {
+    const content = object[key];
+    if (typeof content === 'string') {
+      entries.push({
+        owner: object,
+        key,
+        content,
+        restoreKey: `${restoreKey}:${key}`,
+      });
+    }
+  }
+
+  for (const key of STRUCTURED_HISTORY_CHILD_KEYS) {
+    const nested = object[key];
+    if (!nested || typeof nested === 'string') continue;
+    collectStoredTextEntries(nested, `${restoreKey}:${key}`, entries, seen);
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function hashString(value: string): string {
@@ -157,9 +241,12 @@ function createMessageRestoreMetadata(
 }
 
 function storedMessageHasToolCallMarker(msg: any, toolDescriptors: readonly ToolDescriptor[]): boolean {
-  if (typeof msg?.content === 'string' && hasToolCallMarker(msg.content, toolDescriptors)) return true;
-  if (!Array.isArray(msg?.fragments)) return false;
-  return msg.fragments.some((frag: any) => typeof frag?.content === 'string' && hasToolCallMarker(frag.content, toolDescriptors));
+  if (typeof msg?.content === 'string' && hasHistoryToolMarker(msg.content, toolDescriptors)) return true;
+  if (Array.isArray(msg?.fragments) && msg.fragments.some((frag: any) => typeof frag?.content === 'string' && hasHistoryToolMarker(frag.content, toolDescriptors))) {
+    return true;
+  }
+  return collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))
+    .some((entry) => hasHistoryToolMarker(entry.content, toolDescriptors));
 }
 
 function collectInlineAgentContinuationMessageIds(messages: any[]): Set<string> {
@@ -265,13 +352,26 @@ function stripToolCallsForHistoryText(
   text: string,
   toolDescriptors: readonly ToolDescriptor[],
 ): string {
+  let stripped: string;
   if (text.length <= RESTORE_FULL_PARSE_MAX_LENGTH) {
-    return stripToolCalls(text, { descriptors: toolDescriptors });
+    stripped = stripToolCalls(text, { descriptors: toolDescriptors });
+  } else {
+    const catalog = createToolInvocationCatalog(toolDescriptors);
+    const blocks = findLightweightToolBlocks(text, catalog);
+    stripped = stripToolBlocksFromText(text, blocks);
   }
 
-  const catalog = createToolInvocationCatalog(toolDescriptors);
-  const blocks = findLightweightToolBlocks(text, catalog);
-  return stripToolBlocksFromText(text, blocks);
+  return stripRenderedHistoryToolFallbackBlocks(stripped);
+}
+
+function stripRenderedHistoryToolFallbackBlocks(text: string): string {
+  if (!hasRenderedHistoryToolFallbackMarker(text)) return text.trim();
+  let next = text;
+  for (const name of RENDERED_HISTORY_TOOL_TAG_FALLBACKS) {
+    const escaped = escapeRegExp(name);
+    next = next.replace(new RegExp(`<\\s*${escaped}\\s*>\\s*[\\s\\S]*?<\\/\\s*${escaped}\\s*>`, 'g'), '');
+  }
+  return next.trim();
 }
 
 function stripToolBlocksFromText(
@@ -298,6 +398,7 @@ function findLightweightToolBlocks(
   const blocks = [
     ...findXmlToolBlocks(text, catalog),
     ...findLegacyToolBlocks(text, catalog),
+    ...findLegacyXmlToolBlocks(text, catalog),
   ].sort((a, b) => a.start - b.start || b.end - a.end);
 
   const nonOverlapping: LightweightToolBlock[] = [];
@@ -398,6 +499,37 @@ function findLegacyToolBlocks(
   return blocks;
 }
 
+function findLegacyXmlToolBlocks(
+  text: string,
+  catalog: ToolInvocationCatalog,
+): LightweightToolBlock[] {
+  const blocks: LightweightToolBlock[] = [];
+  const openRegex = new RegExp(LEGACY_XML_TOOL_CALLS_OPEN_RE.source, 'g');
+  let openMatch: RegExpExecArray | null;
+
+  while ((openMatch = openRegex.exec(text)) !== null) {
+    const openIndex = openMatch.index;
+    const closeMatch = findLegacyXmlToolCallsClose(text, openRegex.lastIndex);
+    if (!closeMatch) break;
+
+    const end = closeMatch.index + closeMatch[0].length;
+    blocks.push({
+      start: openIndex,
+      end,
+      invocationNames: findLegacyXmlInvocationNames(text, openIndex, end, catalog),
+    });
+    openRegex.lastIndex = end;
+  }
+
+  return blocks;
+}
+
+function findLegacyXmlToolCallsClose(text: string, fromIndex: number): RegExpExecArray | null {
+  const closeRegex = new RegExp(LEGACY_XML_TOOL_CALLS_CLOSE_RE.source, 'g');
+  closeRegex.lastIndex = fromIndex;
+  return closeRegex.exec(text);
+}
+
 function findLegacyInvocationNames(
   text: string,
   start: number,
@@ -421,6 +553,28 @@ function findLegacyInvocationNames(
       names.push(invocationName);
     }
     searchFrom = nameEnd + 1;
+  }
+
+  return names;
+}
+
+function findLegacyXmlInvocationNames(
+  text: string,
+  start: number,
+  end: number,
+  catalog: ToolInvocationCatalog,
+): string[] {
+  const names: string[] = [];
+  const invokeRegex = new RegExp(LEGACY_XML_INVOKE_NAME_RE.source, 'g');
+  invokeRegex.lastIndex = start;
+  let invokeMatch: RegExpExecArray | null;
+
+  while ((invokeMatch = invokeRegex.exec(text)) !== null) {
+    if (invokeMatch.index >= end) break;
+    const invocationName = invokeMatch[2];
+    if (catalog.descriptorByInvocationName.has(invocationName)) {
+      names.push(invocationName);
+    }
   }
 
   return names;
@@ -508,24 +662,26 @@ function sanitizeStoredMessageInternalPrompt(msg: any, options: { replaceTaskCom
     msg.content = sanitizeStoredControlText(msg.content, options);
   }
 
-  if (!Array.isArray(msg.fragments)) return;
+  const textFragments = Array.isArray(msg.fragments)
+    ? msg.fragments.filter((frag: any) => frag && typeof frag.content === 'string')
+    : [];
 
-  const textFragments = msg.fragments
-    .filter((frag: any) => frag && typeof frag.content === 'string');
-
-  if (textFragments.length === 0) return;
-
-  const joined = textFragments.map((frag: any) => frag.content).join('');
-  const sanitizedJoined = sanitizeStoredControlText(joined, options);
-  if (sanitizedJoined !== joined) {
-    textFragments.forEach((frag: any, index: number) => {
-      frag.content = index === 0 ? sanitizedJoined : '';
-    });
-    return;
+  if (textFragments.length > 0) {
+    const joined = textFragments.map((frag: any) => frag.content).join('');
+    const sanitizedJoined = sanitizeStoredControlText(joined, options);
+    if (sanitizedJoined !== joined) {
+      textFragments.forEach((frag: any, index: number) => {
+        frag.content = index === 0 ? sanitizedJoined : '';
+      });
+    } else {
+      for (const frag of textFragments) {
+        frag.content = sanitizeStoredControlText(frag.content, options);
+      }
+    }
   }
 
-  for (const frag of textFragments) {
-    frag.content = sanitizeStoredControlText(frag.content, options);
+  for (const entry of collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))) {
+    entry.owner[entry.key] = sanitizeStoredControlText(entry.content, options);
   }
 }
 
@@ -537,8 +693,11 @@ function sanitizeStoredControlText(text: string, options: { replaceTaskComplete:
 function isInternalManagedAgentMessage(msg: any): boolean {
   if (!msg || typeof msg !== 'object') return false;
   if (typeof msg.content === 'string' && isInternalManagedAgentContent(msg.content)) return true;
-  if (!Array.isArray(msg.fragments)) return false;
-  return msg.fragments.some((frag: any) => typeof frag?.content === 'string' && isInternalManagedAgentContent(frag.content));
+  if (Array.isArray(msg.fragments) && msg.fragments.some((frag: any) => typeof frag?.content === 'string' && isInternalManagedAgentContent(frag.content))) {
+    return true;
+  }
+  return collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))
+    .some((entry) => isInternalManagedAgentContent(entry.content));
 }
 
 function isRemovableInternalManagedAgentMessage(msg: any): boolean {
@@ -548,23 +707,33 @@ function isRemovableInternalManagedAgentMessage(msg: any): boolean {
 function isInlineAgentContinuationMessage(msg: any): boolean {
   if (!msg || typeof msg !== 'object') return false;
   if (typeof msg.content === 'string' && isInlineAgentContinuationPrompt(msg.content)) return true;
-  if (!Array.isArray(msg.fragments)) return false;
-  return msg.fragments.some((frag: any) => typeof frag?.content === 'string' && isInlineAgentContinuationPrompt(frag.content));
+  if (Array.isArray(msg.fragments) && msg.fragments.some((frag: any) => typeof frag?.content === 'string' && isInlineAgentContinuationPrompt(frag.content))) {
+    return true;
+  }
+  return collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))
+    .some((entry) => isInlineAgentContinuationPrompt(entry.content));
 }
 
 function sanitizeInlineAgentContinuationMessage(msg: any) {
   if (!isInlineAgentContinuationMessage(msg)) return;
+  let replaced = false;
 
   if (typeof msg.content === 'string' && isInlineAgentContinuationPrompt(msg.content)) {
     msg.content = '\u200b';
+    replaced = true;
   }
 
-  if (!Array.isArray(msg.fragments)) return;
+  if (Array.isArray(msg.fragments)) {
+    for (const frag of msg.fragments) {
+      if (!frag || typeof frag.content !== 'string' || !isInlineAgentContinuationPrompt(frag.content)) continue;
+      frag.content = replaced ? '' : '\u200b';
+      replaced = true;
+    }
+  }
 
-  let replaced = false;
-  for (const frag of msg.fragments) {
-    if (!frag || typeof frag.content !== 'string' || !isInlineAgentContinuationPrompt(frag.content)) continue;
-    frag.content = replaced ? '' : '\u200b';
+  for (const entry of collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))) {
+    if (!isInlineAgentContinuationPrompt(entry.content)) continue;
+    entry.owner[entry.key] = replaced ? '' : '\u200b';
     replaced = true;
   }
 }

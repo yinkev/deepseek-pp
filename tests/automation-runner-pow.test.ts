@@ -177,6 +177,227 @@ describe('runDeepSeekAutomation PoW handling', () => {
     });
   });
 
+  it('fails instead of claiming success when tool continuation budget is exhausted', async () => {
+    adapterMocks.submitPrompt
+      .mockResolvedValueOnce({
+        assistantText: 'Need data.\n<mcp_mock_echo>{"text":"first"}</mcp_mock_echo>',
+        responseMessageId: 101,
+        requestMessageId: 100,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Need more.\n<mcp_mock_echo>{"text":"second"}</mcp_mock_echo>',
+        responseMessageId: 102,
+        requestMessageId: 101,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Still need more.\n<mcp_mock_echo>{"text":"third"}</mcp_mock_echo>',
+        responseMessageId: 103,
+        requestMessageId: 102,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Fourth round.\n<mcp_mock_echo>{"text":"fourth"}</mcp_mock_echo>',
+        responseMessageId: 104,
+        requestMessageId: 103,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Fifth round.\n<mcp_mock_echo>{"text":"fifth"}</mcp_mock_echo>',
+        responseMessageId: 105,
+        requestMessageId: 104,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Still not done.\n<mcp_mock_echo>{"text":"sixth"}</mcp_mock_echo>',
+        responseMessageId: 106,
+        requestMessageId: 105,
+        finished: true,
+      });
+
+    const executeToolCall = vi.fn(async (call: ToolCall): Promise<ToolResult> => ({
+      ok: true,
+      summary: `MCP tool executed: ${String(call.payload.text)}`,
+      output: { echoed: String(call.payload.text) },
+    }));
+
+    const result = await runDeepSeekAutomation(createRequest(), { executeToolCall });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatchObject({
+        code: 'automation_tool_continuation_limit_exceeded',
+        phase: 'runner',
+        retryable: false,
+        details: {
+          maxDepth: 5,
+          depth: 5,
+          executedToolCount: 5,
+          pendingToolCallCount: 1,
+        },
+      });
+      expect(result.parentMessageId).toBe(106);
+    }
+    expect(executeToolCall).toHaveBeenCalledTimes(5);
+    expect(adapterMocks.submitPrompt).toHaveBeenCalledTimes(6);
+    expect(adapterMocks.readHistorySnapshot).not.toHaveBeenCalled();
+  });
+
+  it('honors a per-run tool continuation budget override', async () => {
+    adapterMocks.submitPrompt
+      .mockResolvedValueOnce({
+        assistantText: 'Need data.\n<mcp_mock_echo>{"text":"first"}</mcp_mock_echo>',
+        responseMessageId: 201,
+        requestMessageId: 200,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Need more.\n<mcp_mock_echo>{"text":"second"}</mcp_mock_echo>',
+        responseMessageId: 202,
+        requestMessageId: 201,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Still need more.\n<mcp_mock_echo>{"text":"third"}</mcp_mock_echo>',
+        responseMessageId: 203,
+        requestMessageId: 202,
+        finished: true,
+      });
+
+    const executeToolCall = vi.fn(async (call: ToolCall): Promise<ToolResult> => ({
+      ok: true,
+      summary: `MCP tool executed: ${String(call.payload.text)}`,
+      output: { echoed: String(call.payload.text) },
+    }));
+
+    const result = await runDeepSeekAutomation(createRequest({
+      promptOptions: {
+        modelType: null,
+        searchEnabled: false,
+        thinkingEnabled: false,
+        refFileIds: [],
+        maxToolContinuationTurns: 2,
+      },
+    }), { executeToolCall });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatchObject({
+        code: 'automation_tool_continuation_limit_exceeded',
+        details: {
+          maxDepth: 2,
+          depth: 2,
+          executedToolCount: 2,
+          pendingToolCallCount: 1,
+        },
+      });
+      expect(result.parentMessageId).toBe(203);
+    }
+    expect(executeToolCall).toHaveBeenCalledTimes(2);
+    expect(adapterMocks.submitPrompt).toHaveBeenCalledTimes(3);
+    expect(adapterMocks.readHistorySnapshot).not.toHaveBeenCalled();
+  });
+
+  it('fails when continuation budget is exhausted even if the final message id is missing', async () => {
+    adapterMocks.submitPrompt
+      .mockResolvedValueOnce({
+        assistantText: 'Need data.\n<mcp_mock_echo>{"text":"first"}</mcp_mock_echo>',
+        responseMessageId: 101,
+        requestMessageId: 100,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Need more.\n<mcp_mock_echo>{"text":"second"}</mcp_mock_echo>',
+        responseMessageId: 102,
+        requestMessageId: 101,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Still need more.\n<mcp_mock_echo>{"text":"third"}</mcp_mock_echo>',
+        responseMessageId: 103,
+        requestMessageId: 102,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Fourth round.\n<mcp_mock_echo>{"text":"fourth"}</mcp_mock_echo>',
+        responseMessageId: 104,
+        requestMessageId: 103,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Fifth round.\n<mcp_mock_echo>{"text":"fifth"}</mcp_mock_echo>',
+        responseMessageId: 105,
+        requestMessageId: 104,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Still not done.\n<mcp_mock_echo>{"text":"sixth"}</mcp_mock_echo>',
+        responseMessageId: null,
+        requestMessageId: 105,
+        finished: true,
+      });
+
+    const executeToolCall = vi.fn(async (call: ToolCall): Promise<ToolResult> => ({
+      ok: true,
+      summary: `MCP tool executed: ${String(call.payload.text)}`,
+      output: { echoed: String(call.payload.text) },
+    }));
+
+    const result = await runDeepSeekAutomation(createRequest(), { executeToolCall });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('automation_tool_continuation_limit_exceeded');
+      expect(result.parentMessageId).toBe(101);
+    }
+    expect(executeToolCall).toHaveBeenCalledTimes(5);
+    expect(adapterMocks.submitPrompt).toHaveBeenCalledTimes(6);
+    expect(adapterMocks.readHistorySnapshot).not.toHaveBeenCalled();
+  });
+
+  it('fails when a continuation returns more tool calls without a parent message id', async () => {
+    adapterMocks.submitPrompt
+      .mockResolvedValueOnce({
+        assistantText: 'Need data.\n<mcp_mock_echo>{"text":"first"}</mcp_mock_echo>',
+        responseMessageId: 101,
+        requestMessageId: 100,
+        finished: true,
+      })
+      .mockResolvedValueOnce({
+        assistantText: 'Need more.\n<mcp_mock_echo>{"text":"second"}</mcp_mock_echo>',
+        responseMessageId: null,
+        requestMessageId: 101,
+        finished: true,
+      });
+
+    const executeToolCall = vi.fn(async (call: ToolCall): Promise<ToolResult> => ({
+      ok: true,
+      summary: `MCP tool executed: ${String(call.payload.text)}`,
+      output: { echoed: String(call.payload.text) },
+    }));
+
+    const result = await runDeepSeekAutomation(createRequest(), { executeToolCall });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatchObject({
+        code: 'automation_tool_continuation_missing_parent_message',
+        phase: 'runner',
+        retryable: false,
+        details: {
+          depth: 1,
+          executedToolCount: 1,
+          pendingToolCallCount: 1,
+        },
+      });
+      expect(result.parentMessageId).toBe(101);
+    }
+    expect(executeToolCall).toHaveBeenCalledTimes(1);
+    expect(adapterMocks.submitPrompt).toHaveBeenCalledTimes(2);
+    expect(adapterMocks.readHistorySnapshot).not.toHaveBeenCalled();
+  });
+
   it('uses Vision file refs only on the initial turn and drops them for tool continuations', async () => {
     adapterMocks.submitPrompt
       .mockResolvedValueOnce({

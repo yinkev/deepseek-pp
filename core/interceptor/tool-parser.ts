@@ -10,6 +10,8 @@ import {
 
 export const LEGACY_TOOL_CALLS_OPEN_TAG = '<｜DSML｜tool_calls>';
 export const LEGACY_TOOL_CALLS_CLOSE_TAG = '</｜DSML｜tool_calls>';
+export const LEGACY_XML_TOOL_CALLS_OPEN_TAG = '<tool_calls>';
+export const LEGACY_XML_TOOL_CALLS_CLOSE_TAG = '</tool_calls>';
 
 const LEGACY_TOOL_CALLS_BLOCK_REGEX = new RegExp(
   `${escapeRegExp(LEGACY_TOOL_CALLS_OPEN_TAG)}\\s*[\\s\\S]*?\\s*${escapeRegExp(LEGACY_TOOL_CALLS_CLOSE_TAG)}`,
@@ -17,12 +19,17 @@ const LEGACY_TOOL_CALLS_BLOCK_REGEX = new RegExp(
 );
 const LEGACY_INVOKE_REGEX = /<｜DSML｜invoke name="([^"]+)">\s*([\s\S]*?)\s*<\/｜DSML｜invoke>/g;
 const LEGACY_PARAMETER_REGEX = /<｜DSML｜parameter name="([^"]+)" string="(true|false)">([\s\S]*?)<\/｜DSML｜parameter>/g;
+const LEGACY_XML_TOOL_CALLS_BLOCK_REGEX = /<\s*tool_calls\s*>\s*[\s\S]*?\s*<\s*\/\s*tool_calls\s*>/g;
+const LEGACY_XML_INVOKE_REGEX = /<\s*invoke\s+name=(["'])([^"']+)\1\s*>\s*([\s\S]*?)\s*<\s*\/\s*invoke\s*>/g;
+const LEGACY_XML_PARAMETER_REGEX =
+  /<\s*parameter\s+name=(["'])([^"']+)\1(?:\s+string=(["'])(true|false)\3)?\s*>\s*([\s\S]*?)\s*<\s*\/\s*parameter\s*>/g;
 
 export function extractToolCalls(text: string, input?: ToolParsingInput): ToolCall[] {
   const catalog = createToolInvocationCatalog(input?.descriptors);
   return [
     ...extractXmlToolCalls(text, catalog),
     ...extractLegacyToolCalls(text, catalog),
+    ...extractLegacyXmlToolCalls(text, catalog),
   ];
 }
 
@@ -108,20 +115,69 @@ function extractLegacyToolCalls(text: string, catalog: ToolInvocationCatalog): T
   return calls;
 }
 
+function extractLegacyXmlToolCalls(text: string, catalog: ToolInvocationCatalog): ToolCall[] {
+  const calls: ToolCall[] = [];
+  const blockRegex = new RegExp(LEGACY_XML_TOOL_CALLS_BLOCK_REGEX.source, 'g');
+  let blockMatch: RegExpExecArray | null;
+
+  while ((blockMatch = blockRegex.exec(text)) !== null) {
+    const blockContent = blockMatch[0];
+    const invokeRegex = new RegExp(LEGACY_XML_INVOKE_REGEX.source, 'g');
+    let invokeMatch: RegExpExecArray | null;
+
+    while ((invokeMatch = invokeRegex.exec(blockContent)) !== null) {
+      const invocationName = invokeMatch[2];
+      const invokeContent = invokeMatch[3];
+      const payload: Record<string, unknown> = {};
+      const paramRegex = new RegExp(LEGACY_XML_PARAMETER_REGEX.source, 'g');
+      let paramMatch: RegExpExecArray | null;
+      let keptParameterCount = 0;
+
+      while ((paramMatch = paramRegex.exec(invokeContent)) !== null) {
+        const paramName = paramMatch[2];
+        const isString = paramMatch[4] !== 'false';
+        const value = paramMatch[5];
+        if (value.trim().length === 0) continue;
+        keptParameterCount += 1;
+        if (isString) {
+          payload[paramName] = value;
+          continue;
+        }
+        try {
+          payload[paramName] = JSON.parse(value);
+        } catch {
+          payload[paramName] = value;
+        }
+      }
+
+      if (shouldSkipEmptyLegacyXmlInvocation(invocationName, keptParameterCount, catalog)) {
+        continue;
+      }
+
+      calls.push(createToolCallFromInvocation(invocationName, payload, invokeMatch[0], catalog));
+    }
+  }
+
+  return calls;
+}
+
 export function stripToolCalls(text: string, input?: ToolParsingInput): string {
   const catalog = createToolInvocationCatalog(input?.descriptors);
   const regex = createXmlToolCallRegex(catalog);
   const legacyRegex = new RegExp(LEGACY_TOOL_CALLS_BLOCK_REGEX.source, 'g');
-  return text.replace(regex, '').replace(legacyRegex, '').trim();
+  const legacyXmlRegex = new RegExp(LEGACY_XML_TOOL_CALLS_BLOCK_REGEX.source, 'g');
+  return text.replace(regex, '').replace(legacyRegex, '').replace(legacyXmlRegex, '').trim();
 }
 
 export function replaceToolCallsWithSummary(text: string, input?: ToolParsingInput): string {
   const catalog = createToolInvocationCatalog(input?.descriptors);
   const regex = createXmlToolCallRegex(catalog);
   const legacyRegex = new RegExp(LEGACY_TOOL_CALLS_BLOCK_REGEX.source, 'g');
+  const legacyXmlRegex = new RegExp(LEGACY_XML_TOOL_CALLS_BLOCK_REGEX.source, 'g');
   return text
     .replace(regex, (match) => replaceMatchWithSummary(match, catalog))
-    .replace(legacyRegex, (match) => replaceMatchWithSummary(match, catalog));
+    .replace(legacyRegex, (match) => replaceMatchWithSummary(match, catalog))
+    .replace(legacyXmlRegex, (match) => replaceMatchWithSummary(match, catalog));
 }
 
 function replaceMatchWithSummary(match: string, catalog: ToolInvocationCatalog): string {
@@ -151,6 +207,19 @@ function createToolParseError(code: string, invocationName: string, message: str
     retryable: false,
     details: { invocationName },
   };
+}
+
+function shouldSkipEmptyLegacyXmlInvocation(
+  invocationName: string,
+  keptParameterCount: number,
+  catalog: ToolInvocationCatalog,
+): boolean {
+  if (keptParameterCount > 0) return false;
+  const descriptor =
+    catalog.descriptorByInvocationName.get(invocationName) ||
+    catalog.descriptorByName.get(invocationName);
+  if (!descriptor?.inputSchema.properties) return false;
+  return Object.keys(descriptor.inputSchema.properties).length > 0;
 }
 
 function escapeRegExp(value: string): string {

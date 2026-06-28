@@ -3,6 +3,10 @@ import type { BrowserDialogState } from './types';
 type DebuggerApi = typeof chrome.debugger;
 type DebuggerSession = chrome.debugger.DebuggerSession;
 
+export interface BrowserConnectionOptions {
+  onInvalidated?(reason: string, tabId: number): void;
+}
+
 export class BrowserControlError extends Error {
   readonly code: string;
   readonly retryable: boolean;
@@ -23,13 +27,15 @@ export class BrowserControlError extends Error {
 
 export class BrowserConnection {
   private readonly chromeApi: typeof chrome;
+  private readonly options: BrowserConnectionOptions;
   private readonly dialogs = new Map<number, BrowserDialogState>();
   private attachedTabId: number | null = null;
   private detachListenerRegistered = false;
   private eventListenerRegistered = false;
 
-  constructor(chromeApi: typeof chrome) {
+  constructor(chromeApi: typeof chrome, options: BrowserConnectionOptions = {}) {
     this.chromeApi = chromeApi;
+    this.options = options;
   }
 
   get tabId(): number | null {
@@ -124,6 +130,7 @@ export class BrowserConnection {
     if (!this.detachListenerRegistered) {
       debuggerApi.onDetach.addListener((source) => {
         if (source.tabId !== this.attachedTabId) return;
+        this.options.onInvalidated?.('debugger_detached', source.tabId);
         this.attachedTabId = null;
       });
       this.detachListenerRegistered = true;
@@ -132,6 +139,9 @@ export class BrowserConnection {
     if (!this.eventListenerRegistered) {
       debuggerApi.onEvent.addListener((source, method, params) => {
         if (!source.tabId) return;
+        if (isPageInvalidationEvent(method)) {
+          this.options.onInvalidated?.(method, source.tabId);
+        }
         if (method !== 'Page.javascriptDialogOpening') return;
         const payload = params as {
           type?: unknown;
@@ -150,6 +160,12 @@ export class BrowserConnection {
       this.eventListenerRegistered = true;
     }
   }
+}
+
+function isPageInvalidationEvent(method: string): boolean {
+  return method === 'Page.frameNavigated' ||
+    method === 'Page.navigatedWithinDocument' ||
+    method === 'Page.documentOpened';
 }
 
 export function toBrowserControlError(error: unknown): BrowserControlError {

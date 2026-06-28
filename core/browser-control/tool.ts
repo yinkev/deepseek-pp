@@ -237,14 +237,18 @@ function schemaForTool(name: BrowserControlToolName): ToolDescriptor['inputSchem
     case 'browser_click':
     case 'browser_hover':
       return objectSchema({
-        uid: { type: 'string', description: 'Element id from browser_snapshot, e.g. e12.' },
+        snapshotId: { type: 'string', description: 'Snapshot ID from the same browser_snapshot result when using uid.' },
+        targetLeaseId: { type: 'string', description: 'Target lease ID from the same browser_snapshot result when using uid.' },
+        uid: { type: 'string', description: 'Element id from browser_snapshot, e.g. e12. Requires snapshotId and targetLeaseId from the same snapshot.' },
         selector: { type: 'string', description: 'CSS selector alternative when uid is unavailable.' },
         button: { type: 'string', description: 'Mouse button: left, middle, or right.' },
         clickCount: { type: 'integer', description: 'Click count, usually 1.' },
       });
     case 'browser_fill':
       return objectSchema({
-        uid: { type: 'string', description: 'Element id from browser_snapshot.' },
+        snapshotId: { type: 'string', description: 'Snapshot ID from the same browser_snapshot result when using uid.' },
+        targetLeaseId: { type: 'string', description: 'Target lease ID from the same browser_snapshot result when using uid.' },
+        uid: { type: 'string', description: 'Element id from browser_snapshot. Requires snapshotId and targetLeaseId from the same snapshot.' },
         selector: { type: 'string', description: 'CSS selector alternative.' },
         value: { type: 'string', description: 'Value to place in the field.' },
       }, ['value']);
@@ -252,24 +256,42 @@ function schemaForTool(name: BrowserControlToolName): ToolDescriptor['inputSchem
       return objectSchema({
         fields: {
           type: 'array',
-          description: 'Array of { uid? or selector?, value } field updates.',
+          description: 'Array of { snapshotId? and targetLeaseId? and uid? or selector?, value } field updates. Include snapshotId and targetLeaseId from the same browser_snapshot for every uid.',
+          items: {
+            type: 'object',
+            properties: {
+              snapshotId: { type: 'string', description: 'Snapshot ID from the same browser_snapshot result when using uid.' },
+              targetLeaseId: { type: 'string', description: 'Target lease ID from the same browser_snapshot result when using uid.' },
+              uid: { type: 'string', description: 'Element id from browser_snapshot. Requires snapshotId and targetLeaseId from the same snapshot.' },
+              selector: { type: 'string', description: 'CSS selector alternative.' },
+              value: { type: 'string', description: 'Value to place in the field.' },
+            },
+            required: ['value'],
+            additionalProperties: false,
+          },
         },
       }, ['fields']);
     case 'browser_key':
       return objectSchema({
-        uid: { type: 'string', description: 'Optional element id to focus first.' },
+        snapshotId: { type: 'string', description: 'Snapshot ID from the same browser_snapshot result when using uid.' },
+        targetLeaseId: { type: 'string', description: 'Target lease ID from the same browser_snapshot result when using uid.' },
+        uid: { type: 'string', description: 'Optional element id to focus first. Requires snapshotId and targetLeaseId from the same snapshot.' },
         selector: { type: 'string', description: 'Optional CSS selector to focus first.' },
         key: { type: 'string', description: 'Key name such as Enter, Escape, Tab, ArrowDown, or a character.' },
       }, ['key']);
     case 'browser_type':
       return objectSchema({
-        uid: { type: 'string', description: 'Optional element id to focus first.' },
+        snapshotId: { type: 'string', description: 'Snapshot ID from the same browser_snapshot result when using uid.' },
+        targetLeaseId: { type: 'string', description: 'Target lease ID from the same browser_snapshot result when using uid.' },
+        uid: { type: 'string', description: 'Optional element id to focus first. Requires snapshotId and targetLeaseId from the same snapshot.' },
         selector: { type: 'string', description: 'Optional CSS selector to focus first.' },
         text: { type: 'string', description: 'Text to insert.' },
       }, ['text']);
     case 'browser_attach_file':
       return objectSchema({
-        uid: { type: 'string', description: 'File input id from browser_snapshot.' },
+        snapshotId: { type: 'string', description: 'Snapshot ID from the same browser_snapshot result when using uid.' },
+        targetLeaseId: { type: 'string', description: 'Target lease ID from the same browser_snapshot result when using uid.' },
+        uid: { type: 'string', description: 'File input id from browser_snapshot. Requires snapshotId and targetLeaseId from the same snapshot.' },
         selector: { type: 'string', description: 'CSS selector for a file input.' },
         files: { type: 'array', description: 'Absolute local file paths.' },
       }, ['files']);

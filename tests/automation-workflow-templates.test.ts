@@ -94,6 +94,27 @@ describe('automation workflow templates', () => {
     expect(debuggingInput.prompt).toContain('passing check');
   });
 
+  it('includes a primary repair-and-verification long-loop profile with explicit budgets and artifacts', () => {
+    const repair = AUTOMATION_WORKFLOW_TEMPLATES.find((template) => template.id === 'repo-repair-verify-loop');
+    expect(repair).toBeTruthy();
+
+    const input = createAutomationInputFromWorkflowTemplate(repair!, { timezone: 'UTC' });
+
+    expect(input.schedule).toMatchObject({
+      kind: 'manual',
+      expression: null,
+      enabled: false,
+      timeoutMs: 3_600_000,
+    });
+    expect(input.promptOptions.maxToolContinuationTurns).toBe(25);
+    expect(input.promptOptions.thinkingEnabled).toBe(true);
+    expect(input.promptOptions.visualMonitor?.enabled).toBe(true);
+    expect(input.prompt).toContain('Run a bounded repair-and-verification loop');
+    expect(input.prompt).toContain('proof-ledger');
+    expect(input.prompt).toContain('verification-matrix');
+    expect(input.prompt).toContain('no critical/high defects remain');
+  });
+
   it('forces Vision routing when a template carries Vision refs', () => {
     const template: AutomationWorkflowTemplate = {
       id: 'custom-vision',

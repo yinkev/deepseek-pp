@@ -840,6 +840,62 @@ describe('sidepanel interactions', () => {
     expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie/);
   });
 
+  it('promotes the repair-and-verify launcher while preserving long-loop budgets', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTOMATIONS') return [];
+      if (message.type === 'CREATE_AUTOMATION') return {
+        id: 'automation-repair-loop',
+        ...(message.payload as Record<string, unknown>),
+        status: 'active',
+        deepseek: { chatSessionId: null, parentMessageId: null, sessionUrl: null, lastHistorySyncedAt: null },
+        createdAt: 1,
+        updatedAt: 1,
+        lastRunAt: null,
+        nextRunAt: null,
+        lastError: null,
+        version: 1,
+      };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(AutomationPage));
+    await flushEffects();
+
+    const pageText = container.textContent ?? '';
+    expect(pageText).toContain('运行指挥中心');
+    expect(pageText).toContain('工作流启动包');
+    expect(pageText.indexOf('运行指挥中心')).toBeLessThan(pageText.indexOf('工作流启动包'));
+
+    await enterText('目标、范围或故障', 'Fix failing automation tests and update the proof ledger.');
+    await clickButton('启动长循环');
+
+    expect(inputByPlaceholder('任务名称').value).toBe('修复与验证循环');
+    expect(inputByPlaceholder('输入要定时发送到 DeepSeek 的内容').value)
+      .toContain('Fix failing automation tests and update the proof ledger.');
+    expect(container.textContent).toContain('60 分钟');
+    expect(container.textContent).toContain('25 轮工具延续');
+
+    await clickButton('创建');
+    await flushEffects();
+
+    const createCall = sendMessage.mock.calls
+      .map(([message]) => message)
+      .find((message): message is {
+        type: 'CREATE_AUTOMATION';
+        payload: {
+          prompt: string;
+          schedule: { timeoutMs?: number };
+          promptOptions: { maxToolContinuationTurns?: number };
+        };
+      } => message.type === 'CREATE_AUTOMATION');
+
+    expect(createCall?.payload.prompt).toContain('Fix failing automation tests and update the proof ledger.');
+    expect(createCall?.payload.schedule.timeoutMs).toBe(3_600_000);
+    expect(createCall?.payload.promptOptions.maxToolContinuationTurns).toBe(25);
+    expect(JSON.stringify(createCall?.payload)).not.toMatch(/data:image|dataBase64|blob:|Authorization|Bearer|Cookie/);
+  });
+
   it('filters automation workflow templates by category', async () => {
     const sendMessage = vi.fn(async (message: { type: string }) => {
       if (message.type === 'GET_AUTOMATIONS') return [];

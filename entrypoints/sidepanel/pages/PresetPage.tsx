@@ -3,7 +3,7 @@ import type { SystemPromptPreset } from '../../../core/types';
 import PageIntro from '../components/PageIntro';
 import PresetCard from '../components/PresetCard';
 import PresetForm from '../components/PresetForm';
-import { SkeletonList, useConfirm } from '../components/settings/primitives';
+import { SkeletonList, useBanner, useConfirm } from '../components/settings/primitives';
 import { useI18n } from '../i18n';
 
 export default function PresetPage() {
@@ -15,49 +15,63 @@ export default function PresetPage() {
   const [editing, setEditing] = useState<SystemPromptPreset | undefined>();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { confirm, node: confirmNode } = useConfirm();
+  const banner = useBanner();
 
   const load = async () => {
-    const [list, active] = await Promise.all([
-      chrome.runtime.sendMessage({ type: 'GET_PRESETS' }),
-      chrome.runtime.sendMessage({ type: 'GET_ACTIVE_PRESET' }),
-    ]);
-    setPresets(list ?? []);
-    setActiveId((active as SystemPromptPreset | null)?.id ?? null);
-    setLoading(false);
+    try {
+      const [list, active] = await Promise.all([
+        chrome.runtime.sendMessage({ type: 'GET_PRESETS' }),
+        chrome.runtime.sendMessage({ type: 'GET_ACTIVE_PRESET' }),
+      ]);
+      setPresets(list ?? []);
+      setActiveId((active as SystemPromptPreset | null)?.id ?? null);
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
 
   const handleSave = async (preset: SystemPromptPreset) => {
-    await chrome.runtime.sendMessage({ type: 'SAVE_PRESET', payload: preset });
-    setShowForm(false);
-    setEditing(undefined);
-    load();
+    try {
+      await chrome.runtime.sendMessage({ type: 'SAVE_PRESET', payload: preset });
+      setShowForm(false);
+      setEditing(undefined);
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleImportFiles = async (files: FileList) => {
-    const entries = await Promise.all(
-      Array.from(files, async (file) => ({
-        name: file.name.replace(/\.(txt|md)$/i, '').trim(),
-        content: (await file.text()).trim(),
-      })),
-    );
-    for (const { name, content } of entries) {
-      if (!content) continue;
-      const now = Date.now();
-      await chrome.runtime.sendMessage({
-        type: 'SAVE_PRESET',
-        payload: {
-          id: crypto.randomUUID(),
-          name,
-          content,
-          createdAt: now,
-          updatedAt: now,
-        } satisfies SystemPromptPreset,
-      });
+    try {
+      const entries = await Promise.all(
+        Array.from(files, async (file) => ({
+          name: file.name.replace(/\.(txt|md)$/i, '').trim(),
+          content: (await file.text()).trim(),
+        })),
+      );
+      for (const { name, content } of entries) {
+        if (!content) continue;
+        const now = Date.now();
+        await chrome.runtime.sendMessage({
+          type: 'SAVE_PRESET',
+          payload: {
+            id: crypto.randomUUID(),
+            name,
+            content,
+            createdAt: now,
+            updatedAt: now,
+          } satisfies SystemPromptPreset,
+        });
+      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
     }
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    load();
   };
 
   const handleDelete = async (id: string) => {
@@ -68,14 +82,22 @@ export default function PresetPage() {
       cancelLabel: t('common.cancel'),
     });
     if (!ok) return;
-    await chrome.runtime.sendMessage({ type: 'DELETE_PRESET', payload: { id } });
-    load();
+    try {
+      await chrome.runtime.sendMessage({ type: 'DELETE_PRESET', payload: { id } });
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleActivate = async (id: string) => {
-    await chrome.runtime.sendMessage({ type: 'SET_ACTIVE_PRESET', payload: { id } });
-    setActiveId(id);
-    load();
+    try {
+      await chrome.runtime.sendMessage({ type: 'SET_ACTIVE_PRESET', payload: { id } });
+      setActiveId(id);
+      load();
+    } catch (error) {
+      banner.show('error', error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleDeactivate = async () => {
@@ -139,6 +161,7 @@ export default function PresetPage() {
       )}
 
       {confirmNode}
+      {banner.node}
 
       {loading ? (
         <SkeletonList rows={3} />

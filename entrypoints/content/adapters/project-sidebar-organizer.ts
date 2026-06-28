@@ -300,8 +300,14 @@ export function startDeepSeekProjectSidebarOrganizer(
 }
 
 function mutationMayAffectProjectSidebar(mutation: MutationRecord): boolean {
+  if (isProjectSidebarOwnedMutation(mutation)) return false;
   return Array.from(mutation.addedNodes).some(nodeMayAffectProjectSidebar) ||
     Array.from(mutation.removedNodes).some(nodeMayAffectProjectSidebar);
+}
+
+function isProjectSidebarOwnedMutation(mutation: MutationRecord): boolean {
+  const target = mutation.target;
+  return target instanceof Element && Boolean(target.closest(`#${PROJECT_SECTION_ID}`));
 }
 
 function nodeMayAffectProjectSidebar(node: Node): boolean {

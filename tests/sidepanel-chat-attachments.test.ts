@@ -35,6 +35,8 @@ type ChatSubmitMessage = {
 let container: HTMLDivElement;
 let root: Root | null;
 let sendMessage: ReturnType<typeof vi.fn>;
+let permissionsContains: ReturnType<typeof vi.fn>;
+let permissionsRequest: ReturnType<typeof vi.fn>;
 let objectUrlSeq = 0;
 let createdObjectUrls: string[];
 let revokedObjectUrls: string[];
@@ -49,6 +51,8 @@ beforeEach(() => {
   revokedObjectUrls = [];
   runtimeListeners = [];
   objectUrlSeq = 0;
+  permissionsContains = vi.fn(async () => true);
+  permissionsRequest = vi.fn(async () => true);
   sendMessage = vi.fn(async (message: RuntimeMessage) => {
     if (message.type === 'GET_AUTH_STATUS') {
       return { available: true, provider: 'deepseek-web', hasApiKey: false, hasToken: true };
@@ -115,6 +119,10 @@ beforeEach(() => {
         }),
       },
     },
+    permissions: {
+      contains: permissionsContains,
+      request: permissionsRequest,
+    },
   });
   vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
     const url = `blob:deepseek-pp-test-${objectUrlSeq += 1}`;
@@ -127,6 +135,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   if (root) {
     act(() => root?.unmount());
   }
@@ -269,6 +278,18 @@ describe('sidepanel chat image attachments', () => {
     expect(container.textContent?.match(/I found the right chat\./g)).toHaveLength(1);
   });
 
+  it('renders assistant text that arrives only on the terminal done chunk', async () => {
+    await renderChatPage();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      text: 'The first visible word is present.',
+      done: true,
+    });
+
+    expect(container.textContent).toContain('The first visible word is present.');
+  });
+
   it('shows an assistant working placeholder immediately after sending', async () => {
     await renderChatPage();
     const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
@@ -293,6 +314,204 @@ describe('sidepanel chat image attachments', () => {
 
     expect(container.textContent).toContain('The visible answer says to keep it simple.');
     expect(container.querySelector('.ds-chat-message-row-assistant .ds-chat-caret')).toBeNull();
+  });
+
+  it('unlocks the composer if an accepted stream never sends a terminal chunk', async () => {
+    vi.useFakeTimers();
+    try {
+      await renderChatPage();
+      const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+      await enterText(textarea, 'Use my current browser tab and tell me the main point.');
+      await clickButtonByLabel('发送');
+      const submit = await waitForSubmit();
+
+      expect(clickableButtonByLabel('发送').disabled).toBe(true);
+      expect(clickableButtonByLabel('使用浏览器控制目标视图').disabled).toBe(true);
+
+      await emitRuntimeMessage({
+        type: 'CHAT_STREAM_CHUNK',
+        streamId: submit.payload.streamId,
+        toolEvents: [{
+          id: 'browser_snapshot:1',
+          name: 'browser_snapshot',
+          status: 'running',
+          title: 'Read page snapshot',
+          summary: 'Reading',
+        }],
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(110_001);
+      });
+
+      expect(container.textContent).toContain('DeepSeek 网页没有完成这次侧边栏请求。输入框已解锁，可以重试。');
+      expect(container.textContent).toContain('Read page snapshot - 已超时');
+      expect(container.textContent).not.toContain('Using');
+      expect(inputByPlaceholder('给 DeepSeek++ 发送消息').value).toBe('');
+      expect(clickableButtonByLabel('使用浏览器控制目标视图').disabled).toBe(false);
+
+      await enterText(inputByPlaceholder('给 DeepSeek++ 发送消息'), 'retry');
+      expect(clickableButtonByLabel('发送').disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accepts pre-terminal tool error events before a terminal stream error', async () => {
+    await renderChatPage();
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+    await enterText(textarea, 'Use my current browser tab and tell me the main point.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'running',
+        title: 'Read page snapshot',
+        summary: 'Reading',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'error',
+        title: 'Read page snapshot',
+        summary: 'Timed out',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      error: 'DeepSeek Web did not respond.',
+      done: true,
+    });
+
+    expect(container.textContent).toContain('Read page snapshot - Timed out');
+    expect(container.textContent).toContain('DeepSeek Web did not respond.');
+    expect(container.textContent).not.toContain('Using');
+    expect(clickableButtonByLabel('使用浏览器控制目标视图').disabled).toBe(false);
+  });
+
+  it('accepts tool error events on the terminal stream error chunk', async () => {
+    await renderChatPage();
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+    await enterText(textarea, 'Use my current browser tab and tell me the main point.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'running',
+        title: 'Read page snapshot',
+        summary: 'Reading',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      error: 'DeepSeek Web did not respond.',
+      done: true,
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'error',
+        title: 'Read page snapshot',
+        summary: 'Timed out',
+      }],
+    });
+
+    expect(container.textContent).toContain('Read page snapshot - Timed out');
+    expect(container.textContent).toContain('DeepSeek Web did not respond.');
+    expect(container.textContent).not.toContain('Using');
+    expect(clickableButtonByLabel('使用浏览器控制目标视图').disabled).toBe(false);
+  });
+
+  it('terminalizes rendered running tool events when a stream error has no tool event payload', async () => {
+    await renderChatPage();
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+    await enterText(textarea, 'Use my current browser tab and tell me the main point.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      toolEvents: [{
+        id: 'browser_snapshot:1',
+        name: 'browser_snapshot',
+        status: 'running',
+        title: 'Read page snapshot',
+        summary: 'Reading',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      error: 'The previous chat run was interrupted. Please retry.',
+      done: true,
+    });
+
+    expect(container.textContent).toContain('Read page snapshot - The previous chat run was interrupted. Please retry.');
+    expect(container.textContent).not.toContain('Using');
+    expect(clickableButtonByLabel('使用浏览器控制目标视图').disabled).toBe(false);
+  });
+
+  it('accepts pre-terminal DeepSeek Web status errors before a terminal stream error', async () => {
+    await renderChatPage();
+    const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
+
+    await enterText(textarea, 'Use my current browser tab and tell me the main point.');
+    await clickButtonByLabel('发送');
+    const submit = await waitForSubmit();
+
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      toolEvents: [{
+        id: 'deepseek-web-turn-status',
+        name: 'deepseek_web_turn',
+        status: 'running',
+        title: 'DeepSeek Web',
+        summary: 'Using browser tools',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      toolEvents: [{
+        id: 'deepseek-web-turn-status',
+        name: 'deepseek_web_turn',
+        status: 'error',
+        title: 'DeepSeek Web',
+        summary: 'Timed out',
+      }],
+    });
+    await emitRuntimeMessage({
+      type: 'CHAT_STREAM_CHUNK',
+      streamId: submit.payload.streamId,
+      error: 'DeepSeek Web did not respond.',
+      done: true,
+    });
+
+    expect(container.textContent).toContain('DeepSeek Web - Timed out');
+    expect(container.textContent).toContain('DeepSeek Web did not respond.');
+    expect(container.textContent).not.toContain('Using');
+    expect(clickableButtonByLabel('使用浏览器控制目标视图').disabled).toBe(false);
   });
 
   it('ignores stale stream chunks from an older chat run', async () => {
@@ -386,6 +605,36 @@ describe('sidepanel chat image attachments', () => {
         ]),
       ]),
     );
+  });
+
+  it('requests optional host permission before current-tab capture when needed', async () => {
+    permissionsContains.mockResolvedValueOnce(false);
+    permissionsRequest.mockResolvedValueOnce(true);
+    await renderChatPage();
+
+    await clickButtonByLabel('捕获当前标签页');
+
+    expect(permissionsContains).toHaveBeenCalledWith({ origins: ['<all_urls>'] });
+    expect(permissionsRequest).toHaveBeenCalledWith({ origins: ['<all_urls>'] });
+    expect(container.querySelector('img[alt="captured-tab.png"]')).toBeTruthy();
+  });
+
+  it('does not call background capture when optional host permission is denied', async () => {
+    permissionsContains.mockResolvedValueOnce(false);
+    permissionsRequest.mockResolvedValueOnce(false);
+    await renderChatPage();
+
+    await clickButtonByLabel('捕获当前标签页');
+
+    expect(container.querySelectorAll('.ds-chat-attachment-card')).toHaveLength(0);
+    expect(sendMessage.mock.calls).not.toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'CAPTURE_CURRENT_TAB_IMAGE' }),
+        ]),
+      ]),
+    );
+    expect(container.textContent).toContain('无法捕获当前标签页。请先在该标签页点击扩展图标，然后重试。');
   });
 
   it('captures the Browser Control target with a natural handoff prompt', async () => {
@@ -537,11 +786,16 @@ async function enterText(input: HTMLTextAreaElement, value: string) {
 }
 
 async function clickButtonByLabel(label: string) {
-  const button = container.querySelector(`button[aria-label="${label}"]`);
-  expect(button).toBeTruthy();
+  const button = clickableButtonByLabel(label);
   await act(async () => {
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
+}
+
+function clickableButtonByLabel(label: string): HTMLButtonElement {
+  const button = container.querySelector(`button[aria-label="${label}"]`);
+  expect(button).toBeTruthy();
+  return button as HTMLButtonElement;
 }
 
 async function waitForSubmit(): Promise<ChatSubmitMessage> {

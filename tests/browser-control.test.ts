@@ -39,6 +39,7 @@ describe('browser control settings and descriptors', () => {
     expect(normalizeBrowserControlSettings(null)).toEqual(DEFAULT_BROWSER_CONTROL_SETTINGS);
     expect(normalizeBrowserControlSettings({})).toMatchObject({
       enabled: true,
+      includeSnapshotAfterActions: false,
       allowVisionCapture: true,
       verifyAfterActions: true,
       collectEvidencePacks: true,
@@ -56,6 +57,9 @@ describe('browser control settings and descriptors', () => {
       debugDistillerEnabled: false,
       maxSnapshotNodes: 1500,
       maxSnapshotTextBytes: 4000,
+    });
+    expect(normalizeBrowserControlSettings({ includeSnapshotAfterActions: true })).toMatchObject({
+      includeSnapshotAfterActions: true,
     });
   });
 
@@ -106,9 +110,9 @@ describe('browser control settings and descriptors', () => {
     ]);
   });
 
-  it('uses natural act-verify prompts for browser actions only', () => {
-    expect(shouldVerifyAfterBrowserAction('browser_click')).toBe(true);
-    expect(shouldVerifyAfterBrowserAction('browser_snapshot')).toBe(false);
+	  it('uses natural act-verify prompts for browser actions only', () => {
+	    expect(shouldVerifyAfterBrowserAction('browser_click')).toBe(true);
+	    expect(shouldVerifyAfterBrowserAction('browser_snapshot')).toBe(false);
     const prompt = createBrowserActVerifyPrompt({
       toolName: 'browser_click',
       summary: 'Clicked Save',
@@ -116,10 +120,26 @@ describe('browser control settings and descriptors', () => {
 
     expect(prompt).toContain('I just ran browser_click: Clicked Save.');
     expect(prompt).toContain('Look at the updated page');
-    expect(prompt).not.toMatch(/reply exactly|can you read this image|marker|probe/i);
-  });
+	    expect(prompt).not.toMatch(/reply exactly|can you read this image|marker|probe/i);
+	  });
 
-  it('requires an explicit target for automation-style browser actions', async () => {
+	  it('describes per-field snapshot leases for browser_fill_form', () => {
+	    const descriptor = createBrowserControlToolDescriptors('en').find((tool) => tool.name === 'browser_fill_form');
+	    const fields = descriptor?.inputSchema.properties?.fields as {
+	      items?: { properties?: Record<string, unknown>; required?: string[] };
+	    } | undefined;
+
+	    expect(fields?.items?.properties).toMatchObject({
+	      snapshotId: expect.objectContaining({ type: 'string' }),
+	      targetLeaseId: expect.objectContaining({ type: 'string' }),
+	      uid: expect.objectContaining({ type: 'string' }),
+	      selector: expect.objectContaining({ type: 'string' }),
+	      value: expect.objectContaining({ type: 'string' }),
+	    });
+	    expect(fields?.items?.required).toEqual(['value']);
+	  });
+
+	  it('requires an explicit target for automation-style browser actions', async () => {
     const storage = new Map<string, unknown>([[
       BROWSER_CONTROL_STORAGE_KEY,
       {
@@ -231,6 +251,469 @@ describe('browser control settings and descriptors', () => {
     });
   });
 
+  it('rejects snapshot uids after the target navigates instead of refreshing automatically', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    await chromeStub.tabs.update(12, { url: 'https://example.com/next' });
+    const result = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_uid_not_found');
+    expect(result.error?.message).toContain('Run browser_snapshot again');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 12 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+    expect(chromeStub.debugger.sendCommand.mock.calls.filter((call) => call[1] === 'Accessibility.getFullAXTree')).toHaveLength(1);
+  });
+
+  it('requires snapshotId when using a snapshot uid', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    const result = await service.execute('browser_click', { targetLeaseId: lease.targetLeaseId, uid: 'e2' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_snapshot_id_required');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 12 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+  });
+
+  it('requires targetLeaseId when using a snapshot uid', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    const result = await service.execute('browser_click', { snapshotId: lease.snapshotId, uid: 'e2' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_target_lease_required');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 12 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+  });
+
+  it('rejects snapshot uids with the wrong targetLeaseId before resolving nodes', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    const result = await service.execute('browser_click', {
+      snapshotId: lease.snapshotId,
+      targetLeaseId: 'target-lease-other',
+      uid: 'e2',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 12 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+  });
+
+  it('expires snapshot uids after the freshness window', async () => {
+    let now = 1_000;
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({
+      chromeApi: chromeStub as unknown as typeof chrome,
+      now: () => now,
+    });
+
+    const lease = await captureSnapshotLease(service);
+    now += 30_001;
+    const result = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 12 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+  });
+
+  it('clears snapshot uids after actions when post-action snapshots are disabled', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+        includeSnapshotAfterActions: false,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    await expect(service.execute('browser_click', { ...lease, uid: 'e2' })).resolves.toMatchObject({ ok: true });
+    const secondClick = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+    expect(secondClick.ok).toBe(false);
+    expect(secondClick.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand.mock.calls.filter((call) => call[1] === 'Accessibility.getFullAXTree')).toHaveLength(1);
+  });
+
+  it('clears snapshot uids after handling dialogs when post-action snapshots are disabled', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+        includeSnapshotAfterActions: false,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    chromeStub.emitDebuggerEvent(
+      { tabId: 12 },
+      'Page.javascriptDialogOpening',
+      { type: 'alert', message: 'Confirm action' },
+    );
+    await expect(service.execute('browser_handle_dialog', { accept: true })).resolves.toMatchObject({ ok: true });
+    const click = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+    expect(click.ok).toBe(false);
+    expect(click.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand.mock.calls.filter((call) => call[1] === 'Accessibility.getFullAXTree')).toHaveLength(1);
+  });
+
+  it('clears old snapshot uids if a post-action snapshot fails', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+        includeSnapshotAfterActions: true,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    chromeStub.failNextAccessibilitySnapshot();
+    const firstClick = await service.execute('browser_click', { ...lease, uid: 'e2' });
+    expect(firstClick.ok).toBe(false);
+
+    const secondClick = await service.execute('browser_click', { ...lease, uid: 'e2' });
+    expect(secondClick.ok).toBe(false);
+    expect(secondClick.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand.mock.calls.filter((call) => call[1] === 'DOM.resolveNode')).toHaveLength(1);
+  });
+
+	  it('clears old snapshot uids before a new direct snapshot attempt can fail', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({
+        id: 12,
+        active: true,
+        url: 'https://example.com/',
+        title: 'Example',
+      }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    chromeStub.failNextAccessibilitySnapshot();
+    const failedSnapshot = await service.execute('browser_snapshot', {});
+    expect(failedSnapshot.ok).toBe(false);
+
+    const click = await service.execute('browser_click', { ...lease, uid: 'e2' });
+    expect(click.ok).toBe(false);
+    expect(click.error?.code).toBe('browser_uid_not_found');
+	    expect(chromeStub.debugger.sendCommand.mock.calls.filter((call) => call[1] === 'DOM.resolveNode')).toHaveLength(0);
+	  });
+
+	  it('clears snapshot uids after a mutating uid action fails', async () => {
+	    const storage = new Map<string, unknown>([[
+	      BROWSER_CONTROL_STORAGE_KEY,
+	      {
+	        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+	        enabled: true,
+	        targetTabId: 12,
+	      },
+	    ]]);
+	    const chromeStub = createChromeStub(storage, [
+	      createTab({
+	        id: 12,
+	        active: true,
+	        url: 'https://example.com/',
+	        title: 'Example',
+	      }),
+	    ]);
+	    vi.stubGlobal('chrome', chromeStub);
+	    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+	    const lease = await captureSnapshotLease(service);
+	    chromeStub.failNextRuntimeCallFunctionOn();
+	    const failedFill = await service.execute('browser_fill', { ...lease, uid: 'e2', value: 'probe' });
+	    const resolveCountAfterFailedFill = chromeStub.debugger.sendCommand.mock.calls
+	      .filter((call) => call[1] === 'DOM.resolveNode')
+	      .length;
+
+	    expect(failedFill.ok).toBe(false);
+	    expect(failedFill.error?.code).toBe('browser_dom_call_failed');
+
+	    const click = await service.execute('browser_click', { ...lease, uid: 'e2' });
+	    expect(click.ok).toBe(false);
+	    expect(click.error?.code).toBe('browser_uid_not_found');
+	    expect(chromeStub.debugger.sendCommand.mock.calls.filter((call) => call[1] === 'DOM.resolveNode')).toHaveLength(
+	      resolveCountAfterFailedFill,
+	    );
+	  });
+
+	  it('rejects snapshot uids after debugger detach invalidates the lease', async () => {
+	    const storage = new Map<string, unknown>([[
+	      BROWSER_CONTROL_STORAGE_KEY,
+	      {
+	        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+	        enabled: true,
+	        targetTabId: 12,
+	      },
+	    ]]);
+	    const chromeStub = createChromeStub(storage, [
+	      createTab({
+	        id: 12,
+	        active: true,
+	        url: 'https://example.com/',
+	        title: 'Example',
+	      }),
+	    ]);
+	    vi.stubGlobal('chrome', chromeStub);
+	    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+	    const lease = await captureSnapshotLease(service);
+	    chromeStub.emitDebuggerDetach({ tabId: 12 }, 'target_closed');
+	    const result = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+	    expect(result.ok).toBe(false);
+	    expect(result.error?.code).toBe('browser_uid_not_found');
+	    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+	      { tabId: 12 },
+	      'DOM.resolveNode',
+	      expect.anything(),
+	    );
+	  });
+
+	  it('rejects snapshot uids after same-url page lifecycle invalidates the lease', async () => {
+	    const storage = new Map<string, unknown>([[
+	      BROWSER_CONTROL_STORAGE_KEY,
+	      {
+	        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+	        enabled: true,
+	        targetTabId: 12,
+	      },
+	    ]]);
+	    const chromeStub = createChromeStub(storage, [
+	      createTab({
+	        id: 12,
+	        active: true,
+	        url: 'https://example.com/',
+	        title: 'Example',
+	      }),
+	    ]);
+	    vi.stubGlobal('chrome', chromeStub);
+	    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+	    const lease = await captureSnapshotLease(service);
+	    chromeStub.emitDebuggerEvent({ tabId: 12 }, 'Page.frameNavigated', {});
+	    const result = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+	    expect(result.ok).toBe(false);
+	    expect(result.error?.code).toBe('browser_uid_not_found');
+	    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+	      { tabId: 12 },
+	      'DOM.resolveNode',
+	      expect.anything(),
+	    );
+	  });
+
+	  it('rejects old snapshot uids after switching to another same-origin target', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, url: 'https://example.com/a', title: 'Example A' }),
+      createTab({ id: 34, active: false, url: 'https://example.com/b', title: 'Example B' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    await service.setTarget(34);
+    const result = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 34 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+  });
+
+  it('rejects old snapshot uids after switching away and back to the same tab', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        enabled: true,
+        targetTabId: 12,
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, url: 'https://example.com/a', title: 'Example A' }),
+      createTab({ id: 34, active: false, url: 'https://other.example/', title: 'Other' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+
+    const lease = await captureSnapshotLease(service);
+    await service.setTarget(34);
+    await service.setTarget(12);
+    const result = await service.execute('browser_click', { ...lease, uid: 'e2' });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('browser_uid_not_found');
+    expect(chromeStub.debugger.sendCommand).not.toHaveBeenCalledWith(
+      { tabId: 12 },
+      'DOM.resolveNode',
+      expect.anything(),
+    );
+  });
+
   it('reacquires a stale target from the last safe target hint', async () => {
     const storage = new Map<string, unknown>([[
       BROWSER_CONTROL_STORAGE_KEY,
@@ -309,6 +792,36 @@ describe('browser control settings and descriptors', () => {
 
     expect(preparation.status).toBe('ready');
     expect(preparation.target?.id).toBe(12);
+  });
+
+  it('does not rewrite settings for an already ready selected target', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 12,
+        lastTargetHint: {
+          windowId: 1,
+          origin: 'https://example.com',
+          title: 'Example',
+          updatedAt: 123,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'Example', url: 'https://example.com/' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+    chromeStub.storage.local.set.mockClear();
+
+    const preparation = await service.preparePersonalTarget();
+
+    expect(preparation.status).toBe('ready');
+    expect(chromeStub.storage.local.set).not.toHaveBeenCalled();
+    expect(storage.get(BROWSER_CONTROL_STORAGE_KEY)).toMatchObject({
+      lastTargetHint: expect.objectContaining({ updatedAt: 123 }),
+    });
   });
 
   it('types into an explicitly selected DeepSeek chat tab', async () => {
@@ -491,6 +1004,43 @@ describe('browser control settings and descriptors', () => {
     expect(JSON.stringify(storage.get(BROWSER_CONTROL_STORAGE_KEY))).not.toMatch(/path|token=secret/);
   });
 
+  it('does not rewrite settings for an already ready locked target', async () => {
+    const storage = new Map<string, unknown>([[
+      BROWSER_CONTROL_STORAGE_KEY,
+      {
+        ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+        targetTabId: 34,
+        targetLock: {
+          enabled: true,
+          label: 'Dev++',
+          targetTabId: 34,
+          windowId: 2,
+          groupId: 7,
+          origin: 'https://locked.example',
+          updatedAt: 456,
+        },
+        lastTargetHint: {
+          windowId: 2,
+          origin: 'https://locked.example',
+          title: '',
+          updatedAt: 456,
+        },
+      },
+    ]]);
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 34, active: false, title: 'Locked', url: 'https://locked.example/path?token=secret', windowId: 2, groupId: 7 }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+    chromeStub.storage.local.set.mockClear();
+
+    const preparation = await service.preparePersonalTarget({ allowActiveFallback: true });
+
+    expect(preparation.status).toBe('ready');
+    expect(chromeStub.storage.local.set).not.toHaveBeenCalled();
+    expect(JSON.stringify(storage.get(BROWSER_CONTROL_STORAGE_KEY))).not.toMatch(/path|token=secret/);
+  });
+
   it('does not silently choose among ambiguous locked-origin targets', async () => {
     const storage = new Map<string, unknown>([[
       BROWSER_CONTROL_STORAGE_KEY,
@@ -566,6 +1116,9 @@ describe('browser control settings and descriptors', () => {
 describe('browser accessibility snapshot formatter', () => {
   it('formats AX nodes with stable element ids and backend node mapping', () => {
     const snapshot = formatAccessibilitySnapshot({
+      snapshotId: 'snapshot-1',
+      targetLeaseId: 'target-lease-1',
+      capturedAt: 123,
       url: 'https://example.com/',
       title: 'Example',
       maxNodes: 20,
@@ -576,6 +1129,11 @@ describe('browser accessibility snapshot formatter', () => {
       ],
     });
 
+    expect(snapshot.result.snapshotId).toBe('snapshot-1');
+    expect(snapshot.result.targetLeaseId).toBe('target-lease-1');
+    expect(snapshot.result.capturedAt).toBe(123);
+    expect(snapshot.result.text).toContain('Snapshot ID: snapshot-1');
+    expect(snapshot.result.text).toContain('Target Lease ID: target-lease-1');
     expect(snapshot.result.text).toContain('URL: https://example.com/');
     expect(snapshot.result.text).toContain('[e2] button "Submit"');
     expect(snapshot.uidToBackendNodeId.get('e2')).toBe(42);
@@ -583,6 +1141,9 @@ describe('browser accessibility snapshot formatter', () => {
 
   it('truncates snapshots by node and text budgets', () => {
     const snapshot = formatAccessibilitySnapshot({
+      snapshotId: 'snapshot-2',
+      targetLeaseId: 'target-lease-2',
+      capturedAt: 456,
       url: 'https://example.com/',
       title: 'Example',
       maxNodes: 1,
@@ -837,6 +1398,22 @@ function createTab(overrides: Partial<chrome.tabs.Tab> & { id: number }): chrome
   };
 }
 
+async function captureSnapshotLease(service: BrowserControlService): Promise<{
+  snapshotId: string;
+  targetLeaseId: string;
+}> {
+  const snapshot = await service.execute('browser_snapshot', {});
+  expect(snapshot).toMatchObject({ ok: true });
+  const snapshotId = snapshot.output?.snapshotId;
+  const targetLeaseId = snapshot.output?.targetLeaseId;
+  expect(typeof snapshotId).toBe('string');
+  expect(typeof targetLeaseId).toBe('string');
+  return {
+    snapshotId: snapshotId as string,
+    targetLeaseId: targetLeaseId as string,
+  };
+}
+
 function createRect(input: {
   left: number;
   top: number;
@@ -864,11 +1441,42 @@ function createChromeStub(
 ) {
   let nextTabId = 100;
   let attachedTabId: number | null = null;
+  let failAccessibilitySnapshot = false;
+  let failRuntimeCallFunctionOn = false;
+  let debuggerDetachListener: ((
+    source: chrome.debugger.Debuggee,
+    reason: string,
+  ) => void) | null = null;
+  let debuggerEventListener: ((
+    source: chrome.debugger.Debuggee,
+    method: string,
+    params?: unknown,
+  ) => void) | null = null;
   const tabs = new Map<number, chrome.tabs.Tab>(
     initialTabs.map((tab) => [tab.id!, { ...tab }]),
   );
 
   return {
+    emitDebuggerEvent(
+      source: chrome.debugger.Debuggee,
+      method: string,
+      params?: unknown,
+    ) {
+      debuggerEventListener?.(source, method, params);
+    },
+    emitDebuggerDetach(
+      source: chrome.debugger.Debuggee,
+      reason: string,
+    ) {
+      if (source.tabId === attachedTabId) attachedTabId = null;
+      debuggerDetachListener?.(source, reason);
+    },
+    failNextAccessibilitySnapshot() {
+      failAccessibilitySnapshot = true;
+    },
+    failNextRuntimeCallFunctionOn() {
+      failRuntimeCallFunctionOn = true;
+    },
     runtime: {
       id: 'extension-id',
       sendMessage: vi.fn(),
@@ -903,10 +1511,50 @@ function createChromeStub(
         if (method === 'Page.captureScreenshot') {
           return { data: btoa('probe') };
         }
+        if (method === 'Accessibility.getFullAXTree') {
+          if (failAccessibilitySnapshot) {
+            failAccessibilitySnapshot = false;
+            throw new Error('AX tree unavailable.');
+          }
+          return {
+            nodes: [
+              { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Example' }, childIds: ['2'] },
+              { nodeId: '2', role: { value: 'button' }, name: { value: 'Submit' }, backendDOMNodeId: 42 },
+            ],
+          };
+        }
+        if (method === 'DOM.resolveNode') {
+          return { object: { objectId: `node-${params?.backendNodeId ?? 'unknown'}` } };
+        }
+        if (method === 'Runtime.callFunctionOn') {
+          if (failRuntimeCallFunctionOn) {
+            failRuntimeCallFunctionOn = false;
+            return {
+              exceptionDetails: {
+                text: 'DOM call failed.',
+                exception: { description: 'Synthetic DOM mutation failure.' },
+              },
+            };
+          }
+          return {
+            result: {
+              type: 'object',
+              value: { x: 60, y: 120, width: 80, height: 40, visible: true },
+            },
+          };
+        }
         return {};
       }),
-      onDetach: { addListener: vi.fn() },
-      onEvent: { addListener: vi.fn() },
+      onDetach: {
+        addListener: vi.fn((listener: typeof debuggerDetachListener) => {
+          debuggerDetachListener = listener;
+        }),
+      },
+      onEvent: {
+        addListener: vi.fn((listener: typeof debuggerEventListener) => {
+          debuggerEventListener = listener;
+        }),
+      },
     },
     tabs: {
       query: vi.fn(async (queryInfo: chrome.tabs.QueryInfo = {}) => {

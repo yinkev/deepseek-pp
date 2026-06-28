@@ -11,10 +11,13 @@ import {
 import {
   LEGACY_TOOL_CALLS_CLOSE_TAG,
   LEGACY_TOOL_CALLS_OPEN_TAG,
+  LEGACY_XML_TOOL_CALLS_CLOSE_TAG,
+  LEGACY_XML_TOOL_CALLS_OPEN_TAG,
 } from './tool-parser';
 
 const INTERNAL_TOOL_RESULTS_OPEN_TAG = '[TOOL_RESULTS]';
 const INTERNAL_TOOL_RESULTS_CLOSE_TAG = '[/TOOL_RESULTS]';
+const LEGACY_XML_TOOL_CALLS_TOOL_NAME = 'tool_calls';
 
 export interface StreamingToolTextAccumulator {
   append(chunk: string): string;
@@ -52,6 +55,11 @@ class ToolTextAccumulator implements StreamingToolTextAccumulator {
       key: 'legacy:dsml-tool-calls',
       openTag: LEGACY_TOOL_CALLS_OPEN_TAG,
       closeTag: LEGACY_TOOL_CALLS_CLOSE_TAG,
+    });
+    this.suppressionTargets.push({
+      key: `xml:${LEGACY_XML_TOOL_CALLS_TOOL_NAME}`,
+      openTag: LEGACY_XML_TOOL_CALLS_OPEN_TAG,
+      closeTag: LEGACY_XML_TOOL_CALLS_CLOSE_TAG,
     });
     this.suppressionTargets.push({
       key: 'internal:tool-results',

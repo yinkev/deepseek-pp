@@ -1,5 +1,8 @@
 import type { SSEEvent } from '../types';
 
+const STRUCTURED_RESPONSE_CHILD_KEYS = ['parts', 'fragments', 'segments', 'children', 'contents'] as const;
+const STRUCTURED_RESPONSE_TEXT_KEYS = ['content', 'text', 'markdown', 'value', 'message', 'body'] as const;
+
 export interface ResponseStreamUsageStats {
   modelType?: string | null;
   insertedAt?: number | null;
@@ -119,6 +122,8 @@ export function extractResponseTextFromParsed(parsed: any): string | null {
       .join('');
     return text.length > 0 ? text : null;
   }
+  const responseObjectText = extractResponseObjectText(parsed);
+  if (responseObjectText) return responseObjectText;
   if (!parsed.p && typeof parsed.v === 'string') {
     return parsed.v;
   }
@@ -184,7 +189,87 @@ function extractFragmentText(fragment: unknown): string | null {
   const value = fragment as Record<string, unknown>;
   if (typeof value.content === 'string') return value.content;
   if (typeof value.text === 'string') return value.text;
+  if (typeof value.markdown === 'string') return value.markdown;
   return null;
+}
+
+function extractResponseObjectText(parsed: any): string | null {
+  const response = getResponseObject(parsed);
+  if (!response) return null;
+
+  const direct = firstString(
+    response.content,
+    response.text,
+    response.markdown,
+    response.answer,
+  );
+  if (direct) return direct;
+
+  if (Array.isArray(response.fragments)) {
+    const text = response.fragments
+      .map((fragment: unknown) => extractFragmentText(fragment))
+      .filter((part: string | null): part is string => part !== null)
+      .join('');
+    if (text.length > 0) return text;
+  }
+
+  const structured = [
+    response.message_content,
+    response.messageContent,
+  ]
+    .map((part) => extractStructuredResponseText(part))
+    .filter((part: string | null): part is string => part !== null)
+    .join('');
+  if (structured.length > 0) return structured;
+
+  return null;
+}
+
+function extractStructuredResponseText(value: unknown): string | null {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    const text = value
+      .map((item) => extractStructuredResponseText(item))
+      .filter((part: string | null): part is string => part !== null)
+      .join('');
+    return text.length > 0 ? text : null;
+  }
+  if (!isRecord(value)) return null;
+
+  const direct = firstString(...STRUCTURED_RESPONSE_TEXT_KEYS.map((key) => value[key]));
+  if (direct) return direct;
+
+  for (const key of STRUCTURED_RESPONSE_CHILD_KEYS) {
+    const text = extractStructuredResponseText(value[key]);
+    if (text) return text;
+  }
+  return null;
+}
+
+function getResponseObject(parsed: any): Record<string, unknown> | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  if (isRecord(parsed.response)) return parsed.response;
+
+  if (parsed.p === 'response' && isRecord(parsed.v)) return parsed.v;
+
+  if (!parsed.p && isRecord(parsed.v)) {
+    const value = parsed.v as Record<string, unknown>;
+    if (isRecord(value.response)) return value.response;
+  }
+
+  return null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 export function isStreamFinishedFromParsed(parsed: any): boolean {

@@ -145,6 +145,9 @@ export interface BrowserSnapshotNode {
 }
 
 export interface BrowserSnapshotResult {
+  snapshotId: string;
+  targetLeaseId: string;
+  capturedAt: number;
   url: string;
   title: string;
   text: string;

@@ -1,0 +1,86 @@
+{
+  "run_id": "run-20260622-111535",
+  "generated_at": "2026-06-22T11:40:00Z",
+  "unknowns": [
+    {
+      "id": "U-001",
+      "category": "intent",
+      "description": "Sandbox CSP allows 'unsafe-inline' - is this intentional for srcdoc HTML execution or a security concern?",
+      "evidence": "wxt.config.ts:17: 'unsafe-inline' in SANDBOX_CSP; scripts/manifest-policy-check.mjs:73 asserts this is present",
+      "impact": "Sandbox pages can execute inline scripts; extension pages cannot (verified by policy check)",
+      "status": "observed-only"
+    },
+    {
+      "id": "U-002",
+      "category": "behavior",
+      "description": "Web search tool has no existing tests - is web search a core feature or optional/experimental?",
+      "evidence": "core/tool/web-search.ts, core/tool/web-settings.ts - no test files found",
+      "impact": "Web search feature has no regression protection",
+      "status": "unknown"
+    },
+    {
+      "id": "U-003",
+      "category": "behavior",
+      "description": "Preset system has no existing tests - is preset injection critical or cosmetic?",
+      "evidence": "entrypoints/sidepanel/pages/PresetPage.tsx - no test files found",
+      "impact": "Preset system has no regression protection",
+      "status": "unknown"
+    },
+    {
+      "id": "U-004",
+      "category": "behavior",
+      "description": "Saved items system has no existing tests - is this a core feature?",
+      "evidence": "entrypoints/sidepanel/pages/SavedPage.tsx - no test files found",
+      "impact": "Saved items feature has no regression protection",
+      "status": "unknown"
+    },
+    {
+      "id": "U-005",
+      "category": "security",
+      "description": "Optional host permissions '<all_urls>' is granted - what triggers this and is it properly gated?",
+      "evidence": "wxt.config.ts:56, scripts/manifest-policy-check.mjs:34",
+      "impact": "Extension may request broad host access",
+      "status": "observed-only"
+    },
+    {
+      "id": "U-006",
+      "category": "behavior",
+      "description": "XmlToolStreamFilter handles multiple SSE patch formats (BATCH, fragment creation, direct patches) - is the full set documented?",
+      "evidence": "core/interceptor/fetch-hook.ts:422-604 - complex patch format handling",
+      "impact": "Future DeepSeek API changes could break stream filtering",
+      "status": "observed-only"
+    },
+    {
+      "id": "U-007",
+      "category": "behavior",
+      "description": "Automation chain depth limit - what is the actual limit and is it enforced consistently?",
+      "evidence": "core/automation/types.ts:72 - maxDepth in AutomationChainPolicy",
+      "impact": "Potential infinite automation chains if limit not enforced",
+      "status": "unknown"
+    },
+    {
+      "id": "U-008",
+      "category": "behavior",
+      "description": "Sidepanel chat mutex (sidepanelChatSubmitPromise) - what happens on concurrent submissions?",
+      "evidence": "entrypoints/background.ts - sidepanelChatSubmitPromise mutex",
+      "impact": "User may see delayed or dropped messages",
+      "status": "observed-only"
+    },
+    {
+      "id": "U-009",
+      "category": "security",
+      "description": "Pyodide sandbox allows 'unsafe-eval' - is this required for Python execution?",
+      "evidence": "wxt.config.ts:17: 'unsafe-eval' in SANDBOX_CSP",
+      "impact": "Sandbox can execute arbitrary Python code",
+      "status": "observed-only"
+    },
+    {
+      "id": "U-010",
+      "category": "behavior",
+      "description": "Tool execution history truncates outputs - is this compatible with large browser control snapshots?",
+      "evidence": "docs/analysis/risk-assessment.md:91 - tool execution history truncates outputs",
+      "impact": "Large AX tree snapshots may be truncated in history",
+      "status": "observed-only"
+    }
+  ]
+}

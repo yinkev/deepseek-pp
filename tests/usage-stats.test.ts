@@ -87,6 +87,40 @@ describe('usage store', () => {
     expect(summary.totalTokens).toBe(3302);
     expect(summary.serverTokenRecordCount).toBe(1);
     expect(summary.mostUsedModel?.modelLabel).toBe('DeepSeek Vision');
+    expect(chromeStub.storage.local.set).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not rewrite storage for duplicate speed-only updates', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 18, 12));
+
+    await recordUsageTurn({
+      id: 'req-1',
+      source: 'deepseek-web',
+      totalTokens: 3302,
+      tokenSource: 'server',
+      tps: 1061.7,
+      speedSource: 'server',
+      elapsedMs: 3110,
+      modelType: 'vision',
+    });
+    await recordUsageTurn({
+      id: 'req-1',
+      source: 'deepseek-web',
+      totalTokens: 3302,
+      tokenSource: 'server',
+      tps: 2982.4,
+      speedSource: 'server',
+      elapsedMs: 11000,
+      modelType: 'vision',
+    });
+
+    const summary = await getUsageSummary(30);
+    expect(summary.turnCount).toBe(1);
+    expect(summary.totalTokens).toBe(3302);
+    expect(chromeStub.storage.local.set).toHaveBeenCalledTimes(1);
   });
 });
 

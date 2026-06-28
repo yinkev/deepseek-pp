@@ -43,6 +43,7 @@ export interface DeepSeekHistorySnapshot {
   chatSessionId: string;
   parentMessageId: number | null;
   assistantMessageId: number | null;
+  assistantText: string;
   messageCount: number;
   verifiedAt: number;
 }
@@ -51,6 +52,7 @@ interface DeepSeekHistoryMessage {
   id: number | null;
   parentId: number | null;
   role: string | null;
+  text: string;
 }
 
 export interface SubmitPromptInput {
@@ -152,6 +154,8 @@ export async function createPowHeaders(
       })),
     };
   } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    if (err instanceof Error && err.name === 'AbortError') throw err;
     if (err instanceof DeepSeekPowError) throw err;
     if (err instanceof DeepSeekAuthError) throw err;
     throw new DeepSeekPowError(err instanceof Error ? err.message : String(err));
@@ -330,7 +334,7 @@ export interface ReadHistorySnapshotOptions {
 
 export async function readHistorySnapshot(
   chatSessionId: string,
-  expectedAssistantMessageId: number,
+  expectedAssistantMessageId: number | null,
   options?: ReadHistorySnapshotOptions,
 ): Promise<DeepSeekHistorySnapshot | null> {
   const clientHeaders = options?.clientHeaders ?? createClientHeaders();
@@ -358,16 +362,19 @@ export async function readHistorySnapshot(
     .filter((message: DeepSeekHistoryMessage): message is DeepSeekHistoryMessage => message.id !== null);
   if (messages.length === 0) return null;
 
-  const expected = messages.find((message) => message.id === expectedAssistantMessageId);
+  const expected = expectedAssistantMessageId === null
+    ? null
+    : messages.find((message) => message.id === expectedAssistantMessageId);
   const latestAssistant =
     expected ??
-    [...messages].reverse().find((message) => message.role !== 'user') ??
-    messages[messages.length - 1];
+    [...messages].reverse().find((message) => message.role !== 'user');
+  if (!latestAssistant) return null;
 
   return {
     chatSessionId,
     parentMessageId: latestAssistant.id,
     assistantMessageId: latestAssistant.id,
+    assistantText: latestAssistant.text,
     messageCount: messages.length,
     verifiedAt: Date.now(),
   };
@@ -530,11 +537,18 @@ function collectMessageIds(parsed: unknown, summary: ModelTurn) {
   if (!parsed || typeof parsed !== 'object') return;
   const value = parsed as Record<string, unknown>;
 
-  const responseId = firstMessageId(value.response_message_id, value.responseMessageId);
+  const responseId = firstMessageId(
+    value.response_message_id,
+    value.responseMessageId,
+    value.message_id,
+    value.messageId,
+  );
   if (responseId !== null) summary.responseMessageId = responseId;
 
   const requestId = firstMessageId(value.request_message_id, value.requestMessageId);
   if (requestId !== null) summary.requestMessageId = requestId;
+
+  collectResponseObjectMessageId(value, summary);
 
   if (value.o === 'BATCH' && Array.isArray(value.v)) {
     for (const item of value.v) collectMessageIds(item, summary);
@@ -558,13 +572,69 @@ function collectMessageIds(parsed: unknown, summary: ModelTurn) {
   }
 }
 
+function collectResponseObjectMessageId(value: Record<string, unknown>, summary: ModelTurn) {
+  const response = getResponseObjectForMessageId(value);
+  if (!response) return;
+  const id = firstMessageId(response.message_id, response.messageId, response.id);
+  if (id !== null) summary.responseMessageId = id;
+}
+
+function getResponseObjectForMessageId(value: Record<string, unknown>): Record<string, unknown> | null {
+  if (value.response && typeof value.response === 'object' && !Array.isArray(value.response)) {
+    return value.response as Record<string, unknown>;
+  }
+  if (value.p === 'response' && value.v && typeof value.v === 'object' && !Array.isArray(value.v)) {
+    return value.v as Record<string, unknown>;
+  }
+  return null;
+}
+
 function normalizeHistoryMessage(raw: unknown): DeepSeekHistoryMessage {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   return {
     id: firstMessageId(value.message_id, value.id, value.uuid),
     parentId: firstMessageId(value.parent_id, value.parent_message_id, value.parentMessageId),
     role: firstString(value.message_role, value.role)?.toLowerCase() ?? null,
+    text: extractHistoryMessageText(value),
   };
+}
+
+function extractHistoryMessageText(value: Record<string, unknown>): string {
+  const direct = firstString(
+    value.content_text,
+    value.contentText,
+    value.text,
+    value.answer,
+    value.markdown,
+  );
+  if (direct) return direct;
+
+  const text = [
+    value.fragments,
+    value.content,
+    value.message_content,
+    value.messageContent,
+  ]
+    .map((part) => extractHistoryContentText(part))
+    .filter((part): part is string => Boolean(part))
+    .join('');
+  return text;
+}
+
+function extractHistoryContentText(part: unknown): string | null {
+  if (typeof part === 'string') return part;
+  if (Array.isArray(part)) {
+    const text = part
+      .map((item) => extractHistoryContentText(item))
+      .filter((item): item is string => Boolean(item))
+      .join('');
+    return text || null;
+  }
+  if (!part || typeof part !== 'object') return null;
+  const value = part as Record<string, unknown>;
+  const direct = firstString(value.content, value.text, value.markdown, value.value, value.message, value.body);
+  if (direct) return direct;
+  return extractHistoryContentText(value.parts ?? value.fragments ?? value.segments ?? value.children ?? value.contents);
 }
 
 function readDeepSeekUserToken(): string | null {

@@ -89,6 +89,8 @@ const EFFORT_OPTIONS: Array<{ value: OfficialDeepSeekReasoningEffort; labelKey: 
 ];
 const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
 const STREAM_BUFFER_FLUSH_MS = 32;
+const CHAT_STREAM_WATCHDOG_MS = 110_000;
+const CURRENT_TAB_CAPTURE_ORIGINS = ['<all_urls>'];
 
 export default function ChatPage() {
   const { t } = useI18n();
@@ -119,6 +121,7 @@ export default function ChatPage() {
   const pendingImageSubmissionRef = useRef<PendingImageSubmission | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceSettingsRef = useRef<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
+  const streamWatchdogRef = useRef<number | null>(null);
   const voiceCapabilities = detectVoiceCapabilities(window);
 
   const imageUploadEnabled = authStatus?.hasToken === true;
@@ -148,6 +151,15 @@ export default function ChatPage() {
   function appendAssistantText(text: string) {
     streamBufferRef.current.text += text;
     scheduleAssistantStreamFlush();
+  }
+
+  function getTerminalAssistantTextDelta(text: string): string {
+    const last = messagesRef.current[messagesRef.current.length - 1];
+    const visibleText = `${last?.role === 'assistant' ? last.text : ''}${streamBufferRef.current.text}`;
+    if (!visibleText) return text;
+    if (text.startsWith(visibleText)) return text.slice(visibleText.length);
+    if (visibleText.endsWith(text)) return '';
+    return text;
   }
 
   function appendAssistantReasoning(reasoningText: string) {
@@ -213,6 +225,7 @@ export default function ChatPage() {
   }, [imageAttachments]);
 
   useEffect(() => () => {
+    clearStreamWatchdog();
     if (streamFlushTimerRef.current !== null) {
       window.clearTimeout(streamFlushTimerRef.current);
       streamFlushTimerRef.current = null;
@@ -268,32 +281,21 @@ export default function ChatPage() {
       } else if (msg.streamId) {
         return;
       }
-
-      if (msg.error) {
-        flushAssistantStreamBuffer();
-        restorePendingImageSubmission();
-        setError(msg.error);
-        setIsStreaming(false);
-        if (!msg.streamId || msg.streamId === activeStreamIdRef.current) {
-          activeStreamIdRef.current = null;
-        }
-        return;
-      }
+      if (!msg.done && !msg.error) refreshStreamWatchdog();
 
       if (msg.toolEvents?.length) {
         appendAssistantToolEvents(msg.toolEvents);
       }
 
-      if (msg.done) {
+      if (msg.error) {
         flushAssistantStreamBuffer();
-        clearPendingImageSubmission();
+        finalizeRunningToolEvents(msg.error);
+        restorePendingImageSubmission();
+        setError(msg.error);
         setIsStreaming(false);
+        clearStreamWatchdog();
         if (!msg.streamId || msg.streamId === activeStreamIdRef.current) {
           activeStreamIdRef.current = null;
-        }
-        const currentVoiceSettings = voiceSettingsRef.current;
-        if (currentVoiceSettings.readAloudEnabled && voiceCapabilities.speechSynthesis) {
-          setTimeout(() => speakLatestAssistant(messagesRef.current, currentVoiceSettings), 0);
         }
         return;
       }
@@ -303,7 +305,21 @@ export default function ChatPage() {
       }
 
       if (msg.text) {
-        appendAssistantText(msg.text);
+        appendAssistantText(msg.done ? getTerminalAssistantTextDelta(msg.text) : msg.text);
+      }
+
+      if (msg.done) {
+        flushAssistantStreamBuffer();
+        clearPendingImageSubmission();
+        setIsStreaming(false);
+        clearStreamWatchdog();
+        if (!msg.streamId || msg.streamId === activeStreamIdRef.current) {
+          activeStreamIdRef.current = null;
+        }
+        const currentVoiceSettings = voiceSettingsRef.current;
+        if (currentVoiceSettings.readAloudEnabled && voiceCapabilities.speechSynthesis) {
+          setTimeout(() => speakLatestAssistant(messagesRef.current, currentVoiceSettings), 0);
+        }
       }
     };
 
@@ -374,6 +390,7 @@ export default function ChatPage() {
     const streamId = crypto.randomUUID();
     activeStreamIdRef.current = streamId;
     setError(null);
+    startStreamWatchdog(streamId);
 
     try {
       const images: DeepSeekWebVisionSerializedImage[] = [];
@@ -410,6 +427,7 @@ export default function ChatPage() {
       pendingImageSubmissionRef.current = null;
       setImageAttachments(attachments);
       setIsStreaming(false);
+      clearStreamWatchdog();
       if (activeStreamIdRef.current === streamId) {
         activeStreamIdRef.current = null;
       }
@@ -430,6 +448,7 @@ export default function ChatPage() {
     chrome.runtime.sendMessage({ type: 'CHAT_NEW_SESSION' }).catch(() => {});
     flushAssistantStreamBuffer();
     messagesRef.current = [];
+    clearStreamWatchdog();
     activeStreamIdRef.current = null;
     setMessages([]);
     setError(null);
@@ -442,6 +461,49 @@ export default function ChatPage() {
     clearPendingImageSubmission();
     inputRef.current?.focus();
   };
+
+  function startStreamWatchdog(streamId: string) {
+    clearStreamWatchdog();
+    streamWatchdogRef.current = window.setTimeout(() => {
+      if (activeStreamIdRef.current !== streamId) return;
+      flushAssistantStreamBuffer();
+      finalizeRunningToolEvents(t('sidepanel.chatPage.streamTimeoutToolStatus'));
+      restorePendingImageSubmission();
+      activeStreamIdRef.current = null;
+      setIsStreaming(false);
+      setError(t('sidepanel.chatPage.streamTimeout'));
+      streamWatchdogRef.current = null;
+    }, CHAT_STREAM_WATCHDOG_MS);
+  }
+
+  function refreshStreamWatchdog() {
+    const activeStreamId = activeStreamIdRef.current;
+    if (!activeStreamId) return;
+    startStreamWatchdog(activeStreamId);
+  }
+
+  function clearStreamWatchdog() {
+    if (streamWatchdogRef.current === null) return;
+    window.clearTimeout(streamWatchdogRef.current);
+    streamWatchdogRef.current = null;
+  }
+
+  function finalizeRunningToolEvents(timeoutSummary: string) {
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.role !== 'assistant' || !last.toolEvents?.some((event) => event.status === 'running')) {
+        return prev;
+      }
+      const next = [...prev.slice(0, -1), {
+        ...last,
+        toolEvents: last.toolEvents.map((event) => event.status === 'running'
+          ? { ...event, status: 'error' as const, summary: timeoutSummary }
+          : event),
+      }];
+      messagesRef.current = next;
+      return next;
+    });
+  }
 
   const retryLast = () => {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -545,6 +607,9 @@ export default function ChatPage() {
 
     setIsCapturingTab(true);
     try {
+      if (!(await ensureCurrentTabCapturePermission())) {
+        throw new Error(t('sidepanel.chatPage.captureCurrentTabFailed'));
+      }
       const response = await chrome.runtime.sendMessage({
         type: 'CAPTURE_CURRENT_TAB_IMAGE',
       }) as CaptureCurrentTabImageResponse | undefined;
@@ -1024,6 +1089,14 @@ function getImageFilesFromTransfer(transfer: DataTransfer | null): File[] {
   return Array.from(transfer.files ?? []).filter((file) =>
     DEEPSEEK_WEB_VISION_ACCEPTED_IMAGE_TYPES.has(file.type.toLowerCase())
   );
+}
+
+async function ensureCurrentTabCapturePermission(): Promise<boolean> {
+  if (!chrome.permissions?.contains || !chrome.permissions.request) return true;
+  const origins = CURRENT_TAB_CAPTURE_ORIGINS;
+  const granted = await chrome.permissions.contains({ origins }).catch(() => false);
+  if (granted) return true;
+  return chrome.permissions.request({ origins }).catch(() => false);
 }
 
 function normalizeAuthStatus(resp: ChatAuthStatus | undefined): ChatAuthStatus {

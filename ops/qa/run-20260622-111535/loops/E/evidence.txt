@@ -1,0 +1,15 @@
+Loop E: MCP Connection Tests (P1)
+Date: 2026-06-22
+Status: PASS
+
+File Created (1):
+1. tests/mcp-connection-lifecycle.test.ts — 22 tests
+   - McpProtocolError: code, message, retryable, details
+   - MCP_PROTOCOL_VERSION format
+   - applyMcpToolPolicy: all/allow/deny modes, invocationName matching
+   - McpServerConfig: structure, transport types, status tracking
+   - MCP tool cache: expiration, TTL
+
+Full Suite: 91 files, 743 tests — ALL PASS
+
+Grade: B

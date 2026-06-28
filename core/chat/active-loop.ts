@@ -14,14 +14,17 @@ export type ChatLoopProvider = 'web' | 'official-api';
 
 export interface ActiveChatLoop {
   active: boolean;
+  id?: string;
   startedAt: number;
   provider: ChatLoopProvider;
+  streamId?: string;
 }
 
 export interface InterruptedChatLoop {
   provider: ChatLoopProvider;
   startedAt: number;
   interruptedAt: number;
+  streamId?: string;
 }
 
 async function readMarker(): Promise<ActiveChatLoop | null> {
@@ -33,18 +36,36 @@ async function readMarker(): Promise<ActiveChatLoop | null> {
   if (marker.active !== true || typeof marker.startedAt !== 'number') return null;
   return {
     active: true,
+    id: typeof marker.id === 'string' && marker.id ? marker.id : undefined,
     startedAt: marker.startedAt,
     provider: marker.provider === 'official-api' ? 'official-api' : 'web',
+    streamId: typeof marker.streamId === 'string' && marker.streamId ? marker.streamId : undefined,
   };
 }
 
-export async function markChatLoopStarted(provider: ChatLoopProvider): Promise<void> {
-  const marker: ActiveChatLoop = { active: true, startedAt: Date.now(), provider };
+export async function markChatLoopStarted(
+  provider: ChatLoopProvider,
+  loopId: string = `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  streamId?: string,
+): Promise<string> {
+  const marker: ActiveChatLoop = {
+    active: true,
+    id: loopId,
+    startedAt: Date.now(),
+    provider,
+    ...(streamId ? { streamId } : {}),
+  };
   await chrome.storage.session.set({ [SESSION_STORAGE_KEY]: marker });
+  return loopId;
 }
 
-export async function markChatLoopFinished(): Promise<void> {
+export async function markChatLoopFinished(loopId?: string): Promise<boolean> {
+  if (loopId) {
+    const marker = await readMarker();
+    if (marker?.id && marker.id !== loopId) return false;
+  }
   await chrome.storage.session.remove(SESSION_STORAGE_KEY);
+  return true;
 }
 
 export async function getActiveChatLoop(): Promise<ActiveChatLoop | null> {
@@ -68,10 +89,11 @@ export async function reconcileInterruptedChatLoop(
   if (!marker) return null;
   if (now - marker.startedAt < STALE_THRESHOLD_MS) return null;
 
-  await markChatLoopFinished();
+  await markChatLoopFinished(marker.id);
   return {
     provider: marker.provider,
     startedAt: marker.startedAt,
     interruptedAt: now,
+    streamId: marker.streamId,
   };
 }

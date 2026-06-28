@@ -62,6 +62,41 @@ describe('DeepSeek web adapter streaming', () => {
     expect(turn.assistantText).toBe('Hello world');
   });
 
+  it('includes seed text from initial response object fragments before append patches', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => createSseResponse([
+      'event: ready\ndata: {"request_message_id":1,"model_type":"default"}',
+      'data: {"v":{"response":{"message_id":2,"fragments":[{"content":"Alpha "}]}}}',
+      'data: {"p":"response/fragments/-1/content","v":"beta gamma."}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const chunks: string[] = [];
+    const turn = await submitPromptStreaming(createSubmitInput(), {
+      onTextChunk(text) {
+        chunks.push(text);
+      },
+    });
+
+    expect(chunks.join('')).toBe('Alpha beta gamma.');
+    expect(turn.assistantText).toBe('Alpha beta gamma.');
+    expect(turn.responseMessageId).toBe(2);
+    expect(turn.finished).toBe(true);
+  });
+
+  it('accepts top-level message_id as the streamed assistant response id', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => createSseResponse([
+      'event: ready\ndata: {"request_message_id":1,"model_type":"vision"}',
+      'data: {"message_id":3,"p":"response/fragments/-1/content","v":"Vision text."}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const turn = await submitPromptStreaming(createSubmitInput(), {});
+
+    expect(turn.assistantText).toBe('Vision text.');
+    expect(turn.responseMessageId).toBe(3);
+    expect(turn.finished).toBe(true);
+  });
+
   it('emits token speed progress for bypass streaming requests', async () => {
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => now);

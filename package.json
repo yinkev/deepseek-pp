@@ -39,6 +39,7 @@
     "multimodal:install": "npx --yes deepseek-pp-multimodal-mcp",
     "smoke:pow": "node scripts/pow-smoke.mjs",
     "smoke:web": "node scripts/web-search-smoke.mjs",
+    "smoke:chrome-preflight": "node scripts/chrome-runtime-preflight.mjs",
     "prompt:freeze": "node scripts/prompt-freeze.mjs",
     "smoke:shell": "node scripts/shell-smoke.mjs",
     "smoke:mcp": "node scripts/mcp-smoke.mjs",

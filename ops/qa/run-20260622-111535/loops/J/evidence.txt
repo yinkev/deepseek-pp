@@ -1,0 +1,11 @@
+Loop J: Project Deletion Tests (P3)
+Date: 2026-06-22
+Status: PASS
+
+File Created (1):
+1. tests/project-deletion-cascade.test.ts — 5 tests
+   - Project deletion cascades to conversations
+   - Orphaned conversation detection
+   - Idempotent deletion
+
+Grade: B

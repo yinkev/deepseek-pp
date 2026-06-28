@@ -1,0 +1,173 @@
+{
+  "run_id": "run-20260622-111535",
+  "generated_at": "2026-06-22T11:35:00Z",
+  "workflows": [
+    {
+      "id": "W-001",
+      "name": "Background Service Initialization",
+      "trigger": "Extension install / browser restart",
+      "steps": [
+        "enableSidePanelActionClick() - configures chrome.sidePanel (Chromium only)",
+        "registerWhatsNewInstallListener() - marks badge on update",
+        "registerDeepSeekHeaderScrubListeners() - cleans stale auth headers",
+        "registerAutomationAlarmListener() - listens for automation wakeup",
+        "refreshBackgroundLocale() -> createContextMenus() - builds context menus",
+        "watchLocalePreference() - watches locale changes",
+        "archiveStaleMemories() - archives 90+ day untouched memories",
+        "ensureBuiltInMcpPresets() - creates Shell MCP preset if missing",
+        "ensureAutomationWakeAlarm() - creates alarm every 1 minute",
+        "reconcileInterruptedChatLoopOnWake() - detects SW-killed loops",
+        "scrubStoredClientHeaders() - removes expired auth headers",
+        "scanDueAutomationsFromWake() - runs due automations"
+      ],
+      "data_read_write": ["chrome.storage.local", "chrome.storage.session", "chrome.alarms", "chrome.contextMenus"],
+      "auth_assumptions": "Extension context alive; chrome.* APIs available",
+      "error_handling": "reportBackgroundStartupError() logs errors; all startup tasks fire-and-forget with .catch()",
+      "race_conditions": "Startup tasks run concurrently without coordination; locale may change mid-init; memory archive and MCP preset ensure are idempotent",
+      "evidence": ["entrypoints/background.ts:414-453", "entrypoints/background.ts:455-471", "entrypoints/background.ts:479-497"]
+    },
+    {
+      "id": "W-002",
+      "name": "Central Message Router",
+      "trigger": "chrome.runtime.onMessage from content scripts, sidepanel, or other extension pages",
+      "steps": [
+        "Background listener receives message + sender",
+        "handleMessage() giant switch(message.type) dispatches (~80 message types)",
+        "Each handler reads/writes specific data stores",
+        "Many write handlers call broadcastStateUpdate() to notify content scripts",
+        "Response sent via sendResponse() with structured payloads"
+      ],
+      "data_read_write": ["Virtually every data store: memories, skills, presets, MCP servers, tool descriptors, browser control settings, usage records, sync config, automations"],
+      "auth_assumptions": "Message sender has extension runtime; content scripts on chat.deepseek.com",
+      "error_handling": "createBackgroundErrorResponse() wraps errors; EXECUTE_TOOL_CALL errors return ToolResult with ok:false",
+      "race_conditions": "Multiple concurrent messages processed via separate Promise chains; sidepanelChatSubmitPromise mutex; conversationExportControllers map; sidepanelRunningToolEvents map",
+      "evidence": ["entrypoints/background.ts:651-1537", "entrypoints/background.ts:440-453"]
+    },
+    {
+      "id": "W-003",
+      "name": "Fetch Interception & Prompt Augmentation",
+      "trigger": "User sends message on chat.deepseek.com",
+      "steps": [
+        "main-world.content.ts installFetchHook() replaces window.fetch",
+        "Hooked fetch detects chat stream URL",
+        "Captures DeepSeek client headers via onHeadersCaptured",
+        "Sends AUGMENT_REQUEST_BODY message to content script",
+        "Content script resolves project context, calls augmentRequestBody()",
+        "augmentRequestBody() builds prompt augmentation: memories, tools, skills, presets",
+        "Modified body sent back to main world",
+        "Hooked fetch calls original fetch with modified body",
+        "Response intercepted: SSE chunks parsed, tool calls extracted",
+        "XmlToolStreamFilter strips XML tool blocks from visible text",
+        "RESPONSE_COMPLETE and RESPONSE_TOKEN_SPEED events broadcast"
+      ],
+      "data_read_write": ["Read: memories, skills, presets, tool descriptors, project context", "Write: memory accessCount, request message count"],
+      "auth_assumptions": "User logged into chat.deepseek.com; valid Authorization token",
+      "external_service_calls": ["DeepSeek API: POST /api/v0/chat/completion"],
+      "error_handling": "Extension invalidation guards; bridge message validation; graceful fallback to null augmentation",
+      "race_conditions": "INITIAL_HOOK_STATE_WAIT_MS 1.5s timeout; bridge polling 50ms x 100; pending augmentation UUID tracking with 8s timeout",
+      "evidence": ["core/interceptor/fetch-hook.ts:82-162", "core/interceptor/request-augmentation.ts:38-81", "entrypoints/content.ts:675-750"]
+    },
+    {
+      "id": "W-004",
+      "name": "Main World <-> Content Script Bridge",
+      "trigger": "content script + main world script both load on chat.deepseek.com",
+      "steps": [
+        "main-world polls DPP_BRIDGE_REQUEST every 50ms",
+        "Isolated-world content script listens, creates MessageChannel",
+        "Content script sends port2 to main world via DPP_BRIDGE_INIT",
+        "Main world receives port, stores as contentPort, sends BRIDGE_READY",
+        "Content script flushes pending message queue",
+        "Bidirectional communication established"
+      ],
+      "data_read_write": ["In-memory message queues; no persistent storage"],
+      "auth_assumptions": "Both scripts in same origin (chat.deepseek.com)",
+      "error_handling": "Message validation via validateBridgeMessage(); bridge disconnects trigger extensionInvalidationGuards",
+      "race_conditions": "Polling 50ms x 100 = 5s max; both start at document_start but may execute in different microtask order; port establishment one-time guarded",
+      "evidence": ["entrypoints/main-world.content.ts:86-110", "entrypoints/content.ts:632-655", "entrypoints/content.ts:657-673"]
+    },
+    {
+      "id": "W-005",
+      "name": "Tool Execution Pipeline",
+      "trigger": "EXECUTE_TOOL_CALL message from sidepanel or inline tool execution",
+      "steps": [
+        "handleMessage receives EXECUTE_TOOL_CALL with ToolCall payload",
+        "executeBackgroundRuntimeToolCall() dispatches by tool name",
+        "browser_capture_screenshot -> executeBrowserScreenshotVisionTool()",
+        "Browser control tools -> executeBrowserControlToolCall() with act-verify",
+        "All other tools -> executeRuntimeToolCall() routes to providers",
+        "Result appended to tool call history",
+        "For browser actions: maybeAttachActVerifyCapture() captures evidence"
+      ],
+      "data_read_write": ["Write: tool call history", "Read: MCP configs, browser control settings, web tool settings"],
+      "auth_assumptions": "DeepSeek auth for Vision upload; Chrome debugger for browser control; host permissions for web search",
+      "external_service_calls": ["DeepSeek Vision upload", "DeepSeek PoW challenge", "Bing search", "MCP servers", "Chrome debugger API", "Offscreen document"],
+      "error_handling": "ToolResult with ok:false and structured error; throwIfRuntimeToolAborted(); normalizeVisionCaptureToolError()",
+      "race_conditions": "AbortSignal checked at multiple points; sidepanelRunningToolEvents Map; SIDEPANEL_TOOL_CALLS_PER_STEP_LIMIT",
+      "evidence": ["entrypoints/background.ts (EXECUTE_TOOL_CALL handler)", "core/tool/runtime.ts:101-170"]
+    },
+    {
+      "id": "W-006",
+      "name": "Sidepanel Chat Flow",
+      "trigger": "User types message in sidepanel ChatPage",
+      "steps": [
+        "ChatPage receives user input",
+        "Message sent to background via sidepanelChatSubmit",
+        "Background resolves auth headers from stored DeepSeek session",
+        "Content script creates DeepSeek chat session if needed",
+        "Message forwarded to DeepSeek API via hooked fetch",
+        "Response streamed back through bridge",
+        "Tool calls detected and executed in background",
+        "Results rendered in sidepanel ChatMessage component"
+      ],
+      "data_read_write": ["chrome.storage.local (chat history)", "Tool descriptors", "Memory", "Presets"],
+      "auth_assumptions": "DeepSeek auth headers from browser session",
+      "external_service_calls": ["DeepSeek API via content script bridge"],
+      "error_handling": "sidepanelChatSubmitPromise mutex prevents parallel submissions; error rendering in ChatMessage component",
+      "race_conditions": "Chat loop interruption on page navigation; auth header expiry during long conversations",
+      "evidence": ["entrypoints/sidepanel/pages/ChatPage.tsx", "core/chat/active-loop.ts"]
+    },
+    {
+      "id": "W-007",
+      "name": "Automation Execution",
+      "trigger": "chrome.alarm wakeup or manual trigger",
+      "steps": [
+        "scanDueAutomationsFromWake() finds due automations",
+        "Automation runner prepares request with auth and prompt context",
+        "Readiness preflight checks auth, session, and tool availability",
+        "Runner creates/resumes DeepSeek session via content script",
+        "Message submitted and response streamed",
+        "Tool calls executed in background",
+        "Flight recorder captures execution trace",
+        "Run status updated in automation store",
+        "Chain policy triggers next automation if configured"
+      ],
+      "data_read_write": ["chrome.storage.local (automations, runs)", "chrome.alarms", "DeepSeek auth headers"],
+      "auth_assumptions": "DeepSeek auth headers captured from browser session; PoW challenge solving",
+      "external_service_calls": ["DeepSeek API", "Content script bridge"],
+      "error_handling": "Flight recorder captures failure phase; retry scheduling; chain depth limits",
+      "race_conditions": "Concurrent automation runs; auth header expiry; tab lifecycle during automation",
+      "evidence": ["core/automation/runner.ts", "core/automation/scheduler.ts", "core/automation/readiness.ts"]
+    },
+    {
+      "id": "W-008",
+      "name": "Browser Control Tool Execution",
+      "trigger": "AI outputs browser_* tool call in response",
+      "steps": [
+        "Tool call parsed from XML in AI response",
+        "Dispatched to executeBrowserControlToolCall()",
+        "Target tab resolved from controlled tab registry",
+        "CDP connection attached to target tab",
+        "Action executed (navigate, click, fill, snapshot, etc.)",
+        "Optional act-verify capture for evidence",
+        "Result returned with snapshot or action output",
+        "CDP connection detached or kept based on settings"
+      ],
+      "data_read_write": ["chrome.storage.local (browser control settings)", "CDP connection state", "Tab targeting state"],
+      "auth_assumptions": "Chromium browser with debugger permission; user enabled browser control",
+      "external_service_calls": ["chrome.debugger API", "chrome.tabs API", "CDP protocol"],
+      "error_handling": "Structured errors for CDP failures; stale UID errors; tab detach detection",
+      "race_conditions": "CDP connection race conditions; tab navigation during action; concurrent browser actions",
+      "evidence": ["core/browser-control/tool.ts", "core/browser-control/service.ts", "core/browser-control/cdp.ts"]
+    }
+  ]
+}

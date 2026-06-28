@@ -1,0 +1,20 @@
+Loop A: Browser Control Tests (P0)
+Date: 2026-06-22
+Status: PASS
+
+Files Created (6):
+1. tests/browser-control-cdp.test.ts — 47 tests
+2. tests/browser-control-snapshot.test.ts — 30 tests
+3. tests/browser-control-tabs.test.ts — 15 tests
+4. tests/browser-control-platform.test.ts — 25 tests
+5. tests/browser-control-lock.test.ts — 23 tests
+6. tests/browser-control-dialog.test.ts — 15 tests
+
+Total New Tests: 145
+Full Suite: 87 files, 683 tests — ALL PASS
+
+Grade: A
+Coverage: CDP attach/detach lifecycle, sendCommand, dialog state, event callbacks,
+  BrowserControlError, toBrowserControlError, AX snapshot formatting, budget truncation,
+  node filtering, uid mapping, getControllableState, tab targeting, platform detection,
+  settings normalization, target lock normalization.

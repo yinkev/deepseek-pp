@@ -29,6 +29,16 @@ type ElementHandle = {
   label: string;
 };
 
+type SnapshotUidContext = {
+  snapshotId: string;
+  targetLeaseId: string;
+  tabId: number;
+  windowId: number | null;
+  url: string;
+  origin: string;
+  capturedAt: number;
+};
+
 export type ElementPoint = {
   x: number;
   y: number;
@@ -44,17 +54,27 @@ export interface BrowserControlExecuteOptions {
 
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 const MAX_WAIT_TIMEOUT_MS = 60_000;
+const SNAPSHOT_UID_MAX_AGE_MS = 30_000;
 
 export class BrowserControlService {
   private readonly dependencies: BrowserControlDependencies;
   private readonly connection: BrowserConnection | null;
   private readonly uidToBackendNodeId = new Map<string, number>();
+  private snapshotUidContext: SnapshotUidContext | null = null;
   private lastError: string | null = null;
 
   constructor(dependencies: BrowserControlDependencies = {}) {
     this.dependencies = dependencies;
     const chromeApi = this.getChromeApi();
-    this.connection = chromeApi ? new BrowserConnection(chromeApi) : null;
+    this.connection = chromeApi
+      ? new BrowserConnection(chromeApi, {
+        onInvalidated: (_reason, tabId) => {
+          if (this.snapshotUidContext?.tabId === tabId) {
+            this.clearSnapshotUidCache();
+          }
+        },
+      })
+      : null;
   }
 
   isSupported(): boolean {
@@ -129,14 +149,18 @@ export class BrowserControlService {
       );
     }
     const current = await getBrowserControlSettings();
-    if (current.targetTabId !== tabId && this.connection?.attached) {
-      await this.connection.detach();
+    if (current.targetTabId !== tabId) {
+      await this.switchTargetLease();
     }
     await saveBrowserControlSettings({
       targetTabId: tabId,
       lastTargetHint: createTargetHint(target, this.now()),
     });
     return target;
+  }
+
+  invalidateSnapshotLease(): void {
+    this.clearSnapshotUidCache();
   }
 
   async lockCurrentTarget(label = 'Dev++'): Promise<BrowserControlTarget> {
@@ -182,6 +206,7 @@ export class BrowserControlService {
           const target = await this.getTargetOrThrow(settings.targetLock.targetTabId);
           if (matchesTargetLock(target, settings.targetLock)) {
             if (settings.targetTabId !== target.id) {
+              await this.switchTargetLease();
               await saveBrowserControlSettings({
                 targetTabId: target.id,
                 lastTargetHint: createTargetHint(target, this.now()),
@@ -189,7 +214,6 @@ export class BrowserControlService {
               });
               return { target, status: 'reacquired' };
             }
-            await saveBrowserControlSettings({ lastTargetHint: createTargetHint(target, this.now()) });
             return { target, status: 'ready' };
           }
         } catch {
@@ -200,6 +224,7 @@ export class BrowserControlService {
       const locked = findLockedTarget(targets, settings.targetLock);
       if (!locked) return { target: null, status: 'missing' };
       if (settings.targetTabId !== locked.id) {
+        await this.switchTargetLease();
         await saveBrowserControlSettings({
           targetTabId: locked.id,
           lastTargetHint: createTargetHint(locked, this.now()),
@@ -208,7 +233,6 @@ export class BrowserControlService {
         return { target: locked, status: 'reacquired' };
       }
       if (locked.controllable) {
-        await saveBrowserControlSettings({ lastTargetHint: createTargetHint(locked, this.now()) });
         return { target: locked, status: 'ready' };
       }
       return { target: locked, status: 'not_controllable' };
@@ -218,7 +242,6 @@ export class BrowserControlService {
       try {
         const target = await this.getTargetOrThrow(settings.targetTabId);
         if (target.controllable) {
-          await saveBrowserControlSettings({ lastTargetHint: createTargetHint(target, this.now()) });
           return { target, status: 'ready' };
         }
         return { target, status: 'not_controllable' };
@@ -248,6 +271,7 @@ export class BrowserControlService {
   }
 
   async detach(): Promise<void> {
+    this.clearSnapshotUidCache();
     await this.connection?.detach();
   }
 
@@ -321,6 +345,9 @@ export class BrowserControlService {
         },
       };
     } catch (error) {
+      if (shouldClearSnapshotUidCacheAfterFailedAction(name)) {
+        this.clearSnapshotUidCache();
+      }
       const normalized = normalizeError(error);
       this.lastError = normalized.message;
       return {
@@ -378,7 +405,7 @@ export class BrowserControlService {
       case 'browser_wait_for':
         return this.waitFor(payload, settings, signal);
       case 'browser_handle_dialog':
-        return this.handleDialog(payload);
+        return this.handleDialog(payload, settings);
       case 'browser_evaluate_script':
         return this.evaluateScript(payload, settings);
       default:
@@ -415,9 +442,7 @@ export class BrowserControlService {
         throw new BrowserControlError('browser_tab_create_failed', 'Chrome did not return a tab id for the new tab.');
       }
       tabId = tab.id;
-      if (this.connection?.attached) {
-        await this.connection.detach();
-      }
+      await this.switchTargetLease();
       await saveBrowserControlSettings({ targetTabId: tabId, lastTargetHint: createTabHint(tab, this.now()) });
     } else {
       tabId = await this.ensureTargetTabId(settings, { createIfMissing: true, navigateUrl: url });
@@ -511,7 +536,7 @@ export class BrowserControlService {
       ? requireInteger(payload, 'tabId')
       : await this.ensureTargetTabId(settings);
     await this.rejectDeepSeekProviderTargetAction(tabId, 'close it');
-    if (this.connection?.tabId === tabId) await this.connection.detach();
+    if (this.connection?.tabId === tabId) await this.switchTargetLease();
     await this.requireChromeApi().tabs.remove(tabId);
     if (settings.targetTabId === tabId) {
       await saveBrowserControlSettings({ targetTabId: null });
@@ -732,8 +757,10 @@ export class BrowserControlService {
     });
   }
 
-  private async handleDialog(payload: Record<string, unknown>): Promise<BrowserActionResult> {
-    const settings = await getBrowserControlSettings();
+  private async handleDialog(
+    payload: Record<string, unknown>,
+    settings: BrowserControlSettings,
+  ): Promise<BrowserActionResult> {
     const tabId = await this.ensureTargetTabId(settings);
     await this.ensureAttached(tabId);
     const dialog = this.connection!.getLatestDialog(tabId);
@@ -747,7 +774,7 @@ export class BrowserControlService {
       ...(promptText !== undefined ? { promptText } : {}),
     });
     this.connection!.clearDialog(tabId);
-    return {
+    return this.withOptionalSnapshot({
       ok: true,
       summary: accept ? 'Accepted JavaScript dialog' : 'Dismissed JavaScript dialog',
       detail: `${accept ? 'Accepted' : 'Dismissed'} ${dialog.type} dialog: ${dialog.message}`,
@@ -760,7 +787,7 @@ export class BrowserControlService {
           defaultPrompt: dialog.defaultPrompt ?? null,
         },
       },
-    };
+    }, settings);
   }
 
   private async evaluateScript(
@@ -795,6 +822,7 @@ export class BrowserControlService {
     const active = targets.find((target) => target.currentWindow && target.controllable && !isDeepSeekChatTarget(target.url))
       ?? targets.find((target) => target.controllable && !isDeepSeekChatTarget(target.url));
     if (active) {
+      await this.switchTargetLease();
       await saveBrowserControlSettings({ targetTabId: active.id, lastTargetHint: createTargetHint(active, this.now()) });
       return active.id;
     }
@@ -802,6 +830,7 @@ export class BrowserControlService {
     if (options.createIfMissing && options.navigateUrl) {
       const tab = await this.requireChromeApi().tabs.create({ url: options.navigateUrl, active: true });
       if (typeof tab.id === 'number') {
+        await this.switchTargetLease();
         await saveBrowserControlSettings({ targetTabId: tab.id, lastTargetHint: createTabHint(tab, this.now()) });
         return tab.id;
       }
@@ -855,10 +884,18 @@ export class BrowserControlService {
     const tabId = await this.ensureTargetTabId(settings);
     await this.ensureAttached(tabId);
     const tab = await this.requireChromeApi().tabs.get(tabId);
+    const capturedAt = this.now();
+    const snapshotId = this.createSnapshotId();
+    const targetLeaseId = this.createTargetLeaseId();
+    const url = tab.url ?? '';
+    this.clearSnapshotUidCache();
     const ax = await this.connection!.sendCommand<{ nodes?: unknown[] }>('Accessibility.getFullAXTree');
     const formatted = formatAccessibilitySnapshot({
       axNodes: Array.isArray(ax.nodes) ? ax.nodes as never[] : [],
-      url: tab.url ?? '',
+      snapshotId,
+      targetLeaseId,
+      capturedAt,
+      url,
       title: tab.title ?? '',
       maxNodes: settings.maxSnapshotNodes,
       maxTextBytes: settings.maxSnapshotTextBytes,
@@ -867,6 +904,15 @@ export class BrowserControlService {
     for (const [uid, backendNodeId] of formatted.uidToBackendNodeId) {
       this.uidToBackendNodeId.set(uid, backendNodeId);
     }
+    this.snapshotUidContext = {
+      snapshotId,
+      targetLeaseId,
+      tabId,
+      windowId: typeof tab.windowId === 'number' ? tab.windowId : null,
+      url,
+      origin: safeUrlOrigin(url),
+      capturedAt,
+    };
     return formatted.result;
   }
 
@@ -874,7 +920,10 @@ export class BrowserControlService {
     result: BrowserActionResult,
     settings: BrowserControlSettings,
   ): Promise<BrowserActionResult> {
-    if (!settings.includeSnapshotAfterActions) return result;
+    this.clearSnapshotUidCache();
+    if (!settings.includeSnapshotAfterActions) {
+      return result;
+    }
     const snapshot = await this.createSnapshot(settings);
     return {
       ...result,
@@ -895,17 +944,9 @@ export class BrowserControlService {
     }
 
     if (uid) {
-      let backendNodeId = this.uidToBackendNodeId.get(uid);
-      if (backendNodeId === undefined) {
-        const settings = await getBrowserControlSettings();
-        await this.createSnapshot(settings);
-        backendNodeId = this.uidToBackendNodeId.get(uid);
-      }
-      if (backendNodeId === undefined) {
-        throw new BrowserControlError('browser_uid_not_found', `Snapshot uid not found: ${uid}`, {
-          retryable: true,
-        });
-      }
+      const snapshotId = typeof payload.snapshotId === 'string' ? payload.snapshotId.trim() : '';
+      const targetLeaseId = typeof payload.targetLeaseId === 'string' ? payload.targetLeaseId.trim() : '';
+      const backendNodeId = await this.resolveSnapshotUid(uid, snapshotId, targetLeaseId);
       const resolved = await this.connection!.sendCommand<{
         object?: RuntimeRemoteObject;
       }>('DOM.resolveNode', { backendNodeId });
@@ -931,6 +972,78 @@ export class BrowserControlService {
       });
     }
     return { objectId: result.result.objectId, label: selector };
+  }
+
+  private async resolveSnapshotUid(uid: string, snapshotId: string, targetLeaseId: string): Promise<number> {
+    if (!snapshotId) {
+      throw new BrowserControlError(
+        'browser_snapshot_id_required',
+        `snapshotId from browser_snapshot is required when using uid ${uid}.`,
+        { retryable: true },
+      );
+    }
+    if (!targetLeaseId) {
+      throw new BrowserControlError(
+        'browser_target_lease_required',
+        `targetLeaseId from browser_snapshot is required when using uid ${uid}.`,
+        { retryable: true },
+      );
+    }
+    const backendNodeId = this.uidToBackendNodeId.get(uid);
+    const context = this.snapshotUidContext;
+    const tabId = this.connection?.tabId ?? null;
+    if (
+      !context ||
+      context.snapshotId !== snapshotId ||
+      context.targetLeaseId !== targetLeaseId ||
+      backendNodeId === undefined ||
+      tabId !== context.tabId
+    ) {
+      this.clearSnapshotUidCache();
+      throw this.staleSnapshotUidError(uid);
+    }
+    if (this.now() - context.capturedAt > SNAPSHOT_UID_MAX_AGE_MS) {
+      this.clearSnapshotUidCache();
+      throw this.staleSnapshotUidError(uid);
+    }
+    const tab = await this.requireChromeApi().tabs.get(context.tabId);
+    if (
+      (tab.url ?? '') !== context.url ||
+      (typeof tab.windowId === 'number' ? tab.windowId : null) !== context.windowId ||
+      safeUrlOrigin(tab.url ?? '') !== context.origin
+    ) {
+      this.clearSnapshotUidCache();
+      throw this.staleSnapshotUidError(uid);
+    }
+    return backendNodeId;
+  }
+
+  private staleSnapshotUidError(uid: string): BrowserControlError {
+    return new BrowserControlError(
+      'browser_uid_not_found',
+      `Snapshot uid is stale or not found: ${uid}. Run browser_snapshot again before using this uid.`,
+      { retryable: true },
+    );
+  }
+
+  private clearSnapshotUidCache(): void {
+    this.uidToBackendNodeId.clear();
+    this.snapshotUidContext = null;
+  }
+
+  private createSnapshotId(): string {
+    return createOpaqueId('snapshot');
+  }
+
+  private createTargetLeaseId(): string {
+    return createOpaqueId('target-lease');
+  }
+
+  private async switchTargetLease(): Promise<void> {
+    this.clearSnapshotUidCache();
+    if (this.connection?.attached) {
+      await this.connection.detach();
+    }
   }
 
   private async getElementPoint(objectId: string): Promise<ElementPoint> {
@@ -1174,6 +1287,10 @@ function requiresSelectedTarget(
   }
 }
 
+function shouldClearSnapshotUidCacheAfterFailedAction(name: BrowserControlToolName): boolean {
+  return name !== 'browser_list_tabs';
+}
+
 function readString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value : fallback;
 }
@@ -1255,6 +1372,9 @@ function asObject(value: unknown): Record<string, unknown> {
 
 function snapshotToJson(snapshot: BrowserSnapshotResult): Record<string, unknown> {
   return {
+    snapshotId: snapshot.snapshotId,
+    targetLeaseId: snapshot.targetLeaseId,
+    capturedAt: snapshot.capturedAt,
     url: snapshot.url,
     title: snapshot.title,
     text: snapshot.text,
@@ -1446,6 +1566,20 @@ function safeUrlOrigin(url: string): string {
     return '';
   }
   return '';
+}
+
+function createOpaqueId(prefix: string): string {
+  const randomUUID = globalThis.crypto?.randomUUID;
+  if (typeof randomUUID === 'function') {
+    return `${prefix}-${randomUUID.call(globalThis.crypto)}`;
+  }
+  const getRandomValues = globalThis.crypto?.getRandomValues;
+  if (typeof getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    getRandomValues.call(globalThis.crypto, bytes);
+    return `${prefix}-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  }
+  return `${prefix}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 }
 
 function isDeepSeekChatTarget(url: string): boolean {

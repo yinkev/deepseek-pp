@@ -1,4 +1,5 @@
 import { DEEPSEEK_API_URL } from '../constants';
+import { BROWSER_CONTROL_TOOL_NAMES } from '../browser-control/types';
 import type { ToolCall, ToolCallRestoreRecord, ToolCallSource, ToolDescriptor } from '../types';
 import { sanitizeInternalPromptText } from '../prompt';
 import {
@@ -34,6 +35,10 @@ const INITIAL_HOOK_STATE_WAIT_MS = 1_500;
 const DEFAULT_APP_VERSION = '2.0.0';
 const DEEPSEEK_CLIENT_PLATFORM = 'web';
 const RESPONSE_TOOL_FALLBACK_PARSE_MAX_CHARS = 120_000;
+const STREAM_RESPONSE_CHILD_KEYS = ['parts', 'fragments', 'segments', 'children', 'contents'] as const;
+const STREAM_RESPONSE_TEXT_KEYS = ['content', 'text', 'markdown', 'value', 'message', 'body'] as const;
+const LEGACY_XML_TOOL_CALLS_TOOL_NAME = 'tool_calls';
+const LEGACY_XML_TOOL_CALLS_TAG_RE = /<\s*tool_calls\s*>/;
 
 let originalFetch: typeof window.fetch;
 let initialHookStateWaitComplete = false;
@@ -374,7 +379,7 @@ function createStreamingResponseToolState(
   }
 
   function notifyLegacyFallbackToolCalls() {
-    if (fallbackTextTruncated || !fallbackText.includes('｜DSML｜')) return;
+    if (fallbackTextTruncated || !hasLegacyFallbackToolCalls(fallbackText)) return;
     for (const call of extractToolCalls(fallbackText, { descriptors })) {
       const callWithSource = { ...call, source: getSource() };
       const signature = createToolCallNotificationSignature(callWithSource);
@@ -383,6 +388,10 @@ function createStreamingResponseToolState(
       hookState.onToolCall(callWithSource);
     }
   }
+}
+
+function hasLegacyFallbackToolCalls(text: string): boolean {
+  return text.includes('｜DSML｜') || LEGACY_XML_TOOL_CALLS_TAG_RE.test(text);
 }
 
 function shouldRenderStreamingToolStart(call: ToolCall): boolean {
@@ -432,6 +441,29 @@ function getDirectPatchText(parsed: any): string | null {
     }
     return parts.length > 0 ? parts.join('') : null;
   }
+  return getResponseObjectPatchText(parsed);
+}
+
+function getResponseObjectPatchText(parsed: any): string | null {
+  const response = getResponseObjectPatch(parsed);
+  if (!response) return null;
+  if (typeof response.content === 'string') return response.content;
+  if (typeof response.text === 'string') return response.text;
+  if (typeof response.markdown === 'string') return response.markdown;
+  if (typeof response.answer === 'string') return response.answer;
+  if (Array.isArray(response.fragments)) {
+    const parts: string[] = [];
+    for (const frag of response.fragments) {
+      if (frag && typeof frag.content === 'string') parts.push(frag.content);
+      else if (frag && typeof frag.text === 'string') parts.push(frag.text);
+      else if (frag && typeof frag.markdown === 'string') parts.push(frag.markdown);
+    }
+    return parts.length > 0 ? parts.join('') : null;
+  }
+  const structured = collectResponsePatchTextEntries(response)
+    .map((entry) => entry.content)
+    .join('');
+  if (structured.length > 0) return structured;
   return null;
 }
 
@@ -471,7 +503,9 @@ function setDirectPatchText(parsed: any, value: string) {
         }
       }
     }
+    return;
   }
+  setResponseObjectPatchText(parsed, value);
 }
 
 function shouldEmitSanitizedTextPatch(parsed: any): boolean {
@@ -507,6 +541,23 @@ function getAnyDirectPatchText(parsed: any): string | null {
       else if (frag && typeof frag.text === 'string') parts.push(frag.text);
     }
     return parts.length > 0 ? parts.join('') : null;
+  }
+  return getResponseObjectPatchText(parsed);
+}
+
+function getResponseObjectPatch(parsed: any): Record<string, unknown> | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed.response && typeof parsed.response === 'object' && !Array.isArray(parsed.response)) {
+    return parsed.response as Record<string, unknown>;
+  }
+  if (parsed.p === 'response' && parsed.v && typeof parsed.v === 'object' && !Array.isArray(parsed.v)) {
+    return parsed.v as Record<string, unknown>;
+  }
+  if (!parsed.p && parsed.v && typeof parsed.v === 'object' && !Array.isArray(parsed.v)) {
+    const value = parsed.v as Record<string, unknown>;
+    if (value.response && typeof value.response === 'object' && !Array.isArray(value.response)) {
+      return value.response as Record<string, unknown>;
+    }
   }
   return null;
 }
@@ -547,6 +598,90 @@ function setAnyDirectPatchText(parsed: any, value: string) {
         }
       }
     }
+    return;
+  }
+  setResponseObjectPatchText(parsed, value);
+}
+
+function setResponseObjectPatchText(parsed: any, value: string) {
+  const response = getResponseObjectPatch(parsed);
+  if (!response) return;
+  if (typeof response.content === 'string') {
+    response.content = value;
+    return;
+  }
+  if (typeof response.text === 'string') {
+    response.text = value;
+    return;
+  }
+  if (typeof response.markdown === 'string') {
+    response.markdown = value;
+    return;
+  }
+  if (typeof response.answer === 'string') {
+    response.answer = value;
+    return;
+  }
+
+  const structuredEntries = collectResponsePatchTextEntries(response);
+  if (structuredEntries.length > 0) {
+    assignTextAcrossEntries(structuredEntries, value);
+    return;
+  }
+}
+
+function assignTextAcrossEntries(
+  entries: Array<{ owner: Record<string, unknown>; key: string; content: string }>,
+  value: string,
+) {
+  let remaining = value;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (i === entries.length - 1) {
+      entry.owner[entry.key] = remaining;
+    } else {
+      entry.owner[entry.key] = remaining.slice(0, entry.content.length);
+      remaining = remaining.slice(entry.content.length);
+    }
+  }
+}
+
+function collectResponsePatchTextEntries(
+  response: Record<string, unknown>,
+): Array<{ owner: Record<string, unknown>; key: string; content: string }> {
+  const entries: Array<{ owner: Record<string, unknown>; key: string; content: string }> = [];
+  const seen = new WeakSet<object>();
+  if (Array.isArray(response.fragments)) {
+    collectStructuredPatchTextEntries(response.fragments, entries, seen);
+  }
+  collectStructuredPatchTextEntries(response.message_content, entries, seen);
+  collectStructuredPatchTextEntries(response.messageContent, entries, seen);
+  return entries;
+}
+
+function collectStructuredPatchTextEntries(
+  value: unknown,
+  entries: Array<{ owner: Record<string, unknown>; key: string; content: string }>,
+  seen: WeakSet<object>,
+) {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectStructuredPatchTextEntries(item, entries, seen);
+    return;
+  }
+  if (typeof value !== 'object') return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  const object = value as Record<string, unknown>;
+  for (const key of STREAM_RESPONSE_TEXT_KEYS) {
+    const content = object[key];
+    if (typeof content === 'string') entries.push({ owner: object, key, content });
+  }
+
+  for (const key of STREAM_RESPONSE_CHILD_KEYS) {
+    const child = object[key];
+    if (child && typeof child !== 'string') collectStructuredPatchTextEntries(child, entries, seen);
   }
 }
 
@@ -591,11 +726,36 @@ function extractCleanResponseTextForParsing(parsed: unknown): string | null {
 function collectAssistantMessageId(parsed: unknown, current: number | null): number | null {
   if (!parsed || typeof parsed !== 'object') return current;
   const value = parsed as Record<string, unknown>;
-  const direct = normalizeMessageId(value.response_message_id) ?? normalizeMessageId(value.responseMessageId);
+  const direct = normalizeMessageId(value.response_message_id)
+    ?? normalizeMessageId(value.responseMessageId);
   if (direct !== null) return direct;
 
-  if (typeof value.p === 'string' && value.p.includes('response_message_id')) {
+  if (value.response && typeof value.response === 'object' && !Array.isArray(value.response)) {
+    const response = value.response as Record<string, unknown>;
+    const id = normalizeMessageId(response.message_id)
+      ?? normalizeMessageId(response.messageId)
+      ?? normalizeMessageId(response.id)
+      ?? collectAssistantMessageId(response, current);
+    if (id !== null) return id;
+  }
+
+  if (typeof value.p === 'string' && (
+    value.p.includes('response_message_id') ||
+    value.p.includes('responseMessageId') ||
+    value.p === 'response/message_id' ||
+    value.p === 'response/messageId' ||
+    value.p === 'response/id'
+  )) {
     const id = normalizeMessageId(value.v);
+    if (id !== null) return id;
+  }
+
+  if (value.p === 'response' && value.v && typeof value.v === 'object' && !Array.isArray(value.v)) {
+    const response = value.v as Record<string, unknown>;
+    const id = normalizeMessageId(response.message_id)
+      ?? normalizeMessageId(response.messageId)
+      ?? normalizeMessageId(response.id)
+      ?? collectAssistantMessageId(response, current);
     if (id !== null) return id;
   }
 
@@ -603,12 +763,11 @@ function collectAssistantMessageId(parsed: unknown, current: number | null): num
     return value.v.reduce((next, item) => collectAssistantMessageId(item, next), current);
   }
 
-  if (Array.isArray(value.v)) {
-    return value.v.reduce((next, item) => collectAssistantMessageId(item, next), current);
-  }
-
-  if (value.v && typeof value.v === 'object') {
-    return collectAssistantMessageId(value.v, current);
+  if (!value.p && value.v && typeof value.v === 'object' && !Array.isArray(value.v)) {
+    const wrapped = value.v as Record<string, unknown>;
+    if (wrapped.response && typeof wrapped.response === 'object' && !Array.isArray(wrapped.response)) {
+      return collectAssistantMessageId(wrapped, current);
+    }
   }
 
   return current;
@@ -695,7 +854,11 @@ export class XmlToolStreamFilter {
 
   constructor(descriptors: readonly ToolDescriptor[] = DEFAULT_TOOL_DESCRIPTORS, visiblePrompt: string = '') {
     this.visiblePrompt = visiblePrompt;
-    this.toolInvocationNameSet = new Set(createToolInvocationCatalog(descriptors).invocationNames);
+    this.toolInvocationNameSet = new Set([
+      ...createToolInvocationCatalog(descriptors).invocationNames,
+      ...BROWSER_CONTROL_TOOL_NAMES,
+      LEGACY_XML_TOOL_CALLS_TOOL_NAME,
+    ]);
   }
 
   processChunk(chunk: string, controller: ReadableStreamDefaultController<Uint8Array>) {

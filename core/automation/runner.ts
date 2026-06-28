@@ -31,7 +31,8 @@ import type {
   AutomationRunnerSuccess,
 } from './types';
 
-const AUTOMATION_MCP_CONTINUATION_LIMIT = 3;
+const DEFAULT_AUTOMATION_MCP_CONTINUATION_LIMIT = 5;
+const MAX_AUTOMATION_MCP_CONTINUATION_LIMIT = 50;
 const AUTOMATION_MISSING_TOKEN_MESSAGE =
   'DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again, then retry the automation.';
 
@@ -99,6 +100,39 @@ export async function runDeepSeekAutomation(
     );
     stream = toolLoop.stream;
     throwIfAutomationAborted(options?.signal);
+
+    const toolContinuationLimit = getAutomationToolContinuationLimit(request);
+    if (toolLoop.stopReason === 'continuation_limit_exhausted') {
+      return createAutomationRunnerFailure(
+        { chatSessionId, parentMessageId: stream.responseMessageId ?? assistantMessageId },
+        'automation_tool_continuation_limit_exceeded',
+        `Automation stopped after ${toolContinuationLimit} tool continuation turns while more tool calls were still pending.`,
+        'runner',
+        false,
+        Date.now(),
+        {
+          maxDepth: toolContinuationLimit,
+          depth: toolLoop.depth,
+          executedToolCount: toolLoop.executions.length,
+          pendingToolCallCount: toolLoop.pendingToolCallCount,
+        },
+      );
+    }
+    if (toolLoop.stopReason === 'pending_tool_calls_without_parent') {
+      return createAutomationRunnerFailure(
+        { chatSessionId, parentMessageId: stream.responseMessageId ?? assistantMessageId },
+        'automation_tool_continuation_missing_parent_message',
+        'Automation stopped because DeepSeek returned more tool calls without a response message id to continue from.',
+        'runner',
+        false,
+        Date.now(),
+        {
+          depth: toolLoop.depth,
+          executedToolCount: toolLoop.executions.length,
+          pendingToolCallCount: toolLoop.pendingToolCallCount,
+        },
+      );
+    }
 
     const completedAt = Date.now();
     const finalAssistantMessageId = stream.responseMessageId ?? assistantMessageId;
@@ -180,7 +214,13 @@ async function runAutomationToolLoop(
   clientHeaders: Record<string, string>,
   locale: SupportedLocale,
   signal?: AbortSignal,
-): Promise<{ stream: ModelTurn; executions: ToolExecutionRecord[] }> {
+): Promise<{
+  stream: ModelTurn;
+  executions: ToolExecutionRecord[];
+  stopReason: string;
+  depth: number;
+  pendingToolCallCount: number;
+}> {
   const initialTurn: ModelTurn = {
     assistantText,
     responseMessageId: assistantMessageId,
@@ -188,11 +228,19 @@ async function runAutomationToolLoop(
     finished: true,
   };
 
-  if (!options?.executeToolCall) return { stream: initialTurn, executions: [] };
+  if (!options?.executeToolCall) {
+    return {
+      stream: initialTurn,
+      executions: [],
+      stopReason: 'no_tool_calls',
+      depth: 0,
+      pendingToolCallCount: 0,
+    };
+  }
 
   const loop = await runToolContinuationLoop({
     initialTurn,
-    maxDepth: AUTOMATION_MCP_CONTINUATION_LIMIT,
+    maxDepth: getAutomationToolContinuationLimit(request),
     getAssistantText: (turn) => turn.assistantText,
     getParentMessageId: (turn) => turn.responseMessageId,
     extractToolCalls: (text) => extractToolCalls(text, {
@@ -232,7 +280,21 @@ async function runAutomationToolLoop(
     signal,
   });
 
-  return { stream: loop.turn, executions: loop.executions };
+  return {
+    stream: loop.turn,
+    executions: loop.executions,
+    stopReason: loop.stopReason,
+    depth: loop.depth,
+    pendingToolCallCount: loop.pendingToolCallCount,
+  };
+}
+
+function getAutomationToolContinuationLimit(request: AutomationRunnerRequest): number {
+  const configured = request.promptOptions.maxToolContinuationTurns;
+  if (typeof configured !== 'number' || !Number.isFinite(configured)) {
+    return DEFAULT_AUTOMATION_MCP_CONTINUATION_LIMIT;
+  }
+  return Math.max(1, Math.min(MAX_AUTOMATION_MCP_CONTINUATION_LIMIT, Math.floor(configured)));
 }
 
 function throwIfAutomationAborted(signal: AbortSignal | undefined): void {

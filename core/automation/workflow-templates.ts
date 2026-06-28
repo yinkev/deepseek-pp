@@ -23,6 +23,7 @@ export interface AutomationWorkflowTemplatePromptOptions {
   searchEnabled: boolean;
   thinkingEnabled: boolean;
   visualMonitorEnabled: boolean;
+  maxToolContinuationTurns?: number;
   refFileIds?: readonly string[];
 }
 
@@ -31,6 +32,7 @@ export interface AutomationWorkflowTemplateSchedule {
   expression: string | null;
   enabled: boolean;
   minimumIntervalMinutes?: number;
+  timeoutMs?: number;
 }
 
 export interface AutomationWorkflowTemplate {
@@ -51,6 +53,8 @@ export interface AutomationWorkflowTemplateInputOptions {
 
 const DEFAULT_TIMEZONE = 'UTC';
 const DEFAULT_MINIMUM_INTERVAL_MINUTES = 15;
+const REPAIR_LOOP_TIMEOUT_MS = 3_600_000;
+const REPAIR_LOOP_CONTINUATION_BUDGET = 25;
 
 export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[] = [
   {
@@ -72,6 +76,29 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
       'Plan the readiness checks first, then fan out across runtime, browser target, automation, Vision, and storage safety.',
       'Evaluate every blocker with evidence, review whether it is user-actionable or extension-actionable, grade the setup A through F, then iterate once with the smallest next fix.',
       'Stop when the setup is ready enough to use or when one exact user action is required. Do not delete data, change accounts, send external messages, or take irreversible actions without explicit confirmation.',
+    ]),
+  },
+  {
+    id: 'repo-repair-verify-loop',
+    copyKey: 'repoRepairVerifyLoop',
+    title: 'Repair & Verify Loop',
+    category: 'project',
+    summary: 'Long-running implementation loop that discovers gaps, patches the smallest safe slice, and verifies with evidence.',
+    cadenceLabel: 'Manual long loop',
+    schedule: manualSchedule(REPAIR_LOOP_TIMEOUT_MS),
+    promptOptions: {
+      modelType: null,
+      searchEnabled: false,
+      thinkingEnabled: true,
+      visualMonitorEnabled: true,
+      maxToolContinuationTurns: REPAIR_LOOP_CONTINUATION_BUDGET,
+    },
+    prompt: loopPrompt([
+      'Run a bounded repair-and-verification loop for this objective: [replace with objective].',
+      'Plan the objective, scope, autonomy boundary, and stop gates first, then fan out across feature inventory, user journeys, failing tests, high-risk defects, and verification commands.',
+      'Evaluate findings against source truth and command evidence, review the strongest false-positive risks, grade confidence A through F, and iterate by patching only the smallest safe slice before rerunning the relevant gates.',
+      'Stop only when no critical/high defects remain, no required verification checks are failing, no unresolved UX blockers remain, and incomplete journeys are either completed or explicitly listed as blocked.',
+      'Required artifacts: run-state, proof-ledger, defect-log, verification-matrix, coverage-summary, and final handoff. Do not claim verification without actual command, browser, or tool evidence.',
     ]),
   },
   {
@@ -280,7 +307,11 @@ export function createAutomationInputFromWorkflowTemplate(
     name: template.title,
     prompt: template.prompt,
     schedule: createScheduleFromTemplate(template.schedule, options.timezone),
-    promptOptions: createPromptOptions(route, template.promptOptions.visualMonitorEnabled),
+    promptOptions: createPromptOptions(
+      route,
+      template.promptOptions.visualMonitorEnabled,
+      template.promptOptions.maxToolContinuationTurns,
+    ),
   };
 }
 
@@ -294,18 +325,25 @@ function createScheduleFromTemplate(
     timezone,
     enabled: schedule.enabled,
     minimumIntervalMinutes: schedule.minimumIntervalMinutes ?? DEFAULT_MINIMUM_INTERVAL_MINUTES,
+    ...(typeof schedule.timeoutMs === 'number' && Number.isFinite(schedule.timeoutMs)
+      ? { timeoutMs: Math.max(1_000, Math.floor(schedule.timeoutMs)) }
+      : {}),
   };
 }
 
 function createPromptOptions(
   route: ReturnType<typeof createDeepSeekWebVisionRoute>,
   visualMonitorEnabled: boolean,
+  maxToolContinuationTurns?: number,
 ): AutomationPromptOptions {
   return {
     modelType: route.modelType,
     searchEnabled: route.searchEnabled,
     thinkingEnabled: route.thinkingEnabled,
     refFileIds: route.refFileIds,
+    ...(typeof maxToolContinuationTurns === 'number' && Number.isFinite(maxToolContinuationTurns)
+      ? { maxToolContinuationTurns: Math.max(1, Math.min(50, Math.floor(maxToolContinuationTurns))) }
+      : {}),
     webVisionFiles: [],
     visualMonitor: visualMonitorEnabled
       ? {
@@ -317,11 +355,12 @@ function createPromptOptions(
   };
 }
 
-function manualSchedule(): AutomationWorkflowTemplateSchedule {
+function manualSchedule(timeoutMs?: number): AutomationWorkflowTemplateSchedule {
   return {
     kind: 'manual',
     expression: null,
     enabled: false,
+    ...(typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
   };
 }
 

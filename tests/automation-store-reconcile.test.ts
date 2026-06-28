@@ -171,7 +171,14 @@ describe('reconcileStaleRuns', () => {
             }),
           },
         }],
-        history: null,
+        history: {
+          chatSessionId: 'session-1',
+          parentMessageId: 1,
+          assistantMessageId: 2,
+          assistantText: 'history file-sensitive4 Cookie: sid=history data:image/png;base64,CCCC',
+          messageCount: 2,
+          verifiedAt: 2,
+        },
         completedAt: 2,
       },
       completedAt: 2,
@@ -181,7 +188,8 @@ describe('reconcileStaleRuns', () => {
     const json = JSON.stringify(await getAutomationRunById('run-secret'));
 
     expect(rawJson).not.toMatch(/file-sensitive|AAAA|BBBB|sid=secret|abc123|token=secret|Authorization|data:image|dataUrl/);
-    expect(json).not.toMatch(/file-sensitive|AAAA|BBBB|sid=secret|abc123|token=secret/);
+    expect(rawJson).not.toMatch(/sid=history|CCCC/);
+    expect(json).not.toMatch(/file-sensitive|AAAA|BBBB|sid=secret|abc123|token=secret|sid=history|CCCC/);
     expect(json).not.toContain('chat.deepseek.com/a/chat/s/session-1?token');
     expect(json).toContain('[redacted:vision-ref]');
     expect(json).toContain('[redacted:media]');
@@ -264,6 +272,46 @@ describe('reconcileStaleRuns', () => {
     expect(json).toContain('[redacted:secret]');
     expect(json).toContain('[redacted:media]');
     expect(json).toContain('[redacted:vision-ref]');
+  });
+
+  it('does not let late executor patches mutate terminal automation runs', async () => {
+    const { chromeStub } = createChromeStub();
+    vi.stubGlobal('chrome', chromeStub);
+    const completedAt = 2_000;
+    await seedRun(makeRun({
+      id: 'run-timeout',
+      status: 'timeout',
+      completedAt,
+      error: {
+        code: 'automation_run_timeout',
+        message: 'Automation run timed out.',
+        phase: 'runner',
+        retryable: true,
+        at: completedAt,
+      },
+    }));
+
+    const before = await getAutomationRunById('run-timeout');
+    const setCallsBefore = (chromeStub.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length;
+    const updated = await updateAutomationRun('run-timeout', {
+      status: 'succeeded',
+      result: {
+        ok: true,
+        chatSessionId: 'late-session',
+        sessionUrl: null,
+        parentMessageId: 1,
+        assistantMessageId: 2,
+        assistantText: 'late result',
+        toolExecutions: [],
+        history: null,
+        completedAt: completedAt + 1000,
+      },
+      completedAt: completedAt + 1000,
+    });
+
+    expect(updated).toEqual(before);
+    expect(await getAutomationRunById('run-timeout')).toEqual(before);
+    expect((chromeStub.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
   });
 
   it('marks a stale running run as failed with an interrupted error', async () => {

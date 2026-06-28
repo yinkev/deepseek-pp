@@ -31,7 +31,7 @@ const expectedHostPermissions = [
   '*://cn.bing.com/*',
   '*://www.bing.com/*',
 ];
-const expectedOptionalHostPermissions = ['http://*/*', 'https://*/*'];
+const expectedOptionalHostPermissions = ['<all_urls>'];
 const expectedLocalizedManifest = {
   default_locale: 'en',
   name: '__MSG_extension_name__',

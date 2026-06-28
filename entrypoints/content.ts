@@ -75,6 +75,7 @@ import {
   createToolRestoreBlockId,
   createToolRestoreBlockUrl,
 } from '../core/tool/restore-block';
+import { BROWSER_CONTROL_TOOL_NAMES } from '../core/browser-control/types';
 import { validateBridgeMessage } from '../core/messaging/schema';
 import { startDeepSeekHistoryOrganizer, type HistoryOrganizerController } from './content/adapters/history-organizer';
 import { startDeepSeekProjectSidebarOrganizer, type ProjectSidebarOrganizerController } from './content/adapters/project-sidebar-organizer';
@@ -150,11 +151,14 @@ const ACTIVE_TOOL_BLOCK_SESSION_LIMIT = 20;
 const INLINE_AGENT_TRACE_STORAGE_KEY = 'dpp_inline_agent_traces';
 const INLINE_AGENT_TRACE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 const INLINE_AGENT_TRACE_LIMIT = 100;
-const INLINE_AGENT_TRACE_WRITE_DEBOUNCE_MS = 300;
 const INLINE_AGENT_STEP_RENDER_MAX_CHARS = 8000;
 const INLINE_AGENT_FINAL_RENDER_MAX_CHARS = 12000;
 const CLEANABLE_TEXT_DEEP_SCAN_MAX_CHARS = 120_000;
 const CLEANUP_MESSAGE_SCAN_LIMIT = 24;
+const RENDERED_TOOL_CLEANER_BOOTSTRAP_MS = 5000;
+const RENDERED_TOOL_TAG_FALLBACKS = [...BROWSER_CONTROL_TOOL_NAMES, 'task_complete'];
+const LEGACY_XML_TOOL_CALLS_MARKER_RE = /<\s*\/?\s*tool_calls\s*>/;
+const LEGACY_XML_TOOL_CALLS_BLOCK_RE = /<\s*tool_calls\s*>\s*[\s\S]*?\s*<\s*\/\s*tool_calls\s*>/g;
 const THEME_BOOTSTRAP_RETRY_MS = 250;
 const THEME_BOOTSTRAP_RETRY_LIMIT = 20;
 const PET_IDLE_DELAY_MS = 900;
@@ -279,6 +283,8 @@ let contentUxPolishController: ContentUxPolishController | null = null;
 const restoredToolRecords = new Map<string, ToolCallRestoreRecord>();
 let restoredRenderTimer: ReturnType<typeof setTimeout> | null = null;
 let restoredRenderAttempts = 0;
+let renderedToolCallCleanerObserver: MutationObserver | null = null;
+let renderedToolCallCleanerStopTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingToolExecutionTasks = new Set<Promise<ToolCardResult>>();
 let backgroundPatchObserver: MutationObserver | null = null;
 let backgroundPatchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -485,6 +491,8 @@ export default defineContentScript({
             const complete = normalizeResponseCompletePayload(data.payload, data.text);
             const gen = ++responseGeneration;
             activeStreamingToolCount = 0;
+            stopRenderedToolCallCleaner();
+            cleanRenderedToolCalls(getResponseToolCleanupRoots(complete));
             await waitForPendingToolExecutions();
             if (gen !== responseGeneration) break;
             const session = getActiveToolBlockSessionForComplete(complete);
@@ -931,6 +939,7 @@ function isExtensionInvalidatedError(error: unknown): boolean {
 function invalidateExtensionContext() {
   if (!extensionContextValid) return;
   extensionContextValid = false;
+  stopRenderedToolCallCleaner();
   stopBackgroundPatchObserver();
   removePet();
   stopDeepSeekThemeSync();
@@ -974,8 +983,6 @@ async function persistDeepSeekClientHeaders(capturedHeaders?: Record<string, str
         payload: { headers },
       });
       if (saved?.ok !== true) return false;
-      // Ask the sidepanel to re-check login status.
-      chrome.runtime.sendMessage({ type: 'AUTH_STATUS_CHANGED' }).catch(() => {});
       return true;
     }
   } catch (error) {
@@ -3161,7 +3168,8 @@ function handleAgentStreamChunk(msg: InlineAgentStreamChunkMsg): void {
 function renderInlineAgentStreamChunk(msg: InlineAgentStreamChunkMsg): void {
   if (msg.loopId !== inlineAgentLoopId || !inlineAgentCurrentStep) return;
   const previousText = getInlineAgentStepText(inlineAgentCurrentStep);
-  const nextText = clampText(msg.fullText.trim() || previousText, INLINE_AGENT_STEP_RENDER_MAX_CHARS) ?? '';
+  const rawText = msg.fullText.trim() || previousText;
+  const nextText = clampText(getInlineAgentDisplayFinalText(rawText) || rawText, INLINE_AGENT_STEP_RENDER_MAX_CHARS) ?? '';
   updateStepStreamText(inlineAgentCurrentStep, nextText);
   updateActiveInlineAgentTrace((trace) => updateInlineAgentTraceStep(trace, msg.stepIndex, {
     text: nextText,
@@ -3471,7 +3479,6 @@ function recordUsageProgress(progress: ResponseTokenSpeedPayload) {
   const signature = [
     Math.round(totalTokens),
     progress.tokenSource,
-    Math.round(progress.tokensPerSecond * 100) / 100,
     progress.speedSource,
     progress.modelType ?? '',
     progress.assistantMessageId ?? '',
@@ -3823,7 +3830,7 @@ function buildToolMarkerRegex(descriptors: ToolDescriptor[]): RegExp {
 
 function buildToolTagPattern(descriptors: ToolDescriptor[]): string {
   const catalogNames = createToolInvocationCatalog(descriptors).invocationNames;
-  const escaped = [...new Set(catalogNames)].map(escapeRegExp);
+  const escaped = [...new Set([...catalogNames, ...RENDERED_TOOL_TAG_FALLBACKS])].map(escapeRegExp);
   return escaped.length > 0 ? escaped.join('|') : 'memory_save|memory_update|memory_delete';
 }
 
@@ -3909,7 +3916,7 @@ function updateActiveInlineAgentTrace(
     return;
   }
 
-  scheduleInlineAgentTraceWrite(activeInlineAgentTrace);
+  restoredInlineAgentTraces.set(activeInlineAgentTrace.id, activeInlineAgentTrace);
 }
 
 function upsertInlineAgentTraceStep(
@@ -3939,15 +3946,6 @@ function updateInlineAgentTraceStep(
     collapsed: false,
   };
   return upsertInlineAgentTraceStep(trace, { ...current, ...patch, index: stepIndex });
-}
-
-function scheduleInlineAgentTraceWrite(trace: InlineAgentTraceRecord): void {
-  if (inlineAgentTraceWriteTimer) clearTimeout(inlineAgentTraceWriteTimer);
-  inlineAgentTraceWriteTimer = setTimeout(() => {
-    inlineAgentTraceWriteTimer = null;
-    const latest = activeInlineAgentTrace?.id === trace.id ? activeInlineAgentTrace : trace;
-    void writeInlineAgentTrace(latest);
-  }, INLINE_AGENT_TRACE_WRITE_DEBOUNCE_MS);
 }
 
 async function writeInlineAgentTrace(trace: InlineAgentTraceRecord): Promise<void> {
@@ -5554,58 +5552,120 @@ function elementHasMessageId(element: Element, messageId: string): boolean {
   });
 }
 
-function startRenderedToolCallCleaner() {
-  let scheduled = false;
+function getResponseToolCleanupRoots(complete: ResponseCompletePayload): Element[] {
+  const messages = getAssistantMessages();
+  if (messages.length === 0) return [];
+  const target = findInlineAgentLiveTarget(complete, messages, getInlineAgentAnchorContent(complete));
+  return target ? [target] : [];
+}
 
-  const schedule = () => {
-    if (scheduled) return;
+function startRenderedToolCallCleaner() {
+  stopRenderedToolCallCleaner();
+
+  let scheduled = false;
+  const scheduledRoots = new Set<Element>();
+
+  const schedule = (roots?: Iterable<Element>) => {
+    if (roots) {
+      for (const root of roots) scheduledRoots.add(root);
+    }
     if (activeStreamingToolCount > 0) return;
+    if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => {
       scheduled = false;
-      cleanRenderedToolCalls();
+      if (activeStreamingToolCount > 0) return;
+      const roots = Array.from(scheduledRoots);
+      scheduledRoots.clear();
+      if (roots.length > 0) {
+        cleanRenderedToolCalls(roots);
+      } else {
+        cleanRenderedToolCalls();
+      }
     });
   };
 
   schedule();
 
   const observer = new MutationObserver((mutations) => {
-    if (mutations.some(mutationMayContainCleanableText)) {
-      schedule();
+    const roots = getToolCleanupRootsFromMutations(mutations);
+    if (roots.length > 0) {
+      schedule(roots);
     }
   });
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  renderedToolCallCleanerObserver = observer;
+  observer.observe(document.body, { childList: true, subtree: true });
+  armRenderedToolCallCleanerStopTimer();
 }
 
-function mutationMayContainCleanableText(mutation: MutationRecord): boolean {
-  if (mutation.type === 'characterData') {
-    return containsCleanableText(mutation.target.textContent);
+function armRenderedToolCallCleanerStopTimer() {
+  if (renderedToolCallCleanerStopTimer) {
+    clearTimeout(renderedToolCallCleanerStopTimer);
   }
+  renderedToolCallCleanerStopTimer = setTimeout(() => {
+    renderedToolCallCleanerStopTimer = null;
+    if (activeStreamingToolCount > 0) {
+      armRenderedToolCallCleanerStopTimer();
+      return;
+    }
+    stopRenderedToolCallCleaner();
+  }, RENDERED_TOOL_CLEANER_BOOTSTRAP_MS);
+}
 
-  for (const node of mutation.addedNodes) {
-    if (addedNodeMayContainCleanableText(node)) {
-      return true;
+function stopRenderedToolCallCleaner() {
+  renderedToolCallCleanerObserver?.disconnect();
+  renderedToolCallCleanerObserver = null;
+  if (renderedToolCallCleanerStopTimer) {
+    clearTimeout(renderedToolCallCleanerStopTimer);
+    renderedToolCallCleanerStopTimer = null;
+  }
+}
+
+function getToolCleanupRootsFromMutations(mutations: readonly MutationRecord[]): Element[] {
+  const roots = new Set<Element>();
+  for (const mutation of mutations) {
+    for (const node of mutation.addedNodes) {
+      collectToolCleanupRootsFromAddedNode(node, roots);
     }
   }
-
-  return false;
+  return Array.from(roots);
 }
 
-function addedNodeMayContainCleanableText(node: Node): boolean {
+function collectToolCleanupRootsFromAddedNode(node: Node, roots: Set<Element>): void {
   if (node.nodeType === Node.TEXT_NODE) {
-    return containsCleanableText(node.textContent);
+    if (containsCleanableText(node.textContent)) addNearestToolCleanupRoot(node, roots);
+    return;
   }
 
-  if (!(node instanceof Element)) return false;
+  if (!(node instanceof Element)) return;
   if (node.closest('.dpp-tool-block, .dpp-agent-container, script, style, textarea, input, [contenteditable="true"]')) {
-    return false;
+    return;
   }
 
-  if (node.matches('.ds-message') || node.querySelector('.ds-message')) {
-    return true;
+  if (node.matches('.ds-message')) {
+    roots.add(node);
+    return;
   }
 
-  return containsCleanableText(node.textContent);
+  const message = node.closest('.ds-message');
+  if (message) {
+    if (containsCleanableText(node.textContent)) roots.add(message);
+    return;
+  }
+
+  for (const childMessage of node.querySelectorAll('.ds-message')) {
+    roots.add(childMessage);
+  }
+
+  if (containsCleanableText(node.textContent)) {
+    addNearestToolCleanupRoot(node, roots);
+  }
+}
+
+function addNearestToolCleanupRoot(node: Node, roots: Set<Element>): void {
+  const parent = node.parentElement;
+  if (!parent) return;
+  roots.add(parent.closest('.ds-message') ?? parent);
 }
 
 function containsToolMarker(text: string | null | undefined): boolean {
@@ -5616,7 +5676,11 @@ function containsCleanableText(text: string | null | undefined): boolean {
   if (typeof text !== 'string' || !text) return false;
   if (containsInternalPromptMarker(text)) return true;
   if (text.includes('<task_complete>') || text.includes('</task_complete>')) return true;
-  if (text.includes(LEGACY_TOOL_CALLS_OPEN_TAG) || text.includes('｜DSML｜')) return true;
+  if (
+    text.includes(LEGACY_TOOL_CALLS_OPEN_TAG) ||
+    LEGACY_XML_TOOL_CALLS_MARKER_RE.test(text) ||
+    text.includes('｜DSML｜')
+  ) return true;
   if (!text.includes('<')) return false;
   if (hasLikelyToolMarkerPrefix(text)) return true;
   if (text.length > CLEANABLE_TEXT_DEEP_SCAN_MAX_CHARS) return false;
@@ -5626,6 +5690,8 @@ function containsCleanableText(text: string | null | undefined): boolean {
 function hasLikelyToolMarkerPrefix(text: string): boolean {
   return text.includes('<memory_') ||
     text.includes('</memory_') ||
+    text.includes('<browser_') ||
+    text.includes('</browser_') ||
     text.includes('<web_') ||
     text.includes('</web_') ||
     text.includes('<artifact_') ||
@@ -5638,12 +5704,13 @@ function hasLikelyToolMarkerPrefix(text: string): boolean {
     text.includes('</python_') ||
     text.includes('<shell_') ||
     text.includes('</shell_') ||
+    text.includes('<tool_calls>') ||
+    text.includes('</tool_calls>') ||
     text.includes('<task_complete>') ||
     text.includes('</task_complete>');
 }
 
-function cleanRenderedToolCalls() {
-  const roots = getToolCleanupRoots();
+function cleanRenderedToolCalls(roots: Iterable<Element> = getToolCleanupRoots()) {
   for (const root of roots) {
     stripToolCallTextNodes(root);
   }
@@ -5749,7 +5816,13 @@ function stripToolCallTextNodes(root: Element) {
 
 function sanitizeRenderedControlText(text: string, options: { replaceTaskComplete: boolean }): string {
   const sanitized = sanitizeInternalPromptText(text);
-  return options.replaceTaskComplete ? replaceTaskCompleteBlocks(sanitized) : sanitized;
+  const withoutLegacyXmlCalls = stripRenderedLegacyXmlToolCalls(sanitized);
+  return options.replaceTaskComplete ? replaceTaskCompleteBlocks(withoutLegacyXmlCalls) : withoutLegacyXmlCalls;
+}
+
+function stripRenderedLegacyXmlToolCalls(text: string): string {
+  if (!LEGACY_XML_TOOL_CALLS_MARKER_RE.test(text)) return text;
+  return text.replace(LEGACY_XML_TOOL_CALLS_BLOCK_RE, '');
 }
 
 function shouldReplaceRenderedTaskCompleteBlock(textNode: Text): boolean {

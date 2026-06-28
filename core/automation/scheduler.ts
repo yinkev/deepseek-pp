@@ -29,7 +29,7 @@ import type {
 
 export const AUTOMATION_WAKE_ALARM_NAME = 'deepseek_pp_automation_wake';
 export const AUTOMATION_WAKE_INTERVAL_MINUTES = 1;
-export const AUTOMATION_RUN_TIMEOUT_MS = 180_000;
+export const AUTOMATION_RUN_TIMEOUT_MS = 600_000;
 export const AUTOMATION_MAX_ATTEMPTS = 2;
 export const AUTOMATION_RETRY_DELAY_MS = 10_000;
 
@@ -198,7 +198,7 @@ export async function runAutomation(options: RunAutomationOptions): Promise<Auto
       startedAt: Date.now(),
     });
 
-    const runnerResult = await executeWithRetry(run, request, options.executor);
+    const runnerResult = await executeWithRetry(run, request, options.executor, automation.schedule.timeoutMs);
     const completedRun = await completeRun(workingAutomation, run, runnerResult);
     await refreshAutomationAfterRun(workingAutomation, runnerResult, options.trigger);
     if (runnerResult.ok) {
@@ -246,9 +246,11 @@ async function executeWithRetry(
   run: AutomationRun,
   request: AutomationRunnerRequest,
   executor: AutomationRunExecutor,
+  timeoutMs?: number,
 ): Promise<AutomationRunnerResult> {
   let lastResult: AutomationRunnerResult | null = null;
-  const deadline = Date.now() + AUTOMATION_RUN_TIMEOUT_MS;
+  const effectiveTimeout = timeoutMs ?? AUTOMATION_RUN_TIMEOUT_MS;
+  const deadline = Date.now() + effectiveTimeout;
 
   for (let attempt = 1; attempt <= AUTOMATION_MAX_ATTEMPTS; attempt++) {
     if (attempt > 1) {
@@ -260,7 +262,7 @@ async function executeWithRetry(
     }
 
     const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) return createRunTimeoutFailure(request, AUTOMATION_RUN_TIMEOUT_MS, false);
+    if (remainingMs <= 0) return createRunTimeoutFailure(request, effectiveTimeout, false);
 
     const result = await withRunTimeout(
       (signal) => executor(request, { signal }),
@@ -280,7 +282,7 @@ async function executeWithRetry(
     });
   }
 
-  return lastResult ?? createRunTimeoutFailure(request, AUTOMATION_RUN_TIMEOUT_MS, false);
+  return lastResult ?? createRunTimeoutFailure(request, effectiveTimeout, false);
 }
 
 function withRunTimeout(

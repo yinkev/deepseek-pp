@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS: BrowserControlSettings = {
   targetTabId: null,
   lastTargetHint: null,
   targetLock: null,
-  includeSnapshotAfterActions: true,
+  includeSnapshotAfterActions: false,
   allowVisionCapture: true,
   verifyAfterActions: true,
   collectEvidencePacks: true,

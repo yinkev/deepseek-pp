@@ -25,6 +25,10 @@ export async function recordUsageTurn(input: UsageTurnInput): Promise<UsageTurnR
     ? mergeUsageRecord(records[existingIndex], incoming)
     : incoming;
 
+  if (existingIndex >= 0 && isSameStoredUsageRecord(records[existingIndex], nextRecord)) {
+    return records[existingIndex];
+  }
+
   const nextRecords = existingIndex >= 0
     ? [...records.slice(0, existingIndex), nextRecord, ...records.slice(existingIndex + 1)]
     : [...records, nextRecord];
@@ -128,6 +132,18 @@ function mergeUsageRecord(existing: UsageTurnRecord, incoming: UsageTurnRecord):
     elapsedMs: preferIncomingSpeed ? incoming.elapsedMs : existing.elapsedMs,
     messageCount: Math.max(existing.messageCount, incoming.messageCount),
   };
+}
+
+function isSameStoredUsageRecord(a: UsageTurnRecord, b: UsageTurnRecord): boolean {
+  return a.id === b.id &&
+    a.source === b.source &&
+    a.chatSessionId === b.chatSessionId &&
+    a.assistantMessageId === b.assistantMessageId &&
+    a.modelType === b.modelType &&
+    a.totalTokens === b.totalTokens &&
+    a.tokenSource === b.tokenSource &&
+    a.speedSource === b.speedSource &&
+    a.messageCount === b.messageCount;
 }
 
 function shouldPreferIncomingMetric(

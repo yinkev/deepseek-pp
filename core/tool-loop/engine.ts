@@ -35,19 +35,48 @@ export interface ToolContinuationLoopInput<TTurn> {
   signal?: AbortSignal;
 }
 
+export type ToolContinuationStopReason =
+  | 'aborted'
+  | 'continuation_limit_exhausted'
+  | 'pending_tool_calls_without_parent'
+  | 'no_parent_message'
+  | 'no_tool_calls';
+
+export interface ToolContinuationLoopResult<TTurn> {
+  turn: TTurn;
+  executions: ToolExecutionRecord[];
+  stopReason: ToolContinuationStopReason;
+  depth: number;
+  pendingToolCallCount: number;
+}
+
 export async function runToolContinuationLoop<TTurn>(
   input: ToolContinuationLoopInput<TTurn>,
-): Promise<{ turn: TTurn; executions: ToolExecutionRecord[] }> {
+): Promise<ToolContinuationLoopResult<TTurn>> {
   let turn = input.initialTurn;
   let parentMessageId = input.getParentMessageId(turn);
   const executions: ToolExecutionRecord[] = [];
+  let depth = 0;
 
-  for (let depth = 0; depth < input.maxDepth; depth++) {
-    if (input.signal?.aborted) break;
-    if (parentMessageId === null) break;
+  for (; depth < input.maxDepth; depth += 1) {
+    if (input.signal?.aborted) {
+      return { turn, executions, stopReason: 'aborted', depth, pendingToolCallCount: 0 };
+    }
+    if (parentMessageId === null) {
+      const pendingToolCallCount = input.extractToolCalls(input.getAssistantText(turn)).length;
+      return {
+        turn,
+        executions,
+        stopReason: pendingToolCallCount > 0 ? 'pending_tool_calls_without_parent' : 'no_parent_message',
+        depth,
+        pendingToolCallCount,
+      };
+    }
 
     const calls = input.extractToolCalls(input.getAssistantText(turn));
-    if (calls.length === 0) break;
+    if (calls.length === 0) {
+      return { turn, executions, stopReason: 'no_tool_calls', depth, pendingToolCallCount: 0 };
+    }
 
     const stepExecutions: ToolExecutionRecord[] = [];
     for (const call of calls) {
@@ -56,7 +85,9 @@ export async function runToolContinuationLoop<TTurn>(
       stepExecutions.push(execution);
       executions.push(execution);
     }
-    if (input.signal?.aborted || stepExecutions.length === 0) break;
+    if (input.signal?.aborted || stepExecutions.length === 0) {
+      return { turn, executions, stopReason: 'aborted', depth, pendingToolCallCount: 0 };
+    }
 
     turn = await input.submitContinuation(
       input.buildContinuationPrompt(stepExecutions),
@@ -66,7 +97,20 @@ export async function runToolContinuationLoop<TTurn>(
     parentMessageId = input.getParentMessageId(turn);
   }
 
-  return { turn, executions };
+  if (input.signal?.aborted) {
+    return { turn, executions, stopReason: 'aborted', depth, pendingToolCallCount: 0 };
+  }
+  const pendingToolCallCount = input.extractToolCalls(input.getAssistantText(turn)).length;
+  if (pendingToolCallCount === 0 && parentMessageId === null) {
+    return { turn, executions, stopReason: 'no_parent_message', depth, pendingToolCallCount: 0 };
+  }
+  return {
+    turn,
+    executions,
+    stopReason: pendingToolCallCount > 0 ? 'continuation_limit_exhausted' : 'no_tool_calls',
+    depth,
+    pendingToolCallCount,
+  };
 }
 
 export function createToolExecutionRecord(

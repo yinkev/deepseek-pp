@@ -59,6 +59,27 @@ describe('content tool block styles', () => {
     expect(source).toContain('CLEANUP_MESSAGE_SCAN_LIMIT');
     expect(source).toContain('hasLikelyToolMarkerPrefix');
     expect(source).toContain('if (i < minIndex) break;');
+    expect(source).toContain('function getToolCleanupRootsFromMutations(');
+    expect(source).toContain('let renderedToolCallCleanerObserver: MutationObserver | null = null;');
+    expect(source).toContain('function armRenderedToolCallCleanerStopTimer()');
+    const cleanerStart = source.indexOf('function startRenderedToolCallCleaner()');
+    const cleanerEnd = source.indexOf('function armRenderedToolCallCleanerStopTimer()', cleanerStart);
+    expect(cleanerStart).toBeGreaterThanOrEqual(0);
+    expect(cleanerEnd).toBeGreaterThan(cleanerStart);
+    const cleanerSource = source.slice(cleanerStart, cleanerEnd);
+    expect(cleanerSource).toContain('for (const root of roots) scheduledRoots.add(root);');
+    expect(cleanerSource.indexOf('for (const root of roots) scheduledRoots.add(root);'))
+      .toBeLessThan(cleanerSource.indexOf('if (activeStreamingToolCount > 0) return;'));
+    expect(cleanerSource).toContain('requestAnimationFrame(() => {');
+    expect(cleanerSource).not.toContain('setTimeout(run, 250)');
+    expect(source).toContain('armRenderedToolCallCleanerStopTimer();');
+    expect(source).toContain('function stopRenderedToolCallCleaner()');
+    expect(source).toContain('stopRenderedToolCallCleaner();');
+    expect(source).toContain('cleanRenderedToolCalls(getResponseToolCleanupRoots(complete));');
+    expect(source).toContain('cleanRenderedToolCalls(roots);');
+    expect(source).toContain("observer.observe(document.body, { childList: true, subtree: true });");
+    expect(source).not.toContain('characterData: true');
+    expect(source).not.toContain("mutation.type === 'characterData'");
   });
 
   it('bounds restored tool and inline-agent state kept in content-script memory', () => {
@@ -121,6 +142,11 @@ describe('content tool block styles', () => {
     const path = join(process.cwd(), 'entrypoints/content.ts');
     const source = readFileSync(path, 'utf8');
 
+    expect(source).toContain('RENDERED_TOOL_TAG_FALLBACKS');
+    expect(source).toContain('BROWSER_CONTROL_TOOL_NAMES');
+    expect(source).toContain("'task_complete'");
+    expect(source).toContain("text.includes('<browser_')");
+    expect(source).toContain('...RENDERED_TOOL_TAG_FALLBACKS');
     expect(source).toContain('function shouldReplaceRenderedTaskCompleteBlock(textNode: Text): boolean');
     expect(source).toContain("if (parent.closest('pre, code')) return false;");
     expect(source).toContain("const message = parent.closest('.ds-message');");
@@ -134,6 +160,31 @@ describe('content tool block styles', () => {
     expect(source).toContain("(trace.finalText === undefined || typeof trace.finalText === 'string')");
     expect(source).toContain("const finalText = typeof trace.finalText === 'string' ? trace.finalText : '';");
     expect(source).toContain("finalText: clampText(finalText, INLINE_AGENT_FINAL_RENDER_MAX_CHARS) ?? '',");
+  });
+
+  it('does not persist inline-agent trace storage on every streamed chunk', () => {
+    const path = join(process.cwd(), 'entrypoints/content.ts');
+    const source = readFileSync(path, 'utf8');
+    const updateStart = source.indexOf('function updateActiveInlineAgentTrace(');
+    const updateEnd = source.indexOf('function upsertInlineAgentTraceStep(', updateStart);
+    const streamStart = source.indexOf('function renderInlineAgentStreamChunk(');
+    const streamEnd = source.indexOf('function flushPendingInlineAgentStreamRender(', streamStart);
+    expect(updateStart).toBeGreaterThanOrEqual(0);
+    expect(updateEnd).toBeGreaterThan(updateStart);
+    expect(streamStart).toBeGreaterThanOrEqual(0);
+    expect(streamEnd).toBeGreaterThan(streamStart);
+    const updateSource = source.slice(updateStart, updateEnd);
+    const streamSource = source.slice(streamStart, streamEnd);
+
+    expect(source).not.toContain('INLINE_AGENT_TRACE_WRITE_DEBOUNCE_MS');
+    expect(source).not.toContain('function scheduleInlineAgentTraceWrite(');
+    expect(updateSource).toContain('if (options.immediate)');
+    expect(updateSource).toContain('void writeInlineAgentTrace(activeInlineAgentTrace);');
+    expect(updateSource).toContain('restoredInlineAgentTraces.set(activeInlineAgentTrace.id, activeInlineAgentTrace);');
+    expect(streamSource).toContain('const rawText = msg.fullText.trim() || previousText;');
+    expect(streamSource).toContain('getInlineAgentDisplayFinalText(rawText) || rawText');
+    expect(streamSource).toContain('updateActiveInlineAgentTrace((trace) => updateInlineAgentTraceStep(trace, msg.stepIndex');
+    expect(streamSource).not.toContain('writeInlineAgentTrace');
   });
 
   it('keeps permission banner text on the same injected theme contract', () => {

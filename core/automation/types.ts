@@ -40,6 +40,7 @@ export interface AutomationSchedule {
   timezone: string;
   enabled: boolean;
   minimumIntervalMinutes: number;
+  timeoutMs?: number;
 }
 
 export interface AutomationPromptOptions {
@@ -47,6 +48,7 @@ export interface AutomationPromptOptions {
   searchEnabled: boolean;
   thinkingEnabled: boolean;
   refFileIds: string[];
+  maxToolContinuationTurns?: number;
   webVisionFiles?: DeepSeekWebVisionFileMetadata[];
   visualMonitor?: AutomationVisualMonitorOptions;
   visualEvidencePacks?: DeepSeekWebVisionEvidencePack[];
@@ -153,6 +155,7 @@ export interface AutomationHistorySnapshot {
   chatSessionId: string;
   parentMessageId: number | null;
   assistantMessageId: number | null;
+  assistantText: string;
   messageCount: number;
   verifiedAt: number;
 }

@@ -1,0 +1,11 @@
+Loop G: Skill & Web Search Tests (P2)
+Date: 2026-06-22
+Status: PASS
+
+File Created (1):
+1. tests/skill-template-injection.test.ts — 8 tests
+   - Skill trigger regex parsing
+   - Skill name matching (exact, case-sensitive)
+   - Web search/fetch tool structure
+
+Grade: B

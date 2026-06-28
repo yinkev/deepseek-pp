@@ -1,12 +1,28 @@
 import { useI18n } from '../../i18n';
-import { SettingsSection, StatusBadge, StatusMessage, TextField, ToggleRow } from './primitives';
+import { SettingsSection, StatusBadge, StatusMessage, TextField, ToggleRow, useConfirm } from './primitives';
 import type { SettingsState } from './useSettingsState';
 
 export default function ApiSubPage({ state }: { state: SettingsState }) {
   const { t } = useI18n();
+  const { confirm, node: confirmNode } = useConfirm();
+
+  const handleClearApiKey = async () => {
+    const ok = await confirm({
+      title: t('sidepanel.settings.clearApiKey'),
+      message: t('sidepanel.settings.clearApiKeyConfirm'),
+      confirmLabel: t('common.delete'),
+      cancelLabel: t('common.cancel'),
+    });
+    if (!ok) return;
+    state.handleClearApiKey(
+      t('sidepanel.settings.clearFailed'),
+      t('sidepanel.settings.apiKeyCleared'),
+    );
+  };
 
   return (
     <div className="space-y-5">
+      {confirmNode}
       <SettingsSection
         title="DeepSeek API Key"
         description={t('sidepanel.settings.apiKeyDescription')}
@@ -54,10 +70,7 @@ export default function ApiSubPage({ state }: { state: SettingsState }) {
 
         {state.apiKeyConfigured && (
           <button
-            onClick={() => state.handleClearApiKey(
-              t('sidepanel.settings.clearFailed'),
-              t('sidepanel.settings.apiKeyCleared'),
-            )}
+            onClick={handleClearApiKey}
             disabled={state.apiKeyStatus === 'clearing'}
             className="ds-btn-secondary w-full py-2 text-[11px] font-medium rounded-lg transition-all duration-150 disabled:opacity-40"
           >

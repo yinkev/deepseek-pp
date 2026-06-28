@@ -1,0 +1,16 @@
+Loop F: Memory Injection Tests (P1)
+Date: 2026-06-22
+Status: PASS
+
+File Created (1):
+1. tests/memory-injection.test.ts — 20 tests
+   - segmentText: word splitting, stop word filtering, single char filtering
+   - getMemoryBudget: scaling, minimum bounds
+   - selectMemories: empty, pinned priority, identityOnly, budget, allowedTypes
+   - formatMemoryLine: id, type, scope formatting
+   - formatMemoriesBlock: empty, multiple memories
+   - Memory decay: recency, frequency scoring
+
+Full Suite: 92 files, 763 tests — ALL PASS
+
+Grade: B

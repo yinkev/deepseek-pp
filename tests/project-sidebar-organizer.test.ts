@@ -100,6 +100,25 @@ describe('DeepSeek project sidebar organizer', () => {
     expect(document.querySelectorAll('a[data-dpp-project-conversation-id="session-one"]')).toHaveLength(1);
   });
 
+  it('does not reschedule renders from its own injected project section mutations', async () => {
+    const state = createProjectState();
+    sendMessage.mockImplementation(async (message) => {
+      if (message.type === 'GET_PROJECT_CONTEXT_STATE') return state;
+      return { ok: true };
+    });
+    mountHistoryDom();
+
+    const controller = startDeepSeekProjectSidebarOrganizer(() => labels);
+    await flushProjectSidebar();
+    await flushProjectSidebar();
+    const stableRow = document.querySelector('[data-dpp-project-conversation-row="session-one"]');
+
+    await flushProjectSidebar();
+
+    expect(document.querySelector('[data-dpp-project-conversation-row="session-one"]')).toBe(stableRow);
+    controller.stop();
+  });
+
   it('normalizes stale project conversation urls to the matching history route', () => {
     const state = createProjectState({
       conversations: [{

@@ -74,6 +74,7 @@ const TEMPLATE_CATEGORY_FILTERS: Array<'all' | AutomationWorkflowTemplateCategor
   'prompt',
   'memory',
 ];
+const REPAIR_VERIFY_TEMPLATE_ID = 'repo-repair-verify-loop';
 const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
 const AUTOMATION_LIST_FILTERS = ['all', 'active', 'paused', 'blocked'] as const;
 type AutomationListFilter = typeof AUTOMATION_LIST_FILTERS[number];
@@ -99,6 +100,8 @@ type FormState = {
   chainEnabled: boolean;
   chainSuccessIdsText: string;
   reviewGateEnabled: boolean;
+  timeoutMs: number | null;
+  maxToolContinuationTurns: number | null;
 };
 
 type AutomationImageAttachment = {
@@ -123,6 +126,8 @@ const EMPTY_FORM: FormState = {
   chainEnabled: false,
   chainSuccessIdsText: '',
   reviewGateEnabled: false,
+  timeoutMs: null,
+  maxToolContinuationTurns: null,
 };
 
 export default function AutomationPage() {
@@ -268,13 +273,20 @@ export default function AutomationPage() {
     setShowForm(true);
   };
 
-  const applyWorkflowTemplate = (template: AutomationWorkflowTemplate) => {
+  const applyWorkflowTemplate = (template: AutomationWorkflowTemplate, objective?: string) => {
     const input = createLocalizedAutomationInputFromWorkflowTemplate(template, DEFAULT_TIMEZONE, t);
+    const prompt = materializeWorkflowObjective(input.prompt, objective);
     setEditing(null);
-    setForm(fromAutomationInput(input));
+    setForm(fromAutomationInput({ ...input, prompt }));
     setImageAttachments([]);
     banner.clear();
     setShowForm(true);
+  };
+
+  const startRepairVerifyLoop = (objective: string) => {
+    const template = AUTOMATION_WORKFLOW_TEMPLATES.find((item) => item.id === REPAIR_VERIFY_TEMPLATE_ID);
+    if (!template) return;
+    applyWorkflowTemplate(template, objective);
   };
 
   const save = async () => {
@@ -550,7 +562,10 @@ export default function AutomationPage() {
       )}
 
       {!editing && !showForm && (
-        <AutomationTemplatePicker onUse={applyWorkflowTemplate} />
+        <>
+          <AutomationRunLauncher onStart={startRepairVerifyLoop} />
+          <AutomationTemplatePicker onUse={applyWorkflowTemplate} />
+        </>
       )}
 
       {showForm && (
@@ -665,6 +680,57 @@ function AutomationCommandCenterSummary({ counts }: { counts: AutomationCommandC
       <MetaChip label={t('sidepanel.automationPage.commandCenter.blocked')} value={String(counts.blocked)} />
       <MetaChip label={t('sidepanel.automationPage.commandCenter.running')} value={String(counts.running)} />
     </div>
+  );
+}
+
+function AutomationRunLauncher({ onStart }: { onStart: (objective: string) => void }) {
+  const { t } = useI18n();
+  const [objective, setObjective] = useState('');
+
+  return (
+    <section className="ds-surface-panel rounded-xl p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-semibold" style={{ color: 'var(--ds-text)' }}>
+            {t('sidepanel.automationPage.commandCenter.launcherTitle')}
+          </div>
+          <div className="text-[11px] mt-0.5 leading-4" style={{ color: 'var(--ds-text-tertiary)' }}>
+            {t('sidepanel.automationPage.commandCenter.launcherDescription')}
+          </div>
+        </div>
+        <span className="rounded-full px-2 py-1 text-[10px] font-medium shrink-0" style={{ color: 'var(--ds-blue)', background: 'var(--ds-surface)' }}>
+          {t('sidepanel.automationPage.commandCenter.primary')}
+        </span>
+      </div>
+
+      <label className="space-y-1 block">
+        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+          {t('sidepanel.automationPage.commandCenter.objectiveLabel')}
+        </span>
+        <textarea
+          value={objective}
+          onChange={(event) => setObjective(event.target.value)}
+          className="ds-input w-full px-3 py-2 text-xs rounded-lg min-h-20 resize-y"
+          placeholder={t('sidepanel.automationPage.commandCenter.objectivePlaceholder')}
+        />
+      </label>
+
+      <div className="grid grid-cols-2 gap-2">
+        <MetaChip label={t('sidepanel.automationPage.commandCenter.timeout')} value={t('sidepanel.automationPage.commandCenter.timeoutValue')} />
+        <MetaChip label={t('sidepanel.automationPage.commandCenter.toolBudget')} value={t('sidepanel.automationPage.commandCenter.toolBudgetValue')} />
+      </div>
+      <div className="text-[11px] leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
+        {t('sidepanel.automationPage.commandCenter.proofSummary')}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onStart(objective)}
+        className="ds-btn-primary w-full px-3 py-2 text-xs font-medium text-white rounded-lg"
+      >
+        {t('sidepanel.automationPage.commandCenter.startLongLoop')}
+      </button>
+    </section>
   );
 }
 
@@ -958,6 +1024,23 @@ function AutomationForm({
           placeholder={t('sidepanel.automationPage.form.promptPlaceholder')}
         />
       </label>
+
+      {(form.timeoutMs !== null || form.maxToolContinuationTurns !== null) && (
+        <div className="grid grid-cols-2 gap-2">
+          {form.timeoutMs !== null && (
+            <MetaChip
+              label={t('sidepanel.automationPage.commandCenter.timeout')}
+              value={formatTimeoutBudget(form.timeoutMs, t)}
+            />
+          )}
+          {form.maxToolContinuationTurns !== null && (
+            <MetaChip
+              label={t('sidepanel.automationPage.commandCenter.toolBudget')}
+              value={formatToolContinuationBudget(form.maxToolContinuationTurns, t)}
+            />
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-2">
         <label className="space-y-1">
@@ -1488,6 +1571,8 @@ function fromAutomation(automation: Automation): FormState {
     chainEnabled: automation.chain.enabled,
     chainSuccessIdsText: automation.chain.onSuccessAutomationIds.join(', '),
     reviewGateEnabled: hasAutomationReviewGate(automation.prompt),
+    timeoutMs: automation.schedule.timeoutMs ?? null,
+    maxToolContinuationTurns: automation.promptOptions.maxToolContinuationTurns ?? null,
   };
 }
 
@@ -1506,6 +1591,8 @@ function fromAutomationInput(input: AutomationCreateInput): FormState {
     chainEnabled: input.chain?.enabled === true,
     chainSuccessIdsText: input.chain?.onSuccessAutomationIds.join(', ') ?? '',
     reviewGateEnabled: hasAutomationReviewGate(input.prompt),
+    timeoutMs: input.schedule.timeoutMs ?? null,
+    maxToolContinuationTurns: input.promptOptions.maxToolContinuationTurns ?? null,
   };
 }
 
@@ -1601,6 +1688,7 @@ function toAutomationInput(form: FormState): AutomationCreateInput {
       searchEnabled: route.searchEnabled,
       thinkingEnabled: route.thinkingEnabled,
       refFileIds: route.refFileIds,
+      ...(form.maxToolContinuationTurns === null ? {} : { maxToolContinuationTurns: form.maxToolContinuationTurns }),
       visualMonitor: form.visualMonitorEnabled
         ? {
           enabled: true,
@@ -1620,7 +1708,16 @@ function buildSchedule(form: FormState): AutomationSchedule {
     timezone: form.timezone.trim() || DEFAULT_TIMEZONE,
     enabled,
     minimumIntervalMinutes: 15,
+    ...(form.timeoutMs === null ? {} : { timeoutMs: form.timeoutMs }),
   };
+}
+
+function materializeWorkflowObjective(prompt: string, objective: string | undefined): string {
+  const trimmed = objective?.trim();
+  if (!trimmed) return prompt;
+  return prompt
+    .replace('[replace with objective]', trimmed)
+    .replace('[\u66ff\u6362\u4e3a\u76ee\u6807]', trimmed);
 }
 
 function formatTime(value: number | null, locale: SupportedLocale, emptyText: string): string {
@@ -1644,6 +1741,18 @@ function formatRun(run: AutomationRun, t: ReturnType<typeof useI18n>['t']): stri
     skipped: t('sidepanel.automationPage.status.skipped'),
   };
   return `${label[run.status]}${run.attempt > 1 ? ` · ${t('sidepanel.automationPage.attempt', { count: run.attempt })}` : ''}`;
+}
+
+function formatTimeoutBudget(timeoutMs: number, t: ReturnType<typeof useI18n>['t']): string {
+  return t('sidepanel.automationPage.commandCenter.timeoutMinutes', {
+    count: Math.max(1, Math.round(timeoutMs / 60_000)),
+  });
+}
+
+function formatToolContinuationBudget(turns: number, t: ReturnType<typeof useI18n>['t']): string {
+  return t('sidepanel.automationPage.commandCenter.toolBudgetTurns', {
+    count: Math.max(1, Math.floor(turns)),
+  });
 }
 
 function formatSessionStrategy(

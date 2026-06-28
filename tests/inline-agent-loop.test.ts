@@ -73,6 +73,104 @@ describe('runInlineAgentLoop Vision routing', () => {
       searchEnabled: false,
     });
   });
+
+  it('aborts runaway finalization output without aborting the parent loop', async () => {
+    const parent = new AbortController();
+    const post = vi.fn();
+    let finalizationSignal: AbortSignal | undefined;
+
+    adapterMocks.submitPromptStreaming
+      .mockImplementationOnce(async (_input: unknown, callbacks: { onTextChunk?: (text: string, fullText: string) => void }) => {
+        callbacks.onTextChunk?.('Done.', 'Done.');
+        return {
+          assistantText: '',
+          responseMessageId: 11,
+          requestMessageId: 10,
+          finished: true,
+        };
+      })
+      .mockImplementationOnce(async (
+        _input: unknown,
+        callbacks: { onTextChunk?: (text: string, fullText: string) => void },
+        signal?: AbortSignal,
+      ) => {
+        finalizationSignal = signal;
+        callbacks.onTextChunk?.('x'.repeat(12_000), 'x'.repeat(12_000));
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        return {
+          assistantText: '',
+          responseMessageId: 12,
+          requestMessageId: 11,
+          finished: true,
+        };
+      });
+
+    const done = runInlineAgentLoop(createPayload(), {
+      post,
+      executeTool: vi.fn(),
+      signal: parent.signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(7000);
+    await done;
+
+    expect(finalizationSignal).toBeDefined();
+    expect(finalizationSignal?.aborted).toBe(true);
+    expect(parent.signal.aborted).toBe(false);
+    expect(post).toHaveBeenCalledWith('AGENT_STEP_COMPLETE', expect.objectContaining({
+      stepIndex: 1,
+      responseMessageId: null,
+    }));
+    expect(post).toHaveBeenCalledWith('AGENT_LOOP_COMPLETE', expect.objectContaining({
+      totalSteps: 2,
+      totalTools: 1,
+      finalText: 'x'.repeat(12_000),
+    }));
+  });
+
+  it('aborts runaway continuation output and completes with the partial answer', async () => {
+    const parent = new AbortController();
+    const post = vi.fn();
+    let continuationSignal: AbortSignal | undefined;
+
+    adapterMocks.submitPromptStreaming.mockImplementationOnce(async (
+      _input: unknown,
+      callbacks: { onTextChunk?: (text: string, fullText: string) => void },
+      signal?: AbortSignal,
+    ) => {
+      continuationSignal = signal;
+      callbacks.onTextChunk?.('y'.repeat(12_000), 'y'.repeat(12_000));
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      return {
+        assistantText: '',
+        responseMessageId: 11,
+        requestMessageId: 10,
+        finished: true,
+      };
+    });
+
+    const done = runInlineAgentLoop(createPayload(), {
+      post,
+      executeTool: vi.fn(),
+      signal: parent.signal,
+    });
+
+    await done;
+
+    expect(adapterMocks.submitPromptStreaming).toHaveBeenCalledTimes(1);
+    expect(continuationSignal).toBeDefined();
+    expect(continuationSignal?.aborted).toBe(true);
+    expect(parent.signal.aborted).toBe(false);
+    expect(post).toHaveBeenCalledWith('AGENT_STEP_COMPLETE', expect.objectContaining({
+      stepIndex: 0,
+      responseMessageId: null,
+    }));
+    expect(post).toHaveBeenCalledWith('AGENT_LOOP_COMPLETE', expect.objectContaining({
+      totalSteps: 1,
+      totalTools: 1,
+      finalText: 'y'.repeat(12_000),
+    }));
+  });
 });
 
 function createPayload(): InlineAgentStartPayload {

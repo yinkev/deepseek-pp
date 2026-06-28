@@ -2,7 +2,7 @@
 
 > **Task**: Implement Gemini-Nexus parity browser control in DeepSeek++ with Chromium CDP, Accessibility Tree UID snapshots, controlled tabs/groups, browser action tools, sidepanel controls, and validation.
 > **Started**: 2026-06-14
-> **Last Updated**: 2026-06-14
+> **Last Updated**: 2026-06-22
 > **Mode**: GITHUB_STANDARD
 > **Repo**: zhu1090093659/deepseek-pp
 
@@ -52,7 +52,7 @@
 | T5.1 | #202 | Add Browser Control sidepanel page | local done; GitHub open |
 | T5.2 | #203 | Add background browser-control message API | local done; GitHub open |
 | T5.3 | #204 | Add browser-control i18n and navigation | local done; GitHub open |
-| T6.1 | #205 | Add real Chrome browser-control smoke fixture and script | pending live Chrome smoke |
+| T6.1 | #205 | Add real Chrome browser-control smoke fixture and script | passive preflight added; pending live Chrome smoke |
 | T6.2 | #206 | Update docs and Chrome Web Store permission copy | local done; GitHub open |
 | T6.3 | #207 | Run full validation and final diff review | local done; GitHub open |
 
@@ -83,13 +83,13 @@ gh issue list -R zhu1090093659/deepseek-pp \
 - [x] Phase 3: Browser Action Tools (4/4 tasks locally complete) — [milestone](https://github.com/zhu1090093659/deepseek-pp/milestone/39)
 - [x] Phase 4: Tool-Loop and Result Integration (3/3 tasks locally complete) — [milestone](https://github.com/zhu1090093659/deepseek-pp/milestone/40)
 - [x] Phase 5: Sidepanel Browser Control UI (3/3 tasks locally complete) — [milestone](https://github.com/zhu1090093659/deepseek-pp/milestone/41)
-- [ ] Phase 6: Verification, Documentation, and Release Readiness (2/3 tasks locally complete; live Chrome smoke pending) — [milestone](https://github.com/zhu1090093659/deepseek-pp/milestone/42)
+- [ ] Phase 6: Verification, Documentation, and Release Readiness (2/3 tasks locally complete; passive Chrome preflight added; live Chrome smoke pending) — [milestone](https://github.com/zhu1090093659/deepseek-pp/milestone/42)
 
 ## Current Status
 
 **Active Phase**: Phase 6 — Verification, Documentation, and Release Readiness.
 **Active Task**: T6.1 / #205 — live Chrome smoke.
-**Blockers**: No automated live Chrome extension smoke was run in this session because it would require loading/reloading the unpacked extension in the user's Chrome profile.
+**Blockers**: Live Chrome extension smoke is waiting on user reload of the rebuilt unpacked extension at `/Users/kyin/Projects/Deepseek-pp/dist/chrome-mv3`. Latest passive Chrome preflight after the rendered XML-cleanup patch was `GO`; if a future preflight reports `NO-GO`, stop and record process evidence before live Chrome attachment.
 
 ## Governance Status
 
@@ -112,7 +112,7 @@ Per-task telemetry should be written to the corresponding GitHub Issue as commen
 
 ## Next Steps
 
-1. Load `dist/chrome-mv3` in Chrome/Edge, enable Browser Control from Capabilities > Browser, select a normal web tab, and run `browser_snapshot`.
+1. For Chrome, have the user reload `dist/chrome-mv3`, run `npm run smoke:chrome-preflight`, and only if it returns `GO`, run one natural live Browser Control smoke. Confirm Browser Control executes, the answer is correct, and visible assistant content contains no raw `<browser_snapshot>`, `<browser_evaluate_script>`, `<tool_calls>`, or `<task_complete>` text.
 2. Close or update GitHub issues #189-#207 after review/merge policy is selected.
 3. Re-run release validation before publishing any version that includes new Chrome permissions.
 
@@ -122,3 +122,5 @@ Per-task telemetry should be written to the corresponding GitHub Issue as commen
 |:--|:--|:--|
 | 2026-06-14 | Planning | Ran spec-driven Phase 0-4 for Gemini-Nexus parity browser control, wrote analysis and plan docs, created GitHub milestones #37-#42 and issues #189-#207, and initialized this tracker. |
 | 2026-06-14 | Implementation | Added local `browser_*` tools, CDP/debugger connection, controlled tabs/groups, Accessibility Tree snapshots, browser actions, runtime/inline-agent integration, sidepanel controls, Chromium permissions, CWS docs, and automated validation. Live Chrome extension smoke remains pending. |
+| 2026-06-22 | Runtime gate | Added passive `smoke:chrome-preflight` and operator notes so live Chrome smoke is gated on cool Chrome processes instead of perturbing a hot real session. |
+| 2026-06-22 | XML cleanup gate | Live Browser Control smoke executed successfully but leaked raw browser-control XML in the visible assistant body. Added bounded rendered cleanup and legacy wrapper coverage, rebuilt all targets, passed full validation, and wrote `docs/progress/live-browser-control-xml-cleanup-handoff-2026-06-22T09-28-05-0700.md`. |

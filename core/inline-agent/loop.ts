@@ -48,6 +48,17 @@ const INLINE_AGENT_STREAM_EVENT_MAX_CHARS = 12000;
 const INLINE_AGENT_FALLBACK_PARSE_MAX_CHARS = 120_000;
 const TRUNCATION_SUFFIX = '\n...[truncated]';
 
+interface InlineAgentStreamRunResult {
+  turn: ModelTurn | null;
+  snapshot: InlineAgentStreamSnapshot;
+  outputLimitHit: boolean;
+}
+
+interface InlineAgentStreamSnapshot {
+  visibleText: string;
+  toolCalls: ToolCall[];
+}
+
 export interface InlineAgentLoopDeps {
   post: PostFn;
   executeTool: ExecuteToolFn;
@@ -111,21 +122,34 @@ export async function runInlineAgentLoop(
         powHeaders,
       };
 
-      const stepTimeout = createStepSignal(signal);
-      const turn: ModelTurn = await submitPromptStreaming(input, {
-        retainAssistantText: false,
+      const {
+        turn,
+        snapshot: streamSnapshot,
+        outputLimitHit,
+      } = await submitBoundedInlineAgentStream(input, {
+        parentSignal: signal,
+        streamState,
         onTokenSpeed(progress) {
           postAgentTokenSpeed(post, payload, `step:${step}`, progress);
         },
-        onTextChunk(text) {
-          streamState.onTextChunk(text);
-        },
-      }, stepTimeout.signal);
-      stepTimeout.clear();
-      const streamSnapshot = streamState.flush();
+      });
       currentPromptOptions = textContinuationPromptOptions;
 
       if (signal.aborted) break;
+      if (outputLimitHit) {
+        if (streamSnapshot.visibleText.trim()) {
+          resolvedFinalText = streamSnapshot.visibleText;
+          post('AGENT_STEP_COMPLETE', {
+            loopId,
+            stepIndex: step,
+            responseMessageId: turn?.responseMessageId ?? null,
+            toolExecutions: [],
+          } satisfies InlineAgentStepCompleteMsg);
+          totalSteps = step + 1;
+        }
+        break;
+      }
+      if (!turn) break;
 
       parentMessageId = turn.responseMessageId;
       if (parentMessageId == null) {
@@ -198,20 +222,33 @@ export async function runInlineAgentLoop(
           post,
           fallbackText: visibleText,
         });
-        const nudgeTimeout = createStepSignal(signal);
-        const nudgeTurn = await submitPromptStreaming(nudgeInput, {
-          retainAssistantText: false,
+        const {
+          turn: nudgeTurn,
+          snapshot: nudgeStreamSnapshot,
+          outputLimitHit: nudgeOutputLimitHit,
+        } = await submitBoundedInlineAgentStream(nudgeInput, {
+          parentSignal: signal,
+          streamState: nudgeStreamState,
           onTokenSpeed(progress) {
             postAgentTokenSpeed(post, payload, `step:${step}:nudge:${nudgeCount}`, progress);
           },
-          onTextChunk(text) {
-            nudgeStreamState.onTextChunk(text);
-          },
-        }, nudgeTimeout.signal);
-        nudgeTimeout.clear();
-        const nudgeStreamSnapshot = nudgeStreamState.flush();
+        });
 
         if (signal.aborted) break;
+        if (nudgeOutputLimitHit) {
+          if (nudgeStreamSnapshot.visibleText.trim()) {
+            resolvedFinalText = nudgeStreamSnapshot.visibleText;
+            post('AGENT_STEP_COMPLETE', {
+              loopId,
+              stepIndex: step,
+              responseMessageId: nudgeTurn?.responseMessageId ?? null,
+              toolExecutions: [],
+            } satisfies InlineAgentStepCompleteMsg);
+            totalSteps = step + 1;
+          }
+          break;
+        }
+        if (!nudgeTurn) break;
 
         parentMessageId = nudgeTurn.responseMessageId;
         const nudgeToolCalls = nudgeStreamSnapshot.toolCalls;
@@ -324,24 +361,8 @@ export async function runInlineAgentLoop(
           parsingInput,
           post,
         });
-        const finalTurn = await submitPromptStreaming(finalInput, {
-          retainAssistantText: false,
-          onTokenSpeed(progress) {
-            postAgentTokenSpeed(post, payload, `step:${totalSteps}:final`, progress);
-          },
-          onTextChunk(text) {
-            if (!text.trim()) return;
-            if (!finalStepStarted) {
-              post('AGENT_STEP_STARTED', { loopId, stepIndex: totalSteps });
-              finalStepStarted = true;
-            }
-            finalStreamState.onTextChunk(text);
-          },
-        }, signal);
-        const finalStreamSnapshot = finalStreamState.flush();
-
-        finalText = finalStreamSnapshot.visibleText;
-        if (finalText.trim()) {
+        const completeFinalStep = (responseMessageId: number | null) => {
+          if (!finalText.trim()) return;
           if (!finalStepStarted) {
             post('AGENT_STEP_STARTED', { loopId, stepIndex: totalSteps });
             post('AGENT_STREAM_CHUNK', {
@@ -354,10 +375,32 @@ export async function runInlineAgentLoop(
           post('AGENT_STEP_COMPLETE', {
             loopId,
             stepIndex: totalSteps,
-            responseMessageId: finalTurn.responseMessageId,
+            responseMessageId,
             toolExecutions: [],
           } satisfies InlineAgentStepCompleteMsg);
           totalSteps++;
+        };
+
+        try {
+          const { turn: finalTurn, snapshot: finalStreamSnapshot } = await submitBoundedInlineAgentStream(finalInput, {
+            parentSignal: signal,
+            streamState: finalStreamState,
+            onTokenSpeed(progress) {
+              postAgentTokenSpeed(post, payload, `step:${totalSteps}:final`, progress);
+            },
+            onTextChunk(text) {
+              if (!text.trim()) return;
+              if (!finalStepStarted) {
+                post('AGENT_STEP_STARTED', { loopId, stepIndex: totalSteps });
+                finalStepStarted = true;
+              }
+            },
+          });
+          finalText = finalStreamSnapshot.visibleText;
+          completeFinalStep(finalTurn?.responseMessageId ?? null);
+        } catch {
+          finalText = finalStreamState.flush().visibleText;
+          completeFinalStep(null);
         }
       } catch {
         // Finalization is best-effort; loop still completes
@@ -402,6 +445,53 @@ function postAgentTokenSpeed(
     chatSessionId: payload.chatSessionId,
     modelType: progress.modelType ?? payload.promptOptions.modelType,
   } satisfies ResponseTokenSpeedPayload);
+}
+
+async function submitBoundedInlineAgentStream(
+  input: SubmitPromptInput,
+  options: {
+    parentSignal: AbortSignal;
+    streamState: ReturnType<typeof createInlineAgentStreamState>;
+    onTokenSpeed(progress: ResponseTokenSpeedPayload): void;
+    onTextChunk?(text: string): void;
+  },
+): Promise<InlineAgentStreamRunResult> {
+  const stepSignal = createStepSignal(options.parentSignal);
+  let rawTextLength = 0;
+  let outputLimitHit = false;
+
+  try {
+    const turn = await submitPromptStreaming(input, {
+      retainAssistantText: false,
+      onTokenSpeed: options.onTokenSpeed,
+      onTextChunk(text) {
+        options.onTextChunk?.(text);
+        options.streamState.onTextChunk(text);
+        rawTextLength += text.length;
+        if (rawTextLength >= INLINE_AGENT_STREAM_EVENT_MAX_CHARS) {
+          outputLimitHit = true;
+          stepSignal.abort();
+        }
+      },
+    }, stepSignal.signal);
+    return {
+      turn,
+      snapshot: options.streamState.flush(),
+      outputLimitHit,
+    };
+  } catch (err) {
+    const snapshot = options.streamState.flush();
+    if (outputLimitHit || (stepSignal.signal.aborted && !options.parentSignal.aborted)) {
+      return {
+        turn: null,
+        snapshot,
+        outputLimitHit: true,
+      };
+    }
+    throw err;
+  } finally {
+    stepSignal.clear();
+  }
 }
 
 function createVisionPromptOptionsFromToolExecutions(
@@ -560,14 +650,15 @@ function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function createStepSignal(parentSignal: AbortSignal): { signal: AbortSignal; clear: () => void } {
+function createStepSignal(parentSignal: AbortSignal): { signal: AbortSignal; abort: () => void; clear: () => void } {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), INLINE_AGENT_STEP_TIMEOUT_MS);
   const onParentAbort = () => controller.abort();
   parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  const abort = () => controller.abort();
   const clear = () => {
     clearTimeout(timeout);
     parentSignal.removeEventListener('abort', onParentAbort);
   };
-  return { signal: controller.signal, clear };
+  return { signal: controller.signal, abort, clear };
 }
