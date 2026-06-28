@@ -10,7 +10,7 @@ const EXPECTED_HASHES = {
   systemTemplateChat: '5bca8e90d23381c9605cbfebf7ecb91f28f4010ddbc2a6ccc291fa046fcd6eec',
   systemTemplateThinking: 'fa31e863e5f54f7a4e48cffdbae0e543028de4a565f77504e66edd707c73b5f3',
   memoryToolSchemas: 'a64e0a8874552177eba10089d5acfdc2996d0b703f83b1a57e9d76c733da9a7b',
-  promptAugmentationBuild: 'ae19712ab0e962040cb4307ae410e867c704af6857647f8ed5014ad20fdddf89',
+  promptAugmentationBuild: 'f918d8cfc3e2aded0793fadf6cd3fa88059189961a43500833cf493541461260',
   promptToolSchemaRenderer: '86df1accccfa1f43a95483625970d54f399d57b0b7c1ea1294b5662e09202d3f',
   promptLocaleResourcesEn: '33084d47f8d5ed25936e4cef517a759595272e5b1c9404587570ba33f549d214',
   promptLocaleResourcesZhCN: '5edc760c43b01511f96a6d9f9e487e6da7a06dc2f6d0fcf7ae512526f48d5a3c',
