@@ -64,6 +64,15 @@ const MAX_PYTHON_CODE_BYTES = 60_000;
 const MAX_PYTHON_OUTPUT_BYTES = 64_000;
 const PYTHON_PACKAGE_CHECKS = ['numpy', 'pandas', 'sympy'];
 const PYTHON_NOT_FOUND_MESSAGE = 'No local Python interpreter found. Tried environment variables, PATH entries, common paths, and python/python3/py --version.';
+const CHILD_ENV_BASE_KEYS = platform() === 'win32'
+  ? ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'USERNAME', 'USERDOMAIN']
+  : ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM'];
+const CHILD_ENV_DENY_PREFIXES = [
+  'OPENAI_', 'ANTHROPIC_', 'GEMINI_', 'GOOGLE_', 'DEEPSEEK_', 'QWEN_', 'AZURE_', 'AWS_',
+  'GITHUB_', 'GH_', 'HF_', 'HUGGINGFACE_', 'CODEX_', 'CLAUDE_', 'GROK_', 'ORACLE_',
+  'NPM_', 'YARN_', 'PNPM_', 'PLAYWRIGHT_', 'PUPPETEER_', 'CHROME_',
+];
+const CHILD_ENV_DENY_RE = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|CREDENTIAL|API_KEY|ACCESS_KEY|PRIVATE_KEY|SESSION|BEARER|AUTH)(?:_|$)|PROXY/i;
 const MAX_LOCAL_SKILLS = 80;
 const MAX_LOCAL_SKILL_BYTES = 120_000;
 const MAX_LOCAL_RESOURCE_FILES_PER_SKILL = 16;
@@ -1613,7 +1622,13 @@ function getPythonLimits() {
 
 function createChildEnv(extraEnv) {
   const explicitPath = getExplicitPathOverride(extraEnv);
-  const env = extraEnv && typeof extraEnv === 'object' ? { ...process.env, ...extraEnv } : { ...process.env };
+  const env = createBaseChildEnv();
+  if (extraEnv && typeof extraEnv === 'object') {
+    for (const [key, value] of Object.entries(extraEnv)) {
+      if (typeof value !== 'string' || isDeniedChildEnvName(key)) continue;
+      env[key] = value;
+    }
+  }
   const pathValue = explicitPath !== null ? explicitPath : (getEnvironmentPath(env) || getEnvironmentPath(process.env));
   setEnvironmentPath(env, pathValue);
   if (platform() === 'win32') {
@@ -1621,6 +1636,24 @@ function createChildEnv(extraEnv) {
     env.PYTHONIOENCODING ??= 'utf-8';
   }
   return env;
+}
+
+function createBaseChildEnv() {
+  const env = {};
+  for (const key of CHILD_ENV_BASE_KEYS) {
+    if (typeof process.env[key] === 'string' && !isDeniedChildEnvName(key)) {
+      env[key] = process.env[key];
+    }
+  }
+  return env;
+}
+
+function isDeniedChildEnvName(name) {
+  const upper = String(name || '').toUpperCase();
+  if (!upper) return true;
+  if (upper === 'PATH') return false;
+  if (CHILD_ENV_DENY_PREFIXES.some(prefix => upper.startsWith(prefix))) return true;
+  return CHILD_ENV_DENY_RE.test(upper);
 }
 
 function createShellInvocation(command) {

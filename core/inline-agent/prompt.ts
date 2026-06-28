@@ -42,9 +42,9 @@ export function shouldNudge(
   nudgeCount: number,
 ): boolean {
   if (extractTaskCompleteSignal(visibleText)) return false;
-  if (!visibleText) return true;
+  if (!visibleText.trim()) return true;
   if (PENDING_ACTION_RE.test(visibleText)) return true;
-  return nudgeCount === 0 && !FINALISH_RE.test(visibleText);
+  return false;
 }
 
 export function buildContinuationPrompt(

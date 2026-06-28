@@ -141,6 +141,29 @@ describe('DeepSeek project sidebar organizer', () => {
       .toBe('http://localhost:3000/a/chat/s/session-one');
   });
 
+  it('refreshes project conversation titles from native history rows without rewriting stored state', () => {
+    const state = createProjectState({
+      conversations: [{
+        conversationId: 'session-one',
+        projectId: 'project-deepseek',
+        title: '未命名对话',
+        url: 'https://chat.deepseek.com/a/chat/s/session-one',
+        addedAt: NOW - 60_000,
+        lastSeenAt: NOW - 60_000,
+      }],
+    });
+    mountHistoryDom();
+
+    const section = renderProjectSidebar(document, createRenderOptions({
+      state,
+      expandedProjectIds: new Set(['project-deepseek']),
+    }));
+
+    expect(section?.querySelector('[data-dpp-project-conversation-id="session-one"]')?.textContent)
+      .toContain('发布 0.7.3 版本');
+    expect(state.conversations[0].title).toBe('未命名对话');
+  });
+
   it('opens project conversations through the matching native history link', async () => {
     const state = createProjectState();
     sendMessage.mockImplementation(async (message) => {

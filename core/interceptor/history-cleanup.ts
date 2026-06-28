@@ -111,6 +111,7 @@ function stripMessageToolCalls(
   visibleMessages.forEach((msg: any, index: number) => {
     const replaceTaskComplete = shouldReplaceStoredTaskCompleteBlocks(msg, inlineAgentContinuationMessageIds);
     sanitizeInlineAgentContinuationMessage(msg);
+    sanitizeSystemToolContinuationMessage(msg);
     sanitizeStoredMessageInternalPrompt(msg, { replaceTaskComplete });
     const hasStoredToolCall = storedMessageHasToolCallMarker(msg, toolDescriptors);
     const isAssistant = isAssistantStoredMessage(msg) || hasStoredToolCall;
@@ -738,6 +739,40 @@ function sanitizeInlineAgentContinuationMessage(msg: any) {
   }
 }
 
+function sanitizeSystemToolContinuationMessage(msg: any) {
+  if (!isSystemToolContinuationMessage(msg)) return;
+  let replaced = false;
+
+  if (typeof msg.content === 'string' && isSystemToolContinuationPrompt(msg.content)) {
+    msg.content = '\u200b';
+    replaced = true;
+  }
+
+  if (Array.isArray(msg.fragments)) {
+    for (const frag of msg.fragments) {
+      if (!frag || typeof frag.content !== 'string' || !isSystemToolContinuationPrompt(frag.content)) continue;
+      frag.content = replaced ? '' : '\u200b';
+      replaced = true;
+    }
+  }
+
+  for (const entry of collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))) {
+    if (!isSystemToolContinuationPrompt(entry.content)) continue;
+    entry.owner[entry.key] = replaced ? '' : '\u200b';
+    replaced = true;
+  }
+}
+
+function isSystemToolContinuationMessage(msg: any): boolean {
+  if (!msg || typeof msg !== 'object') return false;
+  if (typeof msg.content === 'string' && isSystemToolContinuationPrompt(msg.content)) return true;
+  if (Array.isArray(msg.fragments) && msg.fragments.some((frag: any) => typeof frag?.content === 'string' && isSystemToolContinuationPrompt(frag.content))) {
+    return true;
+  }
+  return collectStructuredStoredTextEntries(msg, getMessageRestoreKey(msg, 0))
+    .some((entry) => isSystemToolContinuationPrompt(entry.content));
+}
+
 function isInternalManagedAgentContent(content: string): boolean {
   if (content.includes(DPP_MANAGED_AGENT_PROMPT_MARKER)) return true;
   if (content.includes('DeepSeek++ 托管 Agent Runner') && content.includes('<tool_results>')) return true;
@@ -746,6 +781,12 @@ function isInternalManagedAgentContent(content: string): boolean {
     content.includes('Available tool tag names:') &&
     content.includes('<original_user_task>') &&
     content.includes('</original_user_task>');
+}
+
+function isSystemToolContinuationPrompt(content: string): boolean {
+  if (!content.includes('[TOOL_RESULTS]') || !content.includes('[/TOOL_RESULTS]')) return false;
+  return content.includes('Continue from the tool results above') ||
+    content.includes('请根据上述工具执行结果继续');
 }
 
 function isInlineAgentContinuationPrompt(content: string): boolean {

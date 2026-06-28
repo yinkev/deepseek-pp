@@ -447,7 +447,12 @@ function renderProjectSection(
       list.className = 'dpp-project-sidebar__conversation-list';
       const visibleConversations = showAll ? conversations : conversations.slice(0, PROJECT_LIMIT);
       for (const conversation of visibleConversations) {
-        list.appendChild(createConversationRow(conversation, project, labels, options.activeProjectConversationMenu));
+        list.appendChild(createConversationRow(
+          resolveProjectConversationDisplay(conversation, historyItems),
+          project,
+          labels,
+          options.activeProjectConversationMenu,
+        ));
       }
       if (conversations.length > PROJECT_LIMIT) {
         const showMore = document.createElement('button');
@@ -704,6 +709,15 @@ function createConversationLink(conversation: ProjectConversation, labels: Proje
     <span class="dpp-project-sidebar__conversation-age">${escapeHtml(labels.age(conversation.lastSeenAt))}</span>
   `;
   return link;
+}
+
+function resolveProjectConversationDisplay(
+  conversation: ProjectConversation,
+  historyItems: readonly HistoryItem[],
+): ProjectConversation {
+  const historyTitle = historyItems.find((item) => item.sessionId === conversation.conversationId)?.title.trim();
+  if (!historyTitle || historyTitle === conversation.title) return conversation;
+  return { ...conversation, title: historyTitle };
 }
 
 function createIconButton(options: {

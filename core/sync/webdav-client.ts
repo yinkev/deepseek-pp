@@ -1,6 +1,8 @@
 import type { SyncConfig } from '../types';
+import { requireWebDavSyncConfig } from './config';
 
 function buildUrl(config: SyncConfig, file?: string): string {
+  requireWebDavSyncConfig(config);
   const base = config.url.replace(/\/+$/, '');
   const path = config.remotePath.replace(/^\/+|\/+$/g, '');
   if (file) return `${base}/${path}/${file}`;
@@ -8,6 +10,7 @@ function buildUrl(config: SyncConfig, file?: string): string {
 }
 
 function headers(config: SyncConfig, extra?: Record<string, string>): Record<string, string> {
+  requireWebDavSyncConfig(config);
   return {
     Authorization: 'Basic ' + btoa(`${config.username}:${config.password}`),
     ...extra,

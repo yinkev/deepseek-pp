@@ -230,11 +230,23 @@ export type NewMemory = Omit<
   projectId?: string;
 };
 
+export type SyncProvider = 'webdav' | 'google_drive' | 'onedrive';
+
+export interface SyncOAuthConfig {
+  accountId: string;
+  displayName: string;
+  tokenRef: string | null;
+  driveId?: string | null;
+  folderId?: string | null;
+}
+
 export interface SyncConfig {
+  provider?: SyncProvider;
   url: string;
   username: string;
   password: string;
   remotePath: string;
+  oauth?: SyncOAuthConfig;
   lastSyncAt: number | null;
 }
 
@@ -520,6 +532,7 @@ export type MessageAction =
   | { type: 'GET_SAVED_ITEMS' }
   | { type: 'SAVE_SAVED_ITEM'; payload: SavedItemInput }
   | { type: 'DELETE_SAVED_ITEM'; payload: { id: string } }
+  | { type: 'INSERT_SAVED_PROMPT_IN_ACTIVE_DEEPSEEK_TAB'; payload: { text: string } }
   | { type: 'GET_VOICE_SETTINGS' }
   | { type: 'SAVE_VOICE_SETTINGS'; payload: Partial<VoiceSettingsType> }
   | { type: 'GET_VOICE_CAPABILITIES' }

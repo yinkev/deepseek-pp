@@ -12,10 +12,12 @@ export interface ContentUxPolishLabels {
 }
 
 const STYLE_ID = 'dpp-content-ux-polish-css';
+const CODE_FRAME_CLASS = 'dpp-code-download-frame';
 const CODE_BUTTON_CLASS = 'dpp-code-download';
 const MESSAGE_BUTTON_CLASS = 'dpp-message-download';
 const MESSAGE_SELECTOR = '[data-message-id][data-message-role], [data-message-author-role]';
 const POLISH_MOUNT_DELAY_MS = 500;
+const CODE_MOUNTED_ATTR = 'data-dpp-code-download-mounted';
 
 export function startContentUxPolish(
   getLabels: () => ContentUxPolishLabels,
@@ -39,14 +41,15 @@ export function startContentUxPolish(
       observer.disconnect();
       candidateMountScheduler.cancel();
       window.removeEventListener('dpp:navigation', mount);
-      document.querySelectorAll(`.${CODE_BUTTON_CLASS}, .${MESSAGE_BUTTON_CLASS}`).forEach((button) => button.remove());
+      unmountCodeDownloadControls(document);
+      document.querySelectorAll(`.${MESSAGE_BUTTON_CLASS}`).forEach((button) => button.remove());
     },
   };
 }
 
 export function collectCodeBlocks(root: ParentNode): HTMLElement[] {
   return queryIncludingRoot<HTMLElement>(root, 'pre')
-    .filter((pre) => !pre.querySelector(`:scope > .${CODE_BUTTON_CLASS}`));
+    .filter((pre) => pre.getAttribute(CODE_MOUNTED_ATTR) !== 'true');
 }
 
 export function inferCodeFilename(codeBlock: HTMLElement, index = 0): string {
@@ -64,7 +67,10 @@ function mountPolish(root: ParentNode, labels: ContentUxPolishLabels): void {
 }
 
 function mountCodeDownload(pre: HTMLElement, index: number, labels: ContentUxPolishLabels): void {
-  pre.style.position ||= 'relative';
+  if (pre.getAttribute(CODE_MOUNTED_ATTR) === 'true') return;
+  const frame = ensureCodeDownloadFrame(pre);
+  if (!frame) return;
+  pre.setAttribute(CODE_MOUNTED_ATTR, 'true');
   const button = document.createElement('button');
   button.type = 'button';
   button.className = CODE_BUTTON_CLASS;
@@ -75,7 +81,7 @@ function mountCodeDownload(pre: HTMLElement, index: number, labels: ContentUxPol
     event.stopPropagation();
     downloadText(inferCodeFilename(pre, index), getCodeBlockText(pre), 'text/plain;charset=utf-8');
   });
-  pre.appendChild(button);
+  frame.appendChild(button);
 }
 
 export function getCodeBlockText(pre: HTMLElement): string {
@@ -185,6 +191,31 @@ function getPolishCandidateRoot(node: Node): ParentNode | null {
   return null;
 }
 
+function ensureCodeDownloadFrame(pre: HTMLElement): HTMLElement | null {
+  const parent = pre.parentElement;
+  if (!parent) return null;
+  if (parent.classList.contains(CODE_FRAME_CLASS)) return parent;
+
+  const frame = document.createElement('div');
+  frame.className = CODE_FRAME_CLASS;
+  parent.insertBefore(frame, pre);
+  frame.appendChild(pre);
+  return frame;
+}
+
+function unmountCodeDownloadControls(root: ParentNode): void {
+  root.querySelectorAll<HTMLElement>(`pre[${CODE_MOUNTED_ATTR}="true"]`).forEach((pre) => {
+    pre.removeAttribute(CODE_MOUNTED_ATTR);
+  });
+  root.querySelectorAll<HTMLElement>(`.${CODE_BUTTON_CLASS}`).forEach((button) => button.remove());
+  root.querySelectorAll<HTMLElement>(`.${CODE_FRAME_CLASS}`).forEach((frame) => {
+    const pre = frame.querySelector<HTMLElement>(':scope > pre');
+    if (!pre || !frame.parentElement) return;
+    frame.parentElement.insertBefore(pre, frame);
+    frame.remove();
+  });
+}
+
 function queryIncludingRoot<T extends HTMLElement>(root: ParentNode, selector: string): T[] {
   const matches: T[] = [];
   if (root instanceof Element && root.matches(selector)) {
@@ -229,6 +260,9 @@ function injectStyles(): void {
       color: #334155;
       font: 11px/1.2 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
       cursor: pointer;
+    }
+    .${CODE_FRAME_CLASS} {
+      position: relative;
     }
     .${CODE_BUTTON_CLASS} {
       position: absolute;

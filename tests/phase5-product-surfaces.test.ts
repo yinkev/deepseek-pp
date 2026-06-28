@@ -128,6 +128,32 @@ describe('Phase 5 product surface helpers', () => {
     }
   });
 
+  it('mounts code download controls outside the pre/code tree', () => {
+    document.body.innerHTML = '<pre data-testid="block"><code class="language-ts">const ok = true;</code></pre>';
+    const polish = startContentUxPolish(() => ({
+      codeDownloadButton: 'Download',
+      messageMarkdownButton: 'MD',
+      messageMarkdownTitle: 'Download message as Markdown',
+    }));
+
+    try {
+      const pre = document.querySelector<HTMLElement>('[data-testid="block"]')!;
+      const wrapper = pre.parentElement!;
+
+      expect(pre.querySelector('.dpp-code-download')).toBeNull();
+      expect(pre.querySelector('code')?.textContent).toBe('const ok = true;');
+      expect(wrapper.classList.contains('dpp-code-download-frame')).toBe(true);
+      expect(wrapper.querySelectorAll(':scope > .dpp-code-download')).toHaveLength(1);
+      expect(getCodeBlockText(pre)).toBe('const ok = true;');
+
+      polish.refreshLabels();
+      expect(document.querySelectorAll('.dpp-code-download-frame')).toHaveLength(1);
+      expect(wrapper.querySelectorAll(':scope > .dpp-code-download')).toHaveLength(1);
+    } finally {
+      polish.stop();
+    }
+  });
+
   it('does not rescan processed large code block text while streaming', async () => {
     vi.useFakeTimers();
     document.body.innerHTML = '<section id="stream"></section>';
@@ -146,7 +172,7 @@ describe('Phase 5 product surface helpers', () => {
 
       await Promise.resolve();
       vi.advanceTimersByTime(510);
-      expect(pre.querySelector('.dpp-code-download')).not.toBeNull();
+      expect(pre.parentElement?.querySelector(':scope > .dpp-code-download')).not.toBeNull();
 
       Object.defineProperty(pre, 'textContent', {
         configurable: true,
@@ -158,7 +184,7 @@ describe('Phase 5 product surface helpers', () => {
 
       await Promise.resolve();
       vi.advanceTimersByTime(510);
-      expect(pre.querySelectorAll('.dpp-code-download')).toHaveLength(1);
+      expect(pre.parentElement?.querySelectorAll(':scope > .dpp-code-download')).toHaveLength(1);
     } finally {
       polish.stop();
     }

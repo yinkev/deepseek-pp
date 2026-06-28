@@ -80,6 +80,7 @@ import { validateBridgeMessage } from '../core/messaging/schema';
 import { startDeepSeekHistoryOrganizer, type HistoryOrganizerController } from './content/adapters/history-organizer';
 import { startDeepSeekProjectSidebarOrganizer, type ProjectSidebarOrganizerController } from './content/adapters/project-sidebar-organizer';
 import { startContentUxPolish, type ContentUxPolishController } from './content/adapters/ux-polish';
+import { insertTextIntoDeepSeekPromptInput } from './content/deepseek-input';
 import {
   buildMultimodalAnalysisPrompt,
   hasDeepSeekChatSessionRoute,
@@ -610,6 +611,14 @@ export default defineContentScript({
           mainWorldBridgeReady: mainWorldMessageHandler !== null,
           checkedAt: Date.now(),
         });
+        return true;
+      } else if (message.type === 'INSERT_TEXT_INTO_DEEPSEEK_INPUT') {
+        const text = typeof message.payload === 'object' && message.payload !== null
+          && typeof (message.payload as { text?: unknown }).text === 'string'
+          ? (message.payload as { text: string }).text
+          : '';
+        const ok = text.length > 0 && insertPromptText(text);
+        sendResponse(ok ? { ok: true } : { ok: false, error: 'input_not_found' });
         return true;
       } else if (message.type === 'DEEPSEEK_EXPORT_PROGRESS') {
         updateConversationExportProgress(message.progress as ConversationExportProgress | undefined);
@@ -1896,13 +1905,7 @@ function isPromptPasteTarget(target: EventTarget | null): boolean {
 }
 
 function insertPromptText(text: string) {
-  const textarea = getPromptTextarea();
-  if (!textarea) return;
-  const start = textarea.selectionStart ?? textarea.value.length;
-  const end = textarea.selectionEnd ?? start;
-  textarea.value = `${textarea.value.slice(0, start)}${text}${textarea.value.slice(end)}`;
-  textarea.selectionStart = textarea.selectionEnd = start + text.length;
-  textarea.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }));
+  return insertTextIntoDeepSeekPromptInput(document, text);
 }
 
 async function consumePendingMultimodalMediaForRequest(

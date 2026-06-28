@@ -4,6 +4,7 @@ import {
   buildFinalizationPrompt,
   buildNudgePrompt,
   replaceTaskCompleteBlocks,
+  shouldNudge,
 } from '../core/inline-agent/prompt';
 import { buildAutomationToolContinuationPrompt } from '../core/automation/runner';
 import type { ToolExecutionRecord } from '../core/types';
@@ -84,6 +85,14 @@ describe('inline-agent model prompts', () => {
     ].join('\n');
 
     expect(replaceTaskCompleteBlocks(text)).toBe('before\n任务已经完成。\nafter');
+  });
+
+  it('nudges only empty or pending tool-intent continuations', () => {
+    expect(shouldNudge('Check docs', [SUCCESS_EXECUTION], '', 0)).toBe(true);
+    expect(shouldNudge('Check docs', [SUCCESS_EXECUTION], 'I will inspect the current page next.', 0)).toBe(true);
+    expect(shouldNudge('Check docs', [SUCCESS_EXECUTION], 'Here are the relevant docs I found.', 0)).toBe(false);
+    expect(shouldNudge('Check docs', [SUCCESS_EXECUTION], 'Final answer: the docs say no setup is needed.', 0)).toBe(false);
+    expect(shouldNudge('Check docs', [SUCCESS_EXECUTION], '<task_complete>{"summary":"Done","artifacts":[]}</task_complete>', 0)).toBe(false);
   });
 });
 

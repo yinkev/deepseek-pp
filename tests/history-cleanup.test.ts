@@ -57,6 +57,58 @@ describe('history cleanup', () => {
     expect(json.data.biz_data.chat_messages[3].parent_message_id).toBe(3);
   });
 
+  it('keeps system tool-continuation prompt nodes but hides internal tool results', () => {
+    const json = {
+      data: {
+        biz_data: {
+          chat_messages: [
+            {
+              message_id: 5,
+              message_role: 'user',
+              content: 'Use the browser and tell me what loaded.',
+            },
+            {
+              message_id: 6,
+              message_role: 'assistant',
+              parent_message_id: 5,
+              content: '<browser_snapshot>{"targetLeaseId":"lease-1"}</browser_snapshot>',
+            },
+            {
+              message_id: 7,
+              message_role: 'user',
+              content: [
+                '[TOOL_RESULTS]',
+                '[{"tool":"browser_snapshot","ok":true,"summary":"Loaded dashboard"}]',
+                '[/TOOL_RESULTS]',
+                '',
+                'Continue from the tool results above. If the user\'s browser/page request is now satisfied, answer the user directly with the observed result.',
+              ].join('\n'),
+            },
+            {
+              message_id: 8,
+              message_role: 'assistant',
+              parent_message_id: 7,
+              content: 'The dashboard loaded.',
+            },
+          ],
+        },
+      },
+    };
+
+    stripToolCallsFromHistory(json, {
+      toolDescriptors: [
+        ...createDefaultToolDescriptors(),
+        ...createBrowserControlToolDescriptors('en'),
+      ],
+      onToolCallsRestored: () => undefined,
+    });
+
+    expect(json.data.biz_data.chat_messages.map((message: { message_id: number }) => message.message_id)).toEqual([5, 6, 7, 8]);
+    expect(json.data.biz_data.chat_messages[2].content).toBe('\u200b');
+    expect(JSON.stringify(json)).not.toContain('browser_snapshot');
+    expect(json.data.biz_data.chat_messages[3].parent_message_id).toBe(7);
+  });
+
   it('adds assistant message anchors to restored tool-call records', () => {
     const records: unknown[] = [];
     const json = {

@@ -71,7 +71,11 @@ export function augmentRequestBody(
     ? null
     : promptSettings.forceResponseLanguage;
 
-  if (state.modelType && !hasRefFileIds(body.ref_file_ids)) {
+  if (hasRefFileIds(body.ref_file_ids)) {
+    body.model_type = typeof body.model_type === 'string' && body.model_type.trim()
+      ? body.model_type
+      : 'vision';
+  } else if (state.modelType) {
     body.model_type = state.modelType;
   }
 

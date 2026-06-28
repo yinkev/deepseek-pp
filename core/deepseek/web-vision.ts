@@ -18,6 +18,9 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_MAX_POLL_ATTEMPTS = 10;
 const PENDING_FILE_STATUSES = new Set(['PENDING', 'PARSING']);
 const SUCCESS_FILE_STATUS = 'SUCCESS';
+const SUCCESS_AUDIT_RESULTS = new Set(['PASS', 'PASSED', 'SUCCESS', 'OK']);
+const PENDING_AUDIT_RESULTS = new Set(['UNKNOWN', 'PENDING', 'AUDITING', 'PROCESSING']);
+const REJECTED_AUDIT_RESULTS = new Set(['REJECT', 'REJECTED', 'FAIL', 'FAILED', 'BLOCKED']);
 const DATA_URL_BASE64_MARKER = ';base64,';
 
 type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -333,10 +336,21 @@ async function waitForVisionFile(input: DeepSeekWebVisionUploadInput & {
     lastMetadata = findFileMetadata(json, input.refFileId, input.file);
     const status = lastMetadata?.status?.toUpperCase() ?? null;
     const modelKind = lastMetadata?.modelKind?.toUpperCase() ?? null;
-    if (lastMetadata && status === SUCCESS_FILE_STATUS && modelKind === 'VISION') return lastMetadata;
+    const auditState = getVisionAuditState(lastMetadata?.auditResult ?? null);
+    const isVisionSuccess = status === SUCCESS_FILE_STATUS && modelKind === 'VISION';
+    if (auditState === 'rejected') {
+      throw new DeepSeekWebVisionUploadError(
+        'file_not_ready',
+        `DeepSeek Vision file ${input.refFileId} was rejected by image audit.`,
+      );
+    }
+    if (lastMetadata && isVisionSuccess && auditState !== 'pending') {
+      return lastMetadata;
+    }
 
     if (
       status &&
+      !isVisionSuccess &&
       (!PENDING_FILE_STATUSES.has(status) || (modelKind !== null && modelKind !== 'VISION'))
     ) {
       throw new DeepSeekWebVisionUploadError(
@@ -355,6 +369,16 @@ async function waitForVisionFile(input: DeepSeekWebVisionUploadInput & {
     `DeepSeek Vision file ${input.refFileId} was not ready after ${maxPollAttempts} checks. Last status: ${lastMetadata?.status ?? 'unknown'}.`,
     { retryable: true },
   );
+}
+
+function getVisionAuditState(value: string | null): 'missing' | 'pending' | 'success' | 'rejected' {
+  if (!value) return 'missing';
+  const normalized = value.trim().toUpperCase();
+  if (!normalized) return 'missing';
+  if (SUCCESS_AUDIT_RESULTS.has(normalized)) return 'success';
+  if (REJECTED_AUDIT_RESULTS.has(normalized)) return 'rejected';
+  if (PENDING_AUDIT_RESULTS.has(normalized)) return 'pending';
+  return 'pending';
 }
 
 function validateVisionImage(file: File): void {

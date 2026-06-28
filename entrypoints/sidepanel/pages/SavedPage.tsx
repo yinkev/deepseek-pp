@@ -8,7 +8,7 @@ import { useI18n } from '../i18n';
 import { getRuntimeErrorMessage, unwrapRuntimeResponse } from '../runtime-response';
 
 interface SavedPageProps {
-  onInsertPrompt: (text: string) => void;
+  onInsertPrompt: (text: string) => void | Promise<void>;
 }
 
 export default function SavedPage({ onInsertPrompt }: SavedPageProps) {
@@ -88,6 +88,23 @@ export default function SavedPage({ onInsertPrompt }: SavedPageProps) {
     if (!ok) return;
     await chrome.runtime.sendMessage({ type: 'DELETE_SAVED_ITEM', payload: { id } });
     await load();
+  };
+
+  const insertPrompt = async (text: string) => {
+    banner.clear();
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'INSERT_SAVED_PROMPT_IN_ACTIVE_DEEPSEEK_TAB',
+        payload: { text },
+      });
+      if (result?.ok) {
+        banner.show('success', t('sidepanel.savedPage.insertedIntoPage'));
+        return;
+      }
+    } catch {}
+
+    await onInsertPrompt(text);
+    banner.show('success', t('sidepanel.savedPage.insertedIntoSidepanel'));
   };
 
   const exportItems = (format: 'markdown' | 'json') => {
@@ -238,7 +255,7 @@ export default function SavedPage({ onInsertPrompt }: SavedPageProps) {
             )}
             <button
               type="button"
-              onClick={() => onInsertPrompt(item.content)}
+              onClick={() => insertPrompt(item.content)}
               className="ds-btn-secondary w-full py-2 text-[11px] font-medium rounded-lg transition-all duration-150"
             >
               {t('sidepanel.savedPage.insertPrompt')}

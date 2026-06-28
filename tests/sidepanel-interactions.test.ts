@@ -69,6 +69,66 @@ describe('sidepanel interactions', () => {
     expect(inputByPlaceholder('标题').value).toBe('');
   });
 
+  it('inserts a saved prompt into the active DeepSeek page before falling back to sidepanel chat', async () => {
+    const savedItem = {
+      id: 'saved-1',
+      syncId: 'sync-1',
+      kind: 'snippet',
+      title: 'Review prompt',
+      content: 'Summarize this thread.',
+      tags: ['prompt'],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const onInsertPrompt = vi.fn();
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_SAVED_ITEMS') return [savedItem];
+      if (message.type === 'INSERT_SAVED_PROMPT_IN_ACTIVE_DEEPSEEK_TAB') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(SavedPage, { onInsertPrompt }));
+    await flushEffects();
+    await clickButton('插入到对话');
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'INSERT_SAVED_PROMPT_IN_ACTIVE_DEEPSEEK_TAB',
+      payload: { text: 'Summarize this thread.' },
+    });
+    expect(onInsertPrompt).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('已插入到 DeepSeek 输入框。');
+  });
+
+  it('keeps the sidepanel pending-text fallback when no DeepSeek page input is available', async () => {
+    const savedItem = {
+      id: 'saved-1',
+      syncId: 'sync-1',
+      kind: 'snippet',
+      title: 'Review prompt',
+      content: 'Summarize this thread.',
+      tags: ['prompt'],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const onInsertPrompt = vi.fn();
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_SAVED_ITEMS') return [savedItem];
+      if (message.type === 'INSERT_SAVED_PROMPT_IN_ACTIVE_DEEPSEEK_TAB') {
+        return { ok: false, error: 'no_active_deepseek_tab' };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(SavedPage, { onInsertPrompt }));
+    await flushEffects();
+    await clickButton('插入到对话');
+
+    expect(onInsertPrompt).toHaveBeenCalledWith('Summarize this thread.');
+    expect(container.textContent).toContain('已在侧边栏对话中打开。');
+  });
+
   it('persists prompt control select changes instead of reverting to defaults', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: PromptInjectionSettings }) => {
       if (message.type === 'GET_PROMPT_INJECTION_SETTINGS') return DEFAULT_PROMPT_INJECTION_SETTINGS;

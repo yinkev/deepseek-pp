@@ -447,6 +447,111 @@ describe('DeepSeek Web Vision upload', () => {
     expect(result.refFileId).toBe('file-pending');
     expect(statusPolls).toBe(2);
   });
+
+  it('keeps polling successful Vision files while audit is pending or unknown', async () => {
+    let statusPolls = 0;
+    const fetchImpl = vi.fn<FetchImpl>(async (input) => {
+      const url = String(input);
+      if (url.endsWith(DEEPSEEK_WEB_FILE_UPLOAD_PATH)) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              id: 'file-audit-pending',
+              status: 'PENDING',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+              audit_result: 'unknown',
+            },
+          },
+        });
+      }
+      statusPolls += 1;
+      return jsonResponse({
+        code: 0,
+        data: {
+          biz_code: 0,
+          biz_data: {
+            files: [{
+              id: 'file-audit-pending',
+              status: 'SUCCESS',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+              audit_result: statusPolls === 1 ? 'unknown' : 'pass',
+            }],
+          },
+        },
+      });
+    });
+
+    const result = await uploadDeepSeekWebVisionImage({
+      file: new File(['probe'], 'probe.png', { type: 'image/png' }),
+      clientHeaders: {},
+      createPowHeaders: async () => ({}),
+      fetchImpl,
+      pollIntervalMs: 0,
+      maxPollAttempts: 2,
+    });
+
+    expect(result.refFileId).toBe('file-audit-pending');
+    expect(statusPolls).toBe(2);
+    expect(result.metadata.auditResult).toBe('pass');
+  });
+
+  it('rejects successful Vision files when audit rejects the image', async () => {
+    const fetchImpl = vi.fn<FetchImpl>(async (input) => {
+      const url = String(input);
+      if (url.endsWith(DEEPSEEK_WEB_FILE_UPLOAD_PATH)) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            biz_code: 0,
+            biz_data: {
+              id: 'file-audit-reject',
+              status: 'PENDING',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+            },
+          },
+        });
+      }
+      return jsonResponse({
+        code: 0,
+        data: {
+          biz_code: 0,
+          biz_data: {
+            files: [{
+              id: 'file-audit-reject',
+              status: 'SUCCESS',
+              file_name: 'probe.png',
+              file_size: 5,
+              model_kind: 'VISION',
+              is_image: true,
+              audit_result: 'reject',
+            }],
+          },
+        },
+      });
+    });
+
+    await expect(uploadDeepSeekWebVisionImage({
+      file: new File(['probe'], 'probe.png', { type: 'image/png' }),
+      clientHeaders: {},
+      createPowHeaders: async () => ({}),
+      fetchImpl,
+      pollIntervalMs: 0,
+    })).rejects.toMatchObject({
+      code: 'file_not_ready',
+      retryable: false,
+    });
+  });
 });
 
 describe('DeepSeek Web Vision routing', () => {

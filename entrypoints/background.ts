@@ -837,6 +837,11 @@ async function handleMessage(
       return { ok: true };
     }
 
+    case 'INSERT_SAVED_PROMPT_IN_ACTIVE_DEEPSEEK_TAB': {
+      const { text } = message.payload as { text?: string };
+      return insertTextIntoActiveDeepSeekTab(typeof text === 'string' ? text : '');
+    }
+
     case 'GET_VOICE_SETTINGS':
       return getVoiceSettings();
 
@@ -1793,6 +1798,35 @@ function isDeepSeekChatUrl(url: string | undefined): boolean {
     return parsed.hostname === 'chat.deepseek.com' && /\/(?:a\/)?chat\/s\//.test(parsed.pathname);
   } catch {
     return false;
+  }
+}
+
+function isDeepSeekUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname === 'chat.deepseek.com';
+  } catch {
+    return false;
+  }
+}
+
+async function insertTextIntoActiveDeepSeekTab(
+  text: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!text) return { ok: false, error: 'empty_text' };
+
+  const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tab = tabs.find((item) => item.id != null && isDeepSeekUrl(item.url));
+  if (!tab?.id) return { ok: false, error: 'no_active_deepseek_tab' };
+
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      type: 'INSERT_TEXT_INTO_DEEPSEEK_INPUT',
+      payload: { text },
+    });
+    return response?.ok ? { ok: true } : { ok: false, error: response?.error ?? 'input_not_found' };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

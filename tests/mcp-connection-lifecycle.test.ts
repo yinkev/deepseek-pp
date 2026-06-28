@@ -184,6 +184,113 @@ it('invokes chrome.runtime.connectNative for native_messaging transport on first
   // do not await reqP: native impl waits on response listener; we only care that connectNative was reached
   void reqP;
 });
+
+it('sends Streamable HTTP protocol headers and reuses the server session id', async () => {
+  const calls: Headers[] = [];
+  const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    calls.push(headers);
+    if (calls.length === 1) {
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'init',
+        result: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {} },
+      }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'Mcp-Session-Id': 'session-abc',
+        },
+      });
+    }
+    if (calls.length === 2) {
+      return new Response('', { status: 202 });
+    }
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'list',
+      result: { tools: [] },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  vi.stubGlobal('fetch', fetchImpl);
+
+  const server = createServerConfig();
+  const transport = Transports.createMcpTransport(server);
+
+  await transport.request({ jsonrpc: '2.0', id: 'init', method: 'initialize' } as any);
+  await transport.notify?.({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  await transport.request({ jsonrpc: '2.0', id: 'list', method: 'tools/list' } as any);
+
+  expect(calls).toHaveLength(3);
+  expect(calls[0].get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
+  expect(calls[0].get('Mcp-Session-Id')).toBeNull();
+  expect(calls[1].get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
+  expect(calls[1].get('Mcp-Session-Id')).toBe('session-abc');
+  expect(calls[2].get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
+  expect(calls[2].get('Mcp-Session-Id')).toBe('session-abc');
+});
+
+it('does not add Streamable HTTP headers to plain HTTP transport', async () => {
+  let headers: Headers | null = null;
+  vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    headers = new Headers(init?.headers);
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'plain',
+      result: {},
+    }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'Mcp-Session-Id': 'session-ignored',
+      },
+    });
+  }));
+
+  const transport = Transports.createMcpTransport(createServerConfig({
+    transport: { kind: 'http', url: 'https://example.com/mcp' },
+  }));
+  await transport.request({ jsonrpc: '2.0', id: 'plain', method: 'ping' } as any);
+
+  expect(headers).not.toBeNull();
+  const capturedHeaders = headers as unknown as Headers;
+  expect(capturedHeaders.get('MCP-Protocol-Version')).toBeNull();
+  expect(capturedHeaders.get('Mcp-Session-Id')).toBeNull();
+});
+
+it('does not reuse a Streamable HTTP session across transport instances', async () => {
+  const calls: Headers[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(new Headers(init?.headers));
+    return new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: calls.length === 1 ? 'init' : 'list',
+      result: calls.length === 1
+        ? { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {} }
+        : { tools: [] },
+    }), {
+      status: 200,
+      headers: calls.length === 1
+        ? { 'content-type': 'application/json', 'Mcp-Session-Id': 'session-first' }
+        : { 'content-type': 'application/json' },
+    });
+  }));
+
+  const first = Transports.createMcpTransport(createServerConfig());
+  await first.request({ jsonrpc: '2.0', id: 'init', method: 'initialize' } as any);
+
+  const second = Transports.createMcpTransport(createServerConfig({
+    id: 'server-2',
+    transport: { kind: 'streamable_http', url: 'https://example.org/mcp' },
+  }));
+  await second.request({ jsonrpc: '2.0', id: 'list', method: 'tools/list' } as any);
+
+  expect(calls[0].get('Mcp-Session-Id')).toBeNull();
+  expect(calls[1].get('Mcp-Session-Id')).toBeNull();
+});
 });
 
 describe('tool discovery caching (expiresAt)', () => {

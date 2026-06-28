@@ -246,6 +246,8 @@ export const en = {
       exportMarkdown: 'Export Markdown',
       exportJson: 'Export JSON',
       saved: 'Saved',
+      insertedIntoPage: 'Inserted into the DeepSeek input.',
+      insertedIntoSidepanel: 'Opened in sidepanel chat.',
       deleteConfirm: 'Delete this saved item?',
       backendUnavailable: 'Saved items backend is unavailable. Reload the extension and try again.',
       operationFailed: 'Saved item action failed: {error}',

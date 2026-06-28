@@ -97,6 +97,20 @@ describe('session-based project context', () => {
     expect(formatProjectPromptContext(context!)).toContain('Keep track of story continuity.');
   });
 
+  it('binds pending project intent once and leaves later conversations unbound', async () => {
+    const project = await createProjectContext({ name: 'Plotforge' });
+    await setPendingProjectContext(project.id);
+
+    const first = await bindPendingProjectConversation({ conversationId: 'session-first' });
+    const second = await bindPendingProjectConversation({ conversationId: 'session-second' });
+    const state = await getProjectContextState();
+
+    expect(first?.projectId).toBe(project.id);
+    expect(second).toBeNull();
+    expect(state.pendingProjectId).toBeNull();
+    expect(state.conversations.map((conversation) => conversation.conversationId)).toEqual(['session-first']);
+  });
+
   it('updates project instructions and removes conversation membership', async () => {
     const project = await createProjectContext({ name: 'Alpha', instructions: 'Old' });
     await addConversationToProject(project.id, { conversationId: 'session-1' });

@@ -34,6 +34,47 @@ describe('shell native host local_skill_preview', () => {
       expect.objectContaining({ path: 'nested/scripts/run.py' }),
     ]);
   });
+
+  it('strips inherited and explicit secret-like env from shell execution while keeping safe env', async () => {
+    const script = [
+      "const keys=['DPP_SAFE_ENV','OPENAI_API_KEY','DPP_SECRET_TOKEN','HTTP_PROXY','DPP_PARENT_SAFE','PATH','HOME'];",
+      "console.log(JSON.stringify(Object.fromEntries(keys.map((key)=>[key, process.env[key] || null]))));",
+    ].join('');
+    const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+    const response = await callNativeHost(
+      'shell_exec',
+      {
+        command,
+        env: {
+          DPP_SAFE_ENV: 'visible',
+          OPENAI_API_KEY: 'explicit-openai',
+          DPP_SECRET_TOKEN: 'explicit-secret',
+          HTTP_PROXY: 'http://explicit-proxy.example',
+        },
+      },
+      {
+        env: {
+          ...process.env,
+          OPENAI_API_KEY: 'inherited-openai',
+          DEEPSEEK_API_KEY: 'inherited-deepseek',
+          HTTP_PROXY: 'http://inherited-proxy.example',
+          DPP_PARENT_SAFE: 'not-forwarded',
+        },
+      },
+    );
+
+    expect(response.error).toBeUndefined();
+    const data = response.result?.structuredContent?.data;
+    expect(data.exitCode).toBe(0);
+    const env = JSON.parse(data.stdout.trim()) as Record<string, string | null>;
+    expect(env.DPP_SAFE_ENV).toBe('visible');
+    expect(env.OPENAI_API_KEY).toBeNull();
+    expect(env.DPP_SECRET_TOKEN).toBeNull();
+    expect(env.HTTP_PROXY).toBeNull();
+    expect(env.DPP_PARENT_SAFE).toBeNull();
+    expect(env.PATH).toBeTruthy();
+    if (process.platform !== 'win32') expect(env.HOME).toBeTruthy();
+  });
 });
 
 function createNestedSkillFixture(): string {
@@ -68,9 +109,14 @@ function createNestedSkillFixture(): string {
   return root;
 }
 
-async function callNativeHost(name: string, args: Record<string, unknown>) {
+async function callNativeHost(
+  name: string,
+  args: Record<string, unknown>,
+  options: { env?: NodeJS.ProcessEnv } = {},
+) {
   const child = spawn(process.execPath, [hostPath], {
     stdio: ['pipe', 'pipe', 'pipe'],
+    env: options.env,
   });
   let stdout = Buffer.alloc(0);
   let stderr = '';

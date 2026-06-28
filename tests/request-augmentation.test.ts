@@ -44,6 +44,51 @@ describe('augmentRequestBody', () => {
     expect(body.ref_file_ids).toEqual(['file-1']);
   });
 
+  it('routes uploaded file refs through vision when the page request has not set a model type yet', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'describe the uploaded file',
+      parent_message_id: null,
+      ref_file_ids: ['file-1'],
+      thinking_enabled: false,
+    }), {
+      memories: [],
+      skills: [],
+      activePreset: null,
+      modelType: 'expert',
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as { model_type?: string; ref_file_ids?: string[] };
+    expect(body.model_type).toBe('vision');
+    expect(body.ref_file_ids).toEqual(['file-1']);
+  });
+
+  it('applies explicit vision mode on ordinary webpage prompts without dropping request flags', () => {
+    const result = augmentRequestBody(JSON.stringify({
+      prompt: 'use vision mode',
+      parent_message_id: null,
+      search_enabled: false,
+      thinking_enabled: false,
+    }), {
+      memories: [],
+      skills: [],
+      activePreset: null,
+      modelType: 'vision',
+      toolDescriptors: DEFAULT_TOOL_DESCRIPTORS,
+      messageCount: 0,
+    });
+
+    const body = JSON.parse(result?.body ?? '{}') as {
+      model_type?: string;
+      search_enabled?: boolean;
+      thinking_enabled?: boolean;
+    };
+    expect(body.model_type).toBe('vision');
+    expect(body.search_enabled).toBe(false);
+    expect(body.thinking_enabled).toBe(false);
+  });
+
   it('preserves Vision routing through full prompt augmentation', () => {
     const result = augmentRequestBody(JSON.stringify({
       prompt: '/review describe the screenshot against the project rule',
