@@ -1,5 +1,21 @@
 # DeepSeek++ UI/UX Cockpit Roadmap
 
+## Phase 2.5 — Operational State Bus (Complete)
+
+Phase 2.5 hardens `GlobalOperationalContext` into the operational state bus consumed by future cockpit surfaces. The current name remains to avoid gratuitous churn, but the architecture now separates state creation from selectors, attention derivation, activity summary, freshness metadata, and UI rendering.
+
+Implemented contracts:
+
+- `OperationalHealth` and `OperationalAvailability` define shared subsystem semantics instead of per-component status strings.
+- `getOperationalHealth`, `getBrowserAttention`, `getRuntimeAttention`, `getToolAvailability`, `getExecutionLabel`, and `getContextBarItems` are pure selectors for cockpit consumers.
+- `OperationalAttentionItem` plus `deriveOperationalAttentionItems(state)` define the future Attention Queue source contract without building the queue UI.
+- `OperationalActivitySummary` plus `deriveOperationalActivitySummary()` define the future Activity Center source contract; without an event source it returns a clean idle summary.
+- `generatedAt`, `updatedAt`, and `sourceVersions` expose freshness and source-version metadata.
+- The sidepanel provider owns load/refresh/subscriptions; consumers render derived state only. No polling is introduced.
+
+Future consumers should read the operational state bus and selectors instead of fetching Runtime Doctor, Browser Control, tool registry, or project context directly inside UI components.
+
+
 ## Purpose
 
 This roadmap defines the long-term UI/UX evolution of DeepSeek++ from a feature-rich browser extension into an operational AI cockpit.
