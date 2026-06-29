@@ -255,10 +255,20 @@ async function loadGitHubSkillSource(url: string, selectedPaths?: Set<string>): 
   };
 
   const existingContext = await createExistingSkillContext(sourceId);
+  const includeResourceContent = Boolean(selectedPaths);
   const loadedSkills: LoadedGitHubSkill[] = [];
   for (const skillPath of limitedPaths) {
     if (selectedPaths && !selectedPaths.has(skillPath)) continue;
-    loadedSkills.push(await loadGitHubSkill(parsedUrl.owner, parsedUrl.repo, resolved.ref, source, tree, skillPath, existingContext));
+    loadedSkills.push(await loadGitHubSkill(
+      parsedUrl.owner,
+      parsedUrl.repo,
+      resolved.ref,
+      source,
+      tree,
+      skillPath,
+      existingContext,
+      includeResourceContent,
+    ));
   }
 
   const previewSkills = selectedPaths
@@ -288,6 +298,7 @@ async function loadGitHubSkill(
   tree: GitHubTreeResponse,
   skillPath: string,
   existingContext: ExistingSkillContext,
+  includeResourceContent: boolean,
 ): Promise<LoadedGitHubSkill> {
   const warnings: string[] = [];
   const content = await fetchGitHubContent(owner, repo, ref, skillPath);
@@ -296,7 +307,7 @@ async function loadGitHubSkill(
   }
 
   const parsed = parseSkillDoc(content, skillPath);
-  const resourceBundle = await fetchResourceBundle(owner, repo, ref, tree, skillPath, parsed.body);
+  const resourceBundle = await fetchResourceBundle(owner, repo, ref, tree, skillPath, parsed.body, includeResourceContent);
   warnings.push(...resourceBundle.warnings);
 
   const existingRemoteSkill = existingContext.bySourcePath.get(`${source.id}:${skillPath}`);
@@ -557,6 +568,7 @@ async function fetchResourceBundle(
   tree: GitHubTreeResponse,
   skillPath: string,
   skillBody: string,
+  includeContent: boolean,
 ): Promise<ResourceBundle> {
   const directory = parentDirectory(skillPath);
   const prefix = directory ? `${directory}/` : '';
@@ -588,9 +600,16 @@ async function fetchResourceBundle(
       continue;
     }
 
+    if (!includeContent) {
+      totalBytes += size;
+      included.push({ path: candidate.path, bytes: size, content: '' });
+      continue;
+    }
+
     const content = await fetchGitHubContent(owner, repo, ref, candidate.path);
-    totalBytes += content.length;
-    included.push({ path: candidate.path, bytes: content.length, content });
+    const contentBytes = content.length;
+    totalBytes += contentBytes;
+    included.push({ path: candidate.path, bytes: contentBytes, content });
   }
 
   if (omitted.length > 0) {

@@ -131,6 +131,37 @@ describe('local Skill importer', () => {
       expect.objectContaining({ name: 'demo-local', source: 'remote' }),
     ]));
   });
+
+  it('keeps nested local Skill resources scoped to each Skill directory', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValue(createNestedLocalSkillToolResult());
+
+    const preview = await previewLocalSkillSource('/Users/me/.codex/skills');
+
+    expect(preview.skills.map((skill) => skill.path)).toEqual(['SKILL.md', 'nested/SKILL.md']);
+    expect(preview.skills.find((skill) => skill.path === 'SKILL.md')?.includedFiles).toEqual([
+      { path: 'references/root.md', bytes: 10 },
+    ]);
+    expect(preview.skills.find((skill) => skill.path === 'nested/SKILL.md')?.includedFiles).toEqual([
+      { path: 'nested/references/child.md', bytes: 11 },
+    ]);
+
+    const result = await importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills',
+      selectedPaths: ['nested/SKILL.md'],
+    });
+
+    expect(result.imported).toHaveLength(1);
+    expect(result.imported[0].remote).toMatchObject({
+      provider: 'local',
+      path: 'nested/SKILL.md',
+      localRootPath: '/Users/me/.codex/skills',
+      localDirectory: '/Users/me/.codex/skills/nested',
+      scriptFiles: [{ path: 'nested/scripts/run.py', bytes: 15 }],
+    });
+    expect(result.imported[0].instructions).toContain('Run commands with cwd set to the Skill directory path: /Users/me/.codex/skills/nested');
+    expect(result.imported[0].instructions).toContain('### nested/references/child.md');
+    expect(result.imported[0].instructions).not.toContain('references/root.md');
+  });
 });
 
 function createShellServer(toolNames: string[]): McpServerConfig {
@@ -207,6 +238,80 @@ function createLocalSkillToolResult() {
             ],
             omittedFiles: [],
             scriptFiles: [{ path: 'scripts/run.py', bytes: 18 }],
+            warnings: [],
+          },
+        ],
+      },
+    },
+  };
+}
+
+function createNestedLocalSkillToolResult() {
+  const rootContent = [
+    '---',
+    'name: root-local',
+    'description: Root Skill',
+    '---',
+    '',
+    '# Root',
+    '',
+    'Use references/root.md.',
+  ].join('\n');
+  const childContent = [
+    '---',
+    'name: child-local',
+    'description: Child Skill',
+    '---',
+    '',
+    '# Child',
+    '',
+    'Use nested/references/child.md.',
+  ].join('\n');
+
+  return {
+    ok: true,
+    summary: 'MCP tool executed',
+    output: {
+      ok: true,
+      data: {
+        rootPath: '/Users/me/.codex/skills',
+        displayName: 'skills',
+        directoryName: 'skills',
+        warnings: [],
+        truncated: false,
+        skills: [
+          {
+            path: 'SKILL.md',
+            directory: '',
+            directoryPath: '/Users/me/.codex/skills',
+            content: rootContent,
+            bodyBytes: rootContent.length,
+            includedFiles: [
+              {
+                path: 'references/root.md',
+                bytes: 10,
+                content: 'Root guide',
+              },
+            ],
+            omittedFiles: [],
+            scriptFiles: [],
+            warnings: [],
+          },
+          {
+            path: 'nested/SKILL.md',
+            directory: 'nested',
+            directoryPath: '/Users/me/.codex/skills/nested',
+            content: childContent,
+            bodyBytes: childContent.length,
+            includedFiles: [
+              {
+                path: 'nested/references/child.md',
+                bytes: 11,
+                content: 'Child guide',
+              },
+            ],
+            omittedFiles: [],
+            scriptFiles: [{ path: 'nested/scripts/run.py', bytes: 15 }],
             warnings: [],
           },
         ],

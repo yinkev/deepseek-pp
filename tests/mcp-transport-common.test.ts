@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpTransportError, readJsonRpcResponse } from '../core/mcp/transports/common';
+import { createMcpBridgeTransport } from '../core/mcp/transports/bridge';
+import type { McpServerConfig } from '../core/mcp/types';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -98,3 +100,77 @@ describe('MCP transport response limits', () => {
     await assertion;
   });
 });
+
+describe('MCP stdio bridge transport', () => {
+  it('posts JSON-RPC messages with stdio command metadata to the bridge endpoint', async () => {
+    let captured: { url: string; body: any } | null = null;
+    vi.stubGlobal('chrome', {
+      permissions: {
+        contains: vi.fn().mockResolvedValue(true),
+        request: vi.fn().mockResolvedValue(true),
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = {
+        url: String(input),
+        body: JSON.parse(String(init?.body)),
+      };
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'req-1',
+        result: { ok: true },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }));
+
+    const transport = createMcpBridgeTransport(createBridgeServer());
+    const response = await transport.request({ jsonrpc: '2.0', id: 'req-1', method: 'tools/list' });
+
+    expect(response.result).toEqual({ ok: true });
+    expect(captured).toEqual({
+      url: 'http://127.0.0.1:8765/mcp',
+      body: {
+        protocol: 'deepseek-pp-mcp-bridge',
+        version: 1,
+        server: {
+          id: 'stdio-server',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+          cwd: '/Users/me/project',
+          env: { SAFE_FLAG: '1' },
+        },
+        message: { jsonrpc: '2.0', id: 'req-1', method: 'tools/list' },
+      },
+    });
+  });
+});
+
+function createBridgeServer(): McpServerConfig {
+  return {
+    version: 1,
+    id: 'stdio-server',
+    displayName: 'Stdio Server',
+    enabled: true,
+    transport: {
+      kind: 'stdio_bridge',
+      url: 'http://127.0.0.1:8765/mcp',
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+      cwd: '/Users/me/project',
+      env: { SAFE_FLAG: '1' },
+    },
+    headers: [],
+    secrets: [],
+    timeouts: { connectMs: 5000, requestMs: 10000, discoveryMs: 15000 },
+    limits: { maxResultBytes: 100_000, maxToolCount: 50 },
+    allowlist: { mode: 'all', toolNames: [] },
+    execution: { mode: 'manual', enabled: true },
+    status: 'unknown',
+    lastConnectedAt: null,
+    lastError: null,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
