@@ -638,23 +638,75 @@ describe('sidepanel chat image attachments', () => {
   });
 
   it('captures the Browser Control target with a natural handoff prompt', async () => {
+    sendMessage.mockImplementation(async (message: RuntimeMessage) => {
+      if (message.type === 'GET_AUTH_STATUS') {
+        return { available: true, provider: 'deepseek-web', hasApiKey: false, hasToken: true };
+      }
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return undefined;
+      if (message.type === 'GET_VOICE_SETTINGS') return undefined;
+      if (message.type === 'GET_PERSONAL_CONVENIENCE_CONFIG') return undefined;
+      if (message.type === 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE') {
+        return {
+          ok: true,
+          image: {
+            name: 'browser-view-1-full-page.png',
+            mimeType: 'image/png',
+            sizeBytes: 4,
+            dataUrl: `data:image/png;base64,${btoa('full')}`,
+          },
+          images: [{
+            label: 'Full page',
+            image: {
+              name: 'browser-view-1-full-page.png',
+              mimeType: 'image/png',
+              sizeBytes: 4,
+              dataUrl: `data:image/png;base64,${btoa('full')}`,
+            },
+          }, {
+            label: 'Nested scroll 1: form panel (stitched nested scroll)',
+            image: {
+              name: 'browser-view-2-nested-scroll.png',
+              mimeType: 'image/png',
+              sizeBytes: 6,
+              dataUrl: `data:image/png;base64,${btoa('nested')}`,
+            },
+          }],
+          skippedNestedScrolls: 0,
+          tab: { id: 12, windowId: 1 },
+        };
+      }
+      if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
+      return null;
+    });
     await renderChatPage();
 
     await clickButtonByLabel('使用浏览器控制目标视图');
 
     const textarea = inputByPlaceholder('给 DeepSeek++ 发送消息');
     expect(textarea.value).toBe('看一下我当前的浏览器画面，帮我判断下一步该怎么做。');
-    expect(container.querySelector('img[alt="browser-control-12.png"]')).toBeTruthy();
+    expect(container.querySelector('img[alt="browser-view-1-full-page.png"]')).toBeTruthy();
+    expect(container.querySelector('img[alt="browser-view-2-nested-scroll.png"]')).toBeTruthy();
 
     await clickButtonByLabel('发送');
     const submit = await waitForSubmit();
 
-    expect(submit.payload.text).toBe('看一下我当前的浏览器画面，帮我判断下一步该怎么做。');
-    expect(submit.payload.images).toHaveLength(1);
+    expect(submit.payload.text).toBe([
+      'Browser view evidence attached:',
+      '1. Full page',
+      '2. Nested scroll 1: form panel (stitched nested scroll)',
+      '',
+      '看一下我当前的浏览器画面，帮我判断下一步该怎么做。',
+    ].join('\n'));
+    expect(submit.payload.images).toHaveLength(2);
     expect(submit.payload.images?.[0]).toMatchObject({
-      name: 'browser-control-12.png',
+      name: 'browser-view-1-full-page.png',
       mimeType: 'image/png',
-      sizeBytes: 7,
+      sizeBytes: 4,
+    });
+    expect(submit.payload.images?.[1]).toMatchObject({
+      name: 'browser-view-2-nested-scroll.png',
+      mimeType: 'image/png',
+      sizeBytes: 6,
     });
     expect(sendMessage.mock.calls).not.toEqual(
       expect.arrayContaining([
@@ -685,6 +737,32 @@ describe('sidepanel chat image attachments', () => {
 
     expect(container.querySelectorAll('.ds-chat-attachment-card')).toHaveLength(0);
     expect(container.textContent).toContain('capture denied');
+  });
+
+  it('does not capture Browser View when the image tray is already full', async () => {
+    await renderChatPage();
+    const composer = container.querySelector('.ds-chat-composer');
+
+    await act(async () => {
+      composer?.dispatchEvent(createDropEvent([
+        new File(['a'], 'one.png', { type: 'image/png' }),
+        new File(['b'], 'two.png', { type: 'image/png' }),
+        new File(['c'], 'three.png', { type: 'image/png' }),
+        new File(['d'], 'four.png', { type: 'image/png' }),
+      ]));
+    });
+
+    await clickButtonByLabel('使用浏览器控制目标视图');
+
+    expect(container.querySelectorAll('.ds-chat-attachment-card')).toHaveLength(4);
+    expect(container.textContent).toContain('最多只能附加 4 张图片');
+    expect(sendMessage.mock.calls).not.toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE' }),
+        ]),
+      ]),
+    );
   });
 
   it('restores pasted attachments when the accepted stream later fails', async () => {

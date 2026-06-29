@@ -2,6 +2,10 @@ import { getBrowserControlSettings, saveBrowserControlSettings } from './setting
 import { BrowserConnection, BrowserControlError } from './cdp';
 import { formatAccessibilitySnapshot } from './snapshot';
 import { readOptionalChromeApi } from '../platform/chrome-api';
+import {
+  DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES,
+  DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN,
+} from '../deepseek/web-vision';
 import type {
   BrowserActionResult,
   BrowserControlDependencies,
@@ -10,6 +14,7 @@ import type {
   BrowserControlTarget,
   BrowserControlTargetPreparation,
   BrowserControlWindowHint,
+  BrowserViewCaptureResult,
   BrowserScreenshotCaptureResult,
   BrowserControlToolName,
   BrowserSnapshotResult,
@@ -55,6 +60,51 @@ export interface BrowserControlExecuteOptions {
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 const MAX_WAIT_TIMEOUT_MS = 60_000;
 const SNAPSHOT_UID_MAX_AGE_MS = 30_000;
+const BROWSER_VIEW_CAPTURE_MAX_IMAGES = DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN;
+const BROWSER_VIEW_CAPTURE_MAX_NESTED_PANELS = BROWSER_VIEW_CAPTURE_MAX_IMAGES - 1;
+const BROWSER_VIEW_CAPTURE_MAX_IMAGE_BYTES = DEEPSEEK_WEB_VISION_MAX_IMAGE_BYTES;
+const BROWSER_VIEW_CAPTURE_MAX_LONG_EDGE = 12_000;
+const BROWSER_VIEW_CAPTURE_MAX_AREA = 36_000_000;
+const BROWSER_VIEW_PANEL_MAX_STITCH_SLICES = 8;
+const BROWSER_VIEW_PANEL_SAMPLE_SLICES = 3;
+const BROWSER_VIEW_PANEL_MIN_VISIBLE_AREA = 24_000;
+const BROWSER_VIEW_PANEL_MIN_OVERFLOW_PX = 160;
+const BROWSER_VIEW_PANEL_SCROLL_SETTLE_MS = 80;
+const BROWSER_VIEW_CAPTURE_GLOBAL = '__deepseekPpBrowserViewCapture';
+
+type BrowserViewCaptureSource = NonNullable<BrowserScreenshotCaptureResult['source']>;
+
+type BrowserViewRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type BrowserViewCapturePlan = {
+  viewportWidth: number;
+  viewportHeight: number;
+  contentWidth: number;
+  contentHeight: number;
+  panels: BrowserViewPanelCandidate[];
+};
+
+type BrowserViewPanelCandidate = {
+  id: string;
+  label: string;
+  rect: BrowserViewRect;
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+  score: number;
+  sampled: boolean;
+};
+
+type BrowserViewPanelSlice = {
+  dataBase64: string;
+  scrollTop: number;
+  label: string;
+};
 
 export class BrowserControlService {
   private readonly dependencies: BrowserControlDependencies;
@@ -312,6 +362,64 @@ export class BrowserControlService {
       dataBase64: captured.data,
       sizeBytes: base64ByteLength(captured.data),
       capturedAt: this.now(),
+    };
+  }
+
+  async captureBrowserViewForVision(): Promise<BrowserViewCaptureResult> {
+    const settings = await getBrowserControlSettings();
+    if (!settings.enabled) {
+      throw new BrowserControlError(
+        'browser_control_disabled',
+        'Browser control is disabled. Enable it in the DeepSeek++ side panel before capturing the controlled tab.',
+      );
+    }
+    if (!settings.allowVisionCapture) {
+      throw new BrowserControlError(
+        'browser_vision_capture_disabled',
+        'Browser visual capture is disabled. Enable Visual capture on the Browser Control page before using this tool.',
+      );
+    }
+    const tabId = await this.requireSelectedTargetTabId(settings);
+    await this.ensureAttached(tabId);
+    const tab = await this.requireChromeApi().tabs.get(tabId);
+    const capturedAt = this.now();
+    const warnings: string[] = [];
+    const fullPage = await this.captureFullPageForBrowserView(tabId, tab.windowId, capturedAt)
+      .catch(async () => {
+        warnings.push('Full-page screenshot was too large or unavailable; attached sampled page evidence.');
+        return this.captureFullPageSampleForBrowserView(tabId, tab.windowId, capturedAt)
+          .catch(() => {
+            warnings.push('Sampled full-page evidence failed; attached visible viewport fallback.');
+            return this.captureViewportFallbackForBrowserView(tabId, tab.windowId, capturedAt);
+          });
+      });
+    let skippedNestedScrolls = 0;
+    const nestedCaptures: BrowserScreenshotCaptureResult[] = [];
+
+    try {
+      const plan = await this.planBrowserViewNestedScrollCaptures();
+      skippedNestedScrolls = Math.max(0, plan.panels.length - BROWSER_VIEW_CAPTURE_MAX_NESTED_PANELS);
+      for (const panel of plan.panels.slice(0, BROWSER_VIEW_CAPTURE_MAX_NESTED_PANELS)) {
+        try {
+          const capture = await this.captureNestedScrollPanelForBrowserView(tabId, tab.windowId, capturedAt, panel);
+          if (capture) nestedCaptures.push(capture);
+        } catch {
+          skippedNestedScrolls += 1;
+        }
+      }
+    } finally {
+      await this.restoreBrowserViewNestedScrollState().catch(() => {});
+    }
+
+    const captures = [fullPage, ...nestedCaptures].slice(0, BROWSER_VIEW_CAPTURE_MAX_IMAGES);
+    return {
+      tabId,
+      windowId: tab.windowId,
+      capturedAt,
+      captures,
+      labels: captures.map((capture) => capture.label ?? 'Browser view'),
+      warnings,
+      skippedNestedScrolls,
     };
   }
 
@@ -934,6 +1042,237 @@ export class BrowserControlService {
       },
       snapshot,
     };
+  }
+
+  private async captureFullPageForBrowserView(
+    tabId: number,
+    windowId: number,
+    capturedAt: number,
+  ): Promise<BrowserScreenshotCaptureResult> {
+    const metrics = await this.connection!.sendCommand<{
+      cssContentSize?: { width?: unknown; height?: unknown };
+      contentSize?: { width?: unknown; height?: unknown };
+    }>('Page.getLayoutMetrics');
+    const contentSize = normalizeBrowserViewContentSize(metrics);
+    if (!contentSize) {
+      throw new BrowserControlError('browser_capture_metrics_missing', 'Chrome did not return page size metrics.', {
+        retryable: true,
+      });
+    }
+    const clip = {
+      x: 0,
+      y: 0,
+      width: contentSize.width,
+      height: contentSize.height,
+      scale: getBrowserViewCaptureScale(contentSize.width, contentSize.height),
+    };
+    const captured = await this.captureBrowserViewClip(clip);
+    return createBrowserScreenshotCaptureResult({
+      tabId,
+      windowId,
+      capturedAt,
+      dataBase64: captured,
+      label: 'Full page',
+      source: 'full_page',
+      sampled: clip.scale < 1,
+    });
+  }
+
+  private async captureViewportFallbackForBrowserView(
+    tabId: number,
+    windowId: number,
+    capturedAt: number,
+  ): Promise<BrowserScreenshotCaptureResult> {
+    const captured = await this.connection!.sendCommand<{ data?: unknown }>('Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    return createBrowserScreenshotCaptureResult({
+      tabId,
+      windowId,
+      capturedAt,
+      dataBase64: captured.data,
+      label: 'Visible viewport (full page unavailable)',
+      source: 'viewport',
+      sampled: true,
+    });
+  }
+
+  private async captureFullPageSampleForBrowserView(
+    tabId: number,
+    windowId: number,
+    capturedAt: number,
+  ): Promise<BrowserScreenshotCaptureResult> {
+    const metrics = await this.connection!.sendCommand<{
+      cssContentSize?: { width?: unknown; height?: unknown };
+      contentSize?: { width?: unknown; height?: unknown };
+      cssLayoutViewport?: { clientWidth?: unknown; clientHeight?: unknown };
+      layoutViewport?: { clientWidth?: unknown; clientHeight?: unknown };
+    }>('Page.getLayoutMetrics');
+    const contentSize = normalizeBrowserViewContentSize(metrics);
+    if (!contentSize) {
+      throw new BrowserControlError('browser_capture_metrics_missing', 'Chrome did not return page size metrics.', {
+        retryable: true,
+      });
+    }
+    const viewport = normalizeBrowserViewViewportSize(metrics, contentSize);
+    const maxY = Math.max(0, contentSize.height - viewport.height);
+    const positions = Array.from(new Set([
+      0,
+      Math.round(maxY / 2),
+      maxY,
+    ])).sort((a, b) => a - b);
+    const scale = getBrowserViewCaptureScale(contentSize.width, viewport.height);
+    const slices: BrowserViewPanelSlice[] = [];
+    for (const position of positions) {
+      const dataBase64 = await this.captureBrowserViewClip({
+        x: 0,
+        y: position,
+        width: contentSize.width,
+        height: viewport.height,
+        scale,
+      });
+      slices.push({
+        dataBase64,
+        scrollTop: position,
+        label: `Full page sample @ ${Math.round(position)}px`,
+      });
+    }
+    const panel: BrowserViewPanelCandidate = {
+      id: 'full-page-sample',
+      label: 'Full page',
+      rect: { x: 0, y: 0, width: contentSize.width, height: viewport.height },
+      clientHeight: viewport.height,
+      scrollHeight: contentSize.height,
+      scrollTop: 0,
+      score: 0,
+      sampled: true,
+    };
+    const composite = await createBrowserViewPanelComposite(panel, slices).catch(() => null);
+    const dataBase64 = composite?.dataBase64 ?? slices[Math.floor(slices.length / 2)]!.dataBase64;
+    return createBrowserScreenshotCaptureResult({
+      tabId,
+      windowId,
+      capturedAt,
+      dataBase64,
+      label: composite?.composited ? 'Full page (sampled contact sheet)' : 'Full page (sampled slice)',
+      source: 'full_page',
+      sampled: true,
+    });
+  }
+
+  private async planBrowserViewNestedScrollCaptures(): Promise<BrowserViewCapturePlan> {
+    const plan = await this.evaluate(createBrowserViewCapturePlannerExpression(), { awaitPromise: true });
+    return normalizeBrowserViewCapturePlan(plan);
+  }
+
+  private async captureNestedScrollPanelForBrowserView(
+    tabId: number,
+    windowId: number,
+    capturedAt: number,
+    panel: BrowserViewPanelCandidate,
+  ): Promise<BrowserScreenshotCaptureResult | null> {
+    const positions = selectBrowserViewPanelScrollPositions(panel);
+    if (positions.length === 0) return null;
+    const slices: BrowserViewPanelSlice[] = [];
+    const scale = getBrowserViewCaptureScale(panel.rect.width, panel.rect.height);
+    for (const position of positions) {
+      await this.setBrowserViewNestedPanelScroll(panel.id, position);
+      const dataBase64 = await this.captureBrowserViewClip({
+        x: panel.rect.x,
+        y: panel.rect.y,
+        width: panel.rect.width,
+        height: panel.rect.height,
+        scale,
+      }).catch(() => '');
+      if (!dataBase64) continue;
+      slices.push({
+        dataBase64,
+        scrollTop: position,
+        label: `${panel.label} @ ${Math.round(position)}px`,
+      });
+    }
+    if (slices.length === 0) return null;
+
+    const composite = await createBrowserViewPanelComposite(panel, slices).catch(() => null);
+    const dataBase64 = composite?.dataBase64 ?? slices[Math.floor(slices.length / 2)]!.dataBase64;
+    const labelSuffix = composite?.composited
+      ? panel.sampled ? 'sampled nested scroll' : 'stitched nested scroll'
+      : 'nested scroll sample';
+    return createBrowserScreenshotCaptureResult({
+      tabId,
+      windowId,
+      capturedAt,
+      dataBase64,
+      label: `${panel.label} (${labelSuffix})`,
+      source: 'nested_scroll',
+      sampled: panel.sampled || !composite?.composited,
+    });
+  }
+
+  private async captureBrowserViewClip(clip?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scale: number;
+  }): Promise<string> {
+    let currentClip = clip;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const captured = await this.connection!.sendCommand<{ data?: unknown }>('Page.captureScreenshot', {
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: true,
+        ...(currentClip ? { clip: currentClip } : {}),
+      });
+      if (typeof captured.data !== 'string' || captured.data.length === 0) {
+        throw new BrowserControlError(
+          'browser_capture_failed',
+          'Chrome did not return screenshot data for the controlled tab.',
+          { retryable: true },
+        );
+      }
+      if (base64ByteLength(captured.data) <= BROWSER_VIEW_CAPTURE_MAX_IMAGE_BYTES) {
+        return captured.data;
+      }
+      if (!currentClip) break;
+      currentClip = {
+        ...currentClip,
+        scale: Math.max(0.2, currentClip.scale * 0.72),
+      };
+    }
+    throw new BrowserControlError(
+      'browser_capture_too_large',
+      'Browser view screenshot exceeded the DeepSeek Web Vision image size limit.',
+      { retryable: true },
+    );
+  }
+
+  private async setBrowserViewNestedPanelScroll(id: string, scrollTop: number): Promise<void> {
+    await this.evaluate(
+      `(() => {
+        const state = window[${JSON.stringify(BROWSER_VIEW_CAPTURE_GLOBAL)}];
+        if (state && typeof state.setScroll === 'function') {
+          return state.setScroll(${JSON.stringify(id)}, ${JSON.stringify(scrollTop)});
+        }
+        return false;
+      })()`,
+      { awaitPromise: true },
+    );
+    await new Promise((resolve) => setTimeout(resolve, BROWSER_VIEW_PANEL_SCROLL_SETTLE_MS));
+  }
+
+  private async restoreBrowserViewNestedScrollState(): Promise<void> {
+    await this.evaluate(
+      `(() => {
+        const state = window[${JSON.stringify(BROWSER_VIEW_CAPTURE_GLOBAL)}];
+        if (state && typeof state.restore === 'function') state.restore();
+        try { delete window[${JSON.stringify(BROWSER_VIEW_CAPTURE_GLOBAL)}]; } catch {}
+        return true;
+      })()`,
+      { awaitPromise: true },
+    );
   }
 
   private async resolveElement(payload: Record<string, unknown>): Promise<ElementHandle> {
@@ -1607,6 +1946,364 @@ function base64ByteLength(value: string): number {
   const normalized = value.replace(/\s+/g, '');
   const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
   return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
+function createBrowserScreenshotCaptureResult(input: {
+  tabId: number;
+  windowId: number;
+  capturedAt: number;
+  dataBase64: unknown;
+  label?: string;
+  source?: BrowserViewCaptureSource;
+  sampled?: boolean;
+}): BrowserScreenshotCaptureResult {
+  if (typeof input.dataBase64 !== 'string' || input.dataBase64.length === 0) {
+    throw new BrowserControlError(
+      'browser_capture_failed',
+      'Chrome did not return screenshot data for the controlled tab.',
+      { retryable: true },
+    );
+  }
+  return {
+    tabId: input.tabId,
+    windowId: input.windowId,
+    mimeType: 'image/png',
+    dataBase64: input.dataBase64,
+    sizeBytes: base64ByteLength(input.dataBase64),
+    capturedAt: input.capturedAt,
+    ...(input.label ? { label: input.label } : {}),
+    ...(input.source ? { source: input.source } : {}),
+    ...(typeof input.sampled === 'boolean' ? { sampled: input.sampled } : {}),
+  };
+}
+
+function normalizeBrowserViewContentSize(value: unknown): { width: number; height: number } | null {
+  const input = value as {
+    cssContentSize?: { width?: unknown; height?: unknown };
+    contentSize?: { width?: unknown; height?: unknown };
+  } | null;
+  const size = input?.cssContentSize ?? input?.contentSize;
+  const width = normalizePositiveNumber(size?.width);
+  const height = normalizePositiveNumber(size?.height);
+  if (!width || !height) return null;
+  return { width, height };
+}
+
+function normalizeBrowserViewViewportSize(
+  value: unknown,
+  fallback: { width: number; height: number },
+): { width: number; height: number } {
+  const input = value as {
+    cssLayoutViewport?: { clientWidth?: unknown; clientHeight?: unknown };
+    layoutViewport?: { clientWidth?: unknown; clientHeight?: unknown };
+    cssVisualViewport?: { clientWidth?: unknown; clientHeight?: unknown };
+  } | null;
+  const viewport = input?.cssLayoutViewport ?? input?.cssVisualViewport ?? input?.layoutViewport;
+  const width = normalizePositiveNumber(viewport?.clientWidth) ?? Math.min(fallback.width, 1440);
+  const height = normalizePositiveNumber(viewport?.clientHeight) ?? Math.min(fallback.height, 1200);
+  return {
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+  };
+}
+
+function normalizePositiveNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.ceil(value)
+    : null;
+}
+
+function getBrowserViewCaptureScale(width: number, height: number): number {
+  const longEdgeScale = Math.min(1, BROWSER_VIEW_CAPTURE_MAX_LONG_EDGE / Math.max(width, height));
+  const areaScale = Math.min(1, Math.sqrt(BROWSER_VIEW_CAPTURE_MAX_AREA / Math.max(1, width * height)));
+  return Math.max(0.2, Math.min(longEdgeScale, areaScale));
+}
+
+function normalizeBrowserViewCapturePlan(value: unknown): BrowserViewCapturePlan {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const viewportWidth = normalizePositiveNumber(input.viewportWidth) ?? 0;
+  const viewportHeight = normalizePositiveNumber(input.viewportHeight) ?? 0;
+  const contentWidth = normalizePositiveNumber(input.contentWidth) ?? viewportWidth;
+  const contentHeight = normalizePositiveNumber(input.contentHeight) ?? viewportHeight;
+  const rawPanels = Array.isArray(input.panels) ? input.panels : [];
+  const panels = rawPanels.map(normalizeBrowserViewPanelCandidate).filter((item): item is BrowserViewPanelCandidate => Boolean(item));
+  panels.sort((a, b) => b.score - a.score);
+  return {
+    viewportWidth,
+    viewportHeight,
+    contentWidth,
+    contentHeight,
+    panels: dedupeBrowserViewPanelCandidates(panels),
+  };
+}
+
+function normalizeBrowserViewPanelCandidate(value: unknown): BrowserViewPanelCandidate | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Partial<BrowserViewPanelCandidate>;
+  const rect = normalizeBrowserViewRect(input.rect);
+  const id = typeof input.id === 'string' && input.id.trim() ? input.id.trim() : '';
+  if (!id || !rect) return null;
+  const clientHeight = normalizePositiveNumber(input.clientHeight) ?? Math.ceil(rect.height);
+  const scrollHeight = normalizePositiveNumber(input.scrollHeight) ?? clientHeight;
+  if (scrollHeight <= clientHeight + BROWSER_VIEW_PANEL_MIN_OVERFLOW_PX) return null;
+  return {
+    id,
+    label: typeof input.label === 'string' && input.label.trim() ? input.label.trim().slice(0, 80) : 'Nested scroll panel',
+    rect,
+    clientHeight,
+    scrollHeight,
+    scrollTop: typeof input.scrollTop === 'number' && Number.isFinite(input.scrollTop) ? Math.max(0, input.scrollTop) : 0,
+    score: typeof input.score === 'number' && Number.isFinite(input.score) ? input.score : 0,
+    sampled: Boolean(input.sampled),
+  };
+}
+
+function normalizeBrowserViewRect(value: unknown): BrowserViewRect | null {
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Partial<BrowserViewRect>;
+  const x = typeof input.x === 'number' && Number.isFinite(input.x) ? input.x : null;
+  const y = typeof input.y === 'number' && Number.isFinite(input.y) ? input.y : null;
+  const width = normalizePositiveNumber(input.width);
+  const height = normalizePositiveNumber(input.height);
+  if (x === null || y === null || !width || !height) return null;
+  if (width * height < BROWSER_VIEW_PANEL_MIN_VISIBLE_AREA) return null;
+  return { x, y, width, height };
+}
+
+function dedupeBrowserViewPanelCandidates(panels: BrowserViewPanelCandidate[]): BrowserViewPanelCandidate[] {
+  const selected: BrowserViewPanelCandidate[] = [];
+  for (const panel of panels) {
+    const duplicate = selected.some((existing) => browserViewRectContainmentRatio(panel.rect, existing.rect) > 0.86);
+    if (!duplicate) selected.push(panel);
+  }
+  return selected;
+}
+
+function browserViewRectContainmentRatio(rect: BrowserViewRect, other: BrowserViewRect): number {
+  const left = Math.max(rect.x, other.x);
+  const top = Math.max(rect.y, other.y);
+  const right = Math.min(rect.x + rect.width, other.x + other.width);
+  const bottom = Math.min(rect.y + rect.height, other.y + other.height);
+  const area = Math.max(0, right - left) * Math.max(0, bottom - top);
+  return area / Math.max(1, rect.width * rect.height);
+}
+
+function selectBrowserViewPanelScrollPositions(panel: BrowserViewPanelCandidate): number[] {
+  const maxScroll = Math.max(0, panel.scrollHeight - panel.clientHeight);
+  if (maxScroll <= 0) return [0];
+  const estimatedSlices = Math.ceil(panel.scrollHeight / Math.max(1, panel.clientHeight * 0.82));
+  const count = panel.sampled || estimatedSlices > BROWSER_VIEW_PANEL_MAX_STITCH_SLICES
+    ? Math.min(BROWSER_VIEW_PANEL_SAMPLE_SLICES, BROWSER_VIEW_PANEL_MAX_STITCH_SLICES)
+    : Math.min(BROWSER_VIEW_PANEL_MAX_STITCH_SLICES, estimatedSlices);
+  const positions = new Set<number>();
+  if (count <= 1) {
+    positions.add(Math.min(panel.scrollTop, maxScroll));
+  } else {
+    for (let index = 0; index < count; index += 1) {
+      positions.add(Math.round((maxScroll * index) / (count - 1)));
+    }
+  }
+  positions.add(0);
+  positions.add(maxScroll);
+  return Array.from(positions).sort((a, b) => a - b).slice(0, BROWSER_VIEW_PANEL_MAX_STITCH_SLICES);
+}
+
+async function createBrowserViewPanelComposite(
+  panel: BrowserViewPanelCandidate,
+  slices: BrowserViewPanelSlice[],
+): Promise<{ dataBase64: string; composited: boolean }> {
+  if (slices.length === 1) return { dataBase64: slices[0]!.dataBase64, composited: false };
+  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas === 'undefined') {
+    return { dataBase64: slices[Math.floor(slices.length / 2)]!.dataBase64, composited: false };
+  }
+  const bitmaps = await Promise.all(slices.map((slice) => createImageBitmap(base64ToBlob(slice.dataBase64, 'image/png'))));
+  try {
+    const first = bitmaps[0]!;
+    const sliceScale = first.height / Math.max(1, panel.clientHeight);
+    const width = first.width;
+    const rawHeight = panel.sampled
+      ? bitmaps.reduce((total, bitmap) => total + bitmap.height + 34, 0)
+      : Math.ceil(panel.scrollHeight * sliceScale);
+    const outputScale = getBrowserViewCaptureScale(width, rawHeight);
+    const canvas = new OffscreenCanvas(Math.max(1, Math.floor(width * outputScale)), Math.max(1, Math.floor(rawHeight * outputScale)));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2D canvas unavailable.');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (panel.sampled) {
+      let y = 0;
+      bitmaps.forEach((bitmap, index) => {
+        drawBrowserViewLabel(ctx, `${index + 1}. ${slices[index]!.label}`, 0, y, canvas.width, outputScale);
+        y += 34 * outputScale;
+        ctx.drawImage(bitmap, 0, y, bitmap.width * outputScale, bitmap.height * outputScale);
+        y += bitmap.height * outputScale;
+      });
+    } else {
+      bitmaps.forEach((bitmap, index) => {
+        ctx.drawImage(bitmap, 0, Math.round(slices[index]!.scrollTop * sliceScale * outputScale), bitmap.width * outputScale, bitmap.height * outputScale);
+      });
+    }
+    return { dataBase64: await offscreenCanvasToBase64(canvas), composited: true };
+  } finally {
+    for (const bitmap of bitmaps) bitmap.close();
+  }
+}
+
+function drawBrowserViewLabel(
+  ctx: OffscreenCanvasRenderingContext2D,
+  label: string,
+  x: number,
+  y: number,
+  width: number,
+  scale: number,
+): void {
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(x, y, width, Math.max(1, 34 * scale));
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `${Math.max(10, Math.round(13 * scale))}px sans-serif`;
+  ctx.fillText(label, x + 10 * scale, y + 22 * scale);
+}
+
+async function offscreenCanvasToBase64(canvas: OffscreenCanvas): Promise<string> {
+  let quality = 1;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const blob = await canvas.convertToBlob({ type: 'image/png', quality });
+    const dataBase64 = bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
+    if (base64ByteLength(dataBase64) <= BROWSER_VIEW_CAPTURE_MAX_IMAGE_BYTES) {
+      return dataBase64;
+    }
+    quality *= 0.82;
+  }
+  throw new Error('Could not encode browser view composite.');
+}
+
+function base64ToBlob(base64: string, mimeType: string): Blob {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function createBrowserViewCapturePlannerExpression(): string {
+  return `(() => {
+    const minArea = ${BROWSER_VIEW_PANEL_MIN_VISIBLE_AREA};
+    const minOverflow = ${BROWSER_VIEW_PANEL_MIN_OVERFLOW_PX};
+    const globalName = ${JSON.stringify(BROWSER_VIEW_CAPTURE_GLOBAL)};
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    const originalWindow = { x: window.scrollX || 0, y: window.scrollY || 0 };
+    const records = [];
+    const panels = [];
+    const elements = Array.from(document.querySelectorAll('*'));
+    const visibleIntersection = (rect) => {
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(viewportWidth, rect.right);
+      const bottom = Math.min(viewportHeight, rect.bottom);
+      const width = Math.max(0, right - left);
+      const height = Math.max(0, bottom - top);
+      return { width, height, area: width * height };
+    };
+    const kindFor = (element, controls, tableLike, codeLike) => {
+      const role = (element.getAttribute('role') || '').toLowerCase();
+      const tag = element.tagName.toLowerCase();
+      if (tableLike || role === 'grid' || role === 'table') return 'table panel';
+      if (codeLike) return 'code panel';
+      if (role === 'log' || role === 'feed') return 'message panel';
+      if (controls >= 3 || tag === 'form') return 'form panel';
+      if (tag === 'aside' || role === 'complementary') return 'side panel';
+      if (tag === 'main' || role === 'main' || tag === 'article') return 'content panel';
+      if (role === 'dialog' || element.getAttribute('aria-modal') === 'true') return 'dialog panel';
+      return 'nested panel';
+    };
+    const originalBehavior = document.documentElement.style.scrollBehavior;
+    document.documentElement.style.scrollBehavior = 'auto';
+    for (const element of elements) {
+      if (!(element instanceof HTMLElement)) continue;
+      if (element === document.documentElement || element === document.body || element === scrollingElement) continue;
+      const style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+      const overflowY = style.overflowY;
+      const canScroll = element.scrollHeight - element.clientHeight > minOverflow &&
+        (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay' || element.scrollTop > 0);
+      if (!canScroll) continue;
+      const rect = element.getBoundingClientRect();
+      const rectArea = Math.max(0, rect.width) * Math.max(0, rect.height);
+      if (rectArea < minArea) continue;
+      const visible = visibleIntersection(rect);
+      const evidenceArea = visible.area >= minArea ? visible.area : rectArea * 0.35;
+      const tag = element.tagName.toLowerCase();
+      if ((tag === 'textarea' || tag === 'select') && evidenceArea < minArea * 3) continue;
+      const controls = element.querySelectorAll('input, textarea, select, button, [role="button"], [contenteditable="true"]').length;
+      const tableLike = Boolean(element.querySelector('table, [role="grid"], [role="table"]'));
+      const codeLike = Boolean(element.querySelector('pre, code'));
+      const hidden = element.scrollHeight - element.clientHeight;
+      const coverage = Math.min(evidenceArea, viewportWidth * viewportHeight) / Math.max(1, viewportWidth * viewportHeight);
+      const fixedBonus = style.position === 'fixed' || style.position === 'sticky' ? 350 : 0;
+      const visibleBonus = visible.area >= minArea ? 240 : 0;
+      const semanticBonus = controls * 55 + (tableLike ? 260 : 0) + (codeLike ? 180 : 0);
+      const score = evidenceArea / 700 + hidden / 8 + coverage * 900 + semanticBonus + fixedBonus + visibleBonus;
+      const id = 'panel-' + records.length;
+      records.push({
+        id,
+        element,
+        scrollTop: element.scrollTop,
+        scrollLeft: element.scrollLeft,
+      });
+      panels.push({
+        id,
+        label: 'Nested scroll ' + (panels.length + 1) + ': ' + kindFor(element, controls, tableLike, codeLike),
+        rect: {
+          x: rect.left + (window.scrollX || 0),
+          y: rect.top + (window.scrollY || 0),
+          width: rect.width,
+          height: rect.height,
+        },
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+        score,
+        sampled: Math.ceil(element.scrollHeight / Math.max(1, element.clientHeight * 0.82)) > ${BROWSER_VIEW_PANEL_MAX_STITCH_SLICES},
+      });
+    }
+    window[globalName] = {
+      setScroll(id, scrollTop) {
+        const record = records.find((item) => item.id === id);
+        if (!record) return false;
+        record.element.scrollTop = Math.max(0, Math.min(scrollTop, record.element.scrollHeight - record.element.clientHeight));
+        record.element.scrollLeft = 0;
+        return true;
+      },
+      restore() {
+        for (const record of records) {
+          record.element.scrollTop = record.scrollTop;
+          record.element.scrollLeft = record.scrollLeft;
+        }
+        window.scrollTo(originalWindow.x, originalWindow.y);
+        document.documentElement.style.scrollBehavior = originalBehavior;
+        return true;
+      },
+    };
+    return {
+      viewportWidth,
+      viewportHeight,
+      contentWidth: Math.max(scrollingElement.scrollWidth || 0, document.documentElement.scrollWidth || 0, viewportWidth),
+      contentHeight: Math.max(scrollingElement.scrollHeight || 0, document.documentElement.scrollHeight || 0, viewportHeight),
+      panels: panels.sort((a, b) => b.score - a.score).slice(0, 12),
+    };
+  })()`;
 }
 
 function toJsonSafe(value: unknown): unknown {

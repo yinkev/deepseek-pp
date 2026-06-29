@@ -63,6 +63,7 @@ interface ChatImageAttachment {
   sizeBytes: number;
   previewUrl: string;
   source: ChatImageAttachmentSource;
+  label?: string;
 }
 
 interface PendingImageSubmission {
@@ -75,6 +76,11 @@ interface PendingImageSubmission {
 interface CaptureCurrentTabImageResponse {
   ok?: boolean;
   image?: DeepSeekWebVisionSerializedImage;
+  images?: Array<{
+    label?: string;
+    image?: DeepSeekWebVisionSerializedImage;
+  }>;
+  skippedNestedScrolls?: number;
   error?: string;
 }
 
@@ -377,7 +383,10 @@ export default function ChatPage() {
       return;
     }
     const attachments = imageUploadEnabled ? imageAttachments : [];
-    const visibleText = text || t('sidepanel.chatPage.imageOnlyDefaultPrompt');
+    const visibleText = createVisionPromptText(
+      text || t('sidepanel.chatPage.imageOnlyDefaultPrompt'),
+      attachments,
+    );
     const optimisticMessageIndex = messagesRef.current.length;
     shouldAutoScrollRef.current = true;
 
@@ -651,14 +660,33 @@ export default function ChatPage() {
 
     setIsCapturingBrowserTarget(true);
     try {
+      const remaining = DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN - imageAttachments.length;
+      if (remaining <= 0) {
+        throw new Error(t('sidepanel.chatPage.imageLimit', { count: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN }));
+      }
       const response = await chrome.runtime.sendMessage({
         type: 'CAPTURE_BROWSER_CONTROL_TARGET_IMAGE',
       }) as CaptureCurrentTabImageResponse | undefined;
-      if (!response?.ok || !response.image) {
+      const captures = normalizeBrowserViewCaptureResponse(response).slice(0, remaining);
+      if (!response?.ok || captures.length === 0) {
         throw new Error(response?.error || t('sidepanel.chatPage.captureBrowserTargetFailed'));
       }
-      const file = createDeepSeekWebVisionFileFromSerializedImage(response.image);
-      addImageFiles([file], 'browser-control');
+      setImageAttachments((prev) => {
+        const openSlots = DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN - prev.length;
+        if (openSlots <= 0) return prev;
+        const selected = captures.slice(0, openSlots);
+        return [
+          ...prev,
+          ...selected.map((capture) =>
+            createImageAttachment(createDeepSeekWebVisionFileFromSerializedImage(capture.image), 'browser-control', capture.label)
+          ),
+        ];
+      });
+      if (captures.length > remaining || (response.images?.length ?? 0) > remaining) {
+        setError(t('sidepanel.chatPage.imageLimit', { count: DEEPSEEK_WEB_VISION_MAX_IMAGES_PER_TURN }));
+      } else {
+        setError(null);
+      }
       if (!inputText.trim()) {
         setInputText(t('sidepanel.chatPage.browserViewPrompt'));
       }
@@ -1092,7 +1120,7 @@ function serializeImageAttachment(attachment: ChatImageAttachment): Promise<Deep
   return serializeDeepSeekWebVisionFile(attachment.file);
 }
 
-function createImageAttachment(file: File, source: ChatImageAttachmentSource): ChatImageAttachment {
+function createImageAttachment(file: File, source: ChatImageAttachmentSource, label?: string): ChatImageAttachment {
   return {
     id: crypto.randomUUID(),
     file,
@@ -1101,7 +1129,41 @@ function createImageAttachment(file: File, source: ChatImageAttachmentSource): C
     sizeBytes: file.size,
     previewUrl: URL.createObjectURL(file),
     source,
+    ...(label ? { label } : {}),
   };
+}
+
+function createVisionPromptText(baseText: string, attachments: readonly ChatImageAttachment[]): string {
+  const browserViewLabels = attachments
+    .filter((attachment) => attachment.source === 'browser-control' && attachment.label)
+    .map((attachment, index) => `${index + 1}. ${attachment.label}`);
+  if (browserViewLabels.length === 0) return baseText;
+  return [
+    'Browser view evidence attached:',
+    ...browserViewLabels,
+    '',
+    baseText,
+  ].join('\n');
+}
+
+function normalizeBrowserViewCaptureResponse(
+  response: CaptureCurrentTabImageResponse | undefined,
+): Array<{ label: string; image: DeepSeekWebVisionSerializedImage }> {
+  const captures = Array.isArray(response?.images)
+    ? response.images
+      .map((item, index) => {
+        if (!item?.image) return null;
+        return {
+          label: item.label?.trim() || `Browser view ${index + 1}`,
+          image: item.image,
+        };
+      })
+      .filter((item): item is { label: string; image: DeepSeekWebVisionSerializedImage } => Boolean(item))
+    : [];
+  if (captures.length > 0) return captures;
+  return response?.image
+    ? [{ label: 'Browser view', image: response.image }]
+    : [];
 }
 
 function revokeImageAttachmentPreviews(attachments: readonly ChatImageAttachment[]) {

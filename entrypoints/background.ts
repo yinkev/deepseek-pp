@@ -2738,6 +2738,8 @@ async function captureCurrentTabImage(): Promise<{
 
 async function captureBrowserControlTargetImage(): Promise<{
   image: DeepSeekWebVisionSerializedImage;
+  images: Array<{ label: string; image: DeepSeekWebVisionSerializedImage }>;
+  skippedNestedScrolls: number;
   tab: { id: number; windowId: number };
 }> {
   const prepared = await browserControlService.preparePersonalTarget({ allowActiveFallback: true });
@@ -2750,17 +2752,38 @@ async function captureBrowserControlTargetImage(): Promise<{
   if (prepared.status === 'not_controllable') {
     throw new Error('The selected Browser Control target cannot be captured. Select a controllable browser tab, then try again.');
   }
-  const capture = await browserControlService.captureScreenshotForVision();
-  return {
+  const capture = await browserControlService.captureBrowserViewForVision();
+  const images = capture.captures.map((item, index) => ({
+    label: item.label ?? `Browser view ${index + 1}`,
     image: createCapturedTabSerializedImage(
-      `data:${capture.mimeType};base64,${capture.dataBase64}`,
-      `browser-control-${capture.tabId}-${capture.capturedAt}.png`,
+      `data:${item.mimeType};base64,${item.dataBase64}`,
+      createBrowserViewCaptureImageName(item, index),
     ),
+  }));
+  const primary = images[0]?.image;
+  if (!primary) {
+    throw new Error('Chrome did not return screenshot data for the selected Browser Control target.');
+  }
+  return {
+    image: primary,
+    images,
+    skippedNestedScrolls: capture.skippedNestedScrolls,
     tab: {
       id: capture.tabId,
       windowId: capture.windowId,
     },
   };
+}
+
+function createBrowserViewCaptureImageName(capture: BrowserScreenshotCaptureResult, index: number): string {
+  const safeSource = capture.source === 'nested_scroll'
+    ? 'nested-scroll'
+    : capture.source === 'full_page'
+      ? 'full-page'
+      : capture.source === 'viewport'
+        ? 'viewport'
+        : 'view';
+  return `browser-view-${index + 1}-${safeSource}-${capture.tabId}-${capture.capturedAt}.png`;
 }
 
 async function executeBrowserScreenshotVisionTool(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {

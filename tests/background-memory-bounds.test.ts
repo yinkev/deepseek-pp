@@ -43,7 +43,7 @@ describe('background memory bounds', () => {
     expect(end).toBeGreaterThan(start);
     const captureSource = source.slice(start, end);
     const prepareIndex = captureSource.indexOf('browserControlService.preparePersonalTarget({ allowActiveFallback: true })');
-    const captureIndex = captureSource.indexOf('browserControlService.captureScreenshotForVision()');
+    const captureIndex = captureSource.indexOf('browserControlService.captureBrowserViewForVision()');
 
     expect(prepareIndex).toBeGreaterThanOrEqual(0);
     expect(captureIndex).toBeGreaterThan(prepareIndex);

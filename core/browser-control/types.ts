@@ -128,6 +128,19 @@ export interface BrowserScreenshotCaptureResult {
   dataBase64: string;
   sizeBytes: number;
   capturedAt: number;
+  label?: string;
+  source?: 'viewport' | 'full_page' | 'nested_scroll';
+  sampled?: boolean;
+}
+
+export interface BrowserViewCaptureResult {
+  tabId: number;
+  windowId: number;
+  capturedAt: number;
+  captures: BrowserScreenshotCaptureResult[];
+  labels: string[];
+  warnings: string[];
+  skippedNestedScrolls: number;
 }
 
 export interface BrowserSnapshotNode {

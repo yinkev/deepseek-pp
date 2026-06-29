@@ -1352,6 +1352,106 @@ describe('browser navigation tool', () => {
     );
   });
 
+  it('captures adaptive Browser View evidence with full-page and nested scroll labels', async () => {
+    const storage = new Map<string, unknown>();
+    storage.set(BROWSER_CONTROL_STORAGE_KEY, {
+      ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+      enabled: true,
+      targetTabId: 12,
+      allowVisionCapture: true,
+      includeSnapshotAfterActions: false,
+    });
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'Example', url: 'https://example.com/' }),
+    ]);
+    vi.stubGlobal('chrome', chromeStub);
+
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+    const capture = await service.captureBrowserViewForVision();
+
+    expect(capture).toMatchObject({
+      tabId: 12,
+      windowId: 1,
+      labels: ['Full page', 'Nested scroll 1: form panel (nested scroll sample)'],
+      skippedNestedScrolls: 0,
+    });
+    expect(capture.captures).toHaveLength(2);
+    expect(capture.captures[0]).toMatchObject({
+      source: 'full_page',
+      label: 'Full page',
+      mimeType: 'image/png',
+    });
+    expect(capture.captures[1]).toMatchObject({
+      source: 'nested_scroll',
+      label: 'Nested scroll 1: form panel (nested scroll sample)',
+      mimeType: 'image/png',
+    });
+    expect(chromeStub.debugger.sendCommand).toHaveBeenCalledWith(
+      { tabId: 12 },
+      'Page.captureScreenshot',
+      expect.objectContaining({
+        format: 'png',
+        fromSurface: true,
+        captureBeyondViewport: true,
+        clip: expect.objectContaining({ x: 0, y: 0, width: 900, height: 2400 }),
+      }),
+    );
+    expect(chromeStub.debugger.sendCommand).toHaveBeenCalledWith(
+      { tabId: 12 },
+      'Page.captureScreenshot',
+      expect.objectContaining({
+        captureBeyondViewport: true,
+        clip: expect.objectContaining({ x: 450, y: 120, width: 360, height: 560 }),
+      }),
+    );
+    const runtimeExpressions = chromeStub.debugger.sendCommand.mock.calls
+      .filter(([, method]) => method === 'Runtime.evaluate')
+      .map(([, , params]) => String((params as { expression?: string } | undefined)?.expression ?? ''));
+    expect(runtimeExpressions.some((expression) => expression.includes('setScroll'))).toBe(true);
+    expect(runtimeExpressions.some((expression) => expression.includes('restore'))).toBe(true);
+    expect(runtimeExpressions.some((expression) => expression.includes('requestAnimationFrame'))).toBe(false);
+  });
+
+  it('falls back to sampled full-page evidence when a full-page image is too large', async () => {
+    const storage = new Map<string, unknown>();
+    storage.set(BROWSER_CONTROL_STORAGE_KEY, {
+      ...DEFAULT_BROWSER_CONTROL_SETTINGS,
+      enabled: true,
+      targetTabId: 12,
+      allowVisionCapture: true,
+      includeSnapshotAfterActions: false,
+    });
+    const chromeStub = createChromeStub(storage, [
+      createTab({ id: 12, active: true, title: 'Example', url: 'https://example.com/' }),
+    ]);
+    const baseSendCommand = chromeStub.debugger.sendCommand.getMockImplementation();
+    chromeStub.debugger.sendCommand.mockImplementation(async (
+      source: chrome.debugger.Debuggee,
+      method: string,
+      params?: Record<string, unknown>,
+    ) => {
+      if (method === 'Page.captureScreenshot') {
+        const clip = params?.clip as { height?: number } | undefined;
+        if ((clip?.height ?? 0) > 2000) {
+          return { data: 'A'.repeat(12 * 1024 * 1024) };
+        }
+      }
+      return baseSendCommand!(source, method, params);
+    });
+    vi.stubGlobal('chrome', chromeStub);
+
+    const service = new BrowserControlService({ chromeApi: chromeStub as unknown as typeof chrome });
+    const capture = await service.captureBrowserViewForVision();
+
+    expect(capture.warnings).toContain('Full-page screenshot was too large or unavailable; attached sampled page evidence.');
+    expect(capture.captures[0]).toMatchObject({
+      source: 'full_page',
+      label: 'Full page (sampled slice)',
+      sampled: true,
+    });
+    expect(capture.captures[0]?.sizeBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+  });
+
   it('does not auto-select the active tab for visual capture', async () => {
     const storage = new Map<string, unknown>();
     storage.set(BROWSER_CONTROL_STORAGE_KEY, {
@@ -1508,6 +1608,11 @@ function createChromeStub(
           const tab = tabs.get(source.tabId);
           if (tab) tab.url = params.url;
         }
+        if (method === 'Page.getLayoutMetrics') {
+          return {
+            cssContentSize: { width: 900, height: 2400 },
+          };
+        }
         if (method === 'Page.captureScreenshot') {
           return { data: btoa('probe') };
         }
@@ -1542,6 +1647,33 @@ function createChromeStub(
               value: { x: 60, y: 120, width: 80, height: 40, visible: true },
             },
           };
+        }
+        if (method === 'Runtime.evaluate') {
+          const expression = typeof params?.expression === 'string' ? params.expression : '';
+          if (expression.includes('__deepseekPpBrowserViewCapture') && expression.includes('querySelectorAll')) {
+            return {
+              result: {
+                type: 'object',
+                value: {
+                  viewportWidth: 900,
+                  viewportHeight: 700,
+                  contentWidth: 900,
+                  contentHeight: 2400,
+                  panels: [{
+                    id: 'panel-0',
+                    label: 'Nested scroll 1: form panel',
+                    rect: { x: 450, y: 120, width: 360, height: 560 },
+                    clientHeight: 560,
+                    scrollHeight: 1400,
+                    scrollTop: 0,
+                    score: 5000,
+                    sampled: false,
+                  }],
+                },
+              },
+            };
+          }
+          return { result: { type: 'boolean', value: true } };
         }
         return {};
       }),
