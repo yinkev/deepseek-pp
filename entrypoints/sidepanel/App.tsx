@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import type { LocaleMessageKey } from '../../core/i18n';
 import { getChatEnabled } from '../../core/chat/store';
+import GlobalContextBar from './components/GlobalContextBar';
 import WhatsNewPanel from './components/WhatsNewPanel';
 import { SkeletonList } from './components/settings/primitives';
 import { useI18n } from './i18n';
@@ -106,6 +107,8 @@ export default function App() {
           );
         })}
       </nav>
+
+      <GlobalContextBar activeTab={tab} onNavigate={setTab} />
 
       <main className="ds-app-main">
         <WhatsNewPanel />

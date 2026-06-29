@@ -87,6 +87,14 @@ const EFFORT_OPTIONS: Array<{ value: OfficialDeepSeekReasoningEffort; labelKey: 
   { value: 'high', labelKey: 'sidepanel.chatPage.effortHigh' },
   { value: 'max', labelKey: 'sidepanel.chatPage.effortMax' },
 ];
+const CHAT_STARTERS: Array<{
+  labelKey: 'sidepanel.chatPage.starterDebug' | 'sidepanel.chatPage.starterSummarize' | 'sidepanel.chatPage.starterPlan';
+  promptKey: 'sidepanel.chatPage.starterDebugPrompt' | 'sidepanel.chatPage.starterSummarizePrompt' | 'sidepanel.chatPage.starterPlanPrompt';
+}> = [
+  { labelKey: 'sidepanel.chatPage.starterDebug', promptKey: 'sidepanel.chatPage.starterDebugPrompt' },
+  { labelKey: 'sidepanel.chatPage.starterSummarize', promptKey: 'sidepanel.chatPage.starterSummarizePrompt' },
+  { labelKey: 'sidepanel.chatPage.starterPlan', promptKey: 'sidepanel.chatPage.starterPlanPrompt' },
+];
 const SESSION_STRATEGY_SEQUENCE: Array<PersonalConvenienceConfig['sameSessionStrategy']> = ['last', 'current', 'new'];
 const STREAM_BUFFER_FLUSH_MS = 32;
 const CHAT_STREAM_WATCHDOG_MS = 110_000;
@@ -126,6 +134,15 @@ export default function ChatPage() {
 
   const imageUploadEnabled = authStatus?.hasToken === true;
   const apiControlsEnabled = authStatus?.provider === 'official-api' && imageAttachments.length === 0;
+  const modeLabel = apiControlsEnabled
+    ? getConfigLabel(chatConfig, t)
+    : formatSessionStrategy(personalConfig.sameSessionStrategy, t);
+  const modeDetail = apiControlsEnabled
+    ? t('sidepanel.chatPage.modeDetailApi')
+    : t('sidepanel.chatPage.modeDetailWeb');
+  const imageCapability = imageUploadEnabled
+    ? t('sidepanel.chatPage.capabilityVisionOn')
+    : t('sidepanel.chatPage.capabilityVisionOff');
 
   function updateLastAssistant(update: (message: ChatMessageType) => ChatMessageType) {
     setMessages((prev) => {
@@ -812,6 +829,15 @@ export default function ChatPage() {
           </div>
         </div>
 
+        <div className="ds-chat-mode-strip" aria-label={t('sidepanel.chatPage.modeStripLabel')}>
+          <div className="ds-chat-mode-primary">
+            <span className="ds-chat-mode-kicker">{t('sidepanel.chatPage.modeLabel')}</span>
+            <span className="ds-chat-mode-value">{modeLabel}</span>
+          </div>
+          <span className="ds-chat-mode-detail">{modeDetail}</span>
+          <span className="ds-chat-mode-chip">{imageCapability}</span>
+        </div>
+
         {apiControlsEnabled && (
           <div className="ds-chat-config-panel">
             <div className="ds-chat-control-group" aria-label={t('sidepanel.chatPage.modelLabel')}>
@@ -879,6 +905,21 @@ export default function ChatPage() {
             </div>
             <div className="ds-empty-state-title">{t('sidepanel.chatPage.empty')}</div>
             <div className="ds-empty-state-description">{t('sidepanel.chatPage.emptyHelp')}</div>
+            <div className="ds-chat-starters" aria-label={t('sidepanel.chatPage.startersLabel')}>
+              {CHAT_STARTERS.map((starter) => (
+                <button
+                  key={starter.labelKey}
+                  type="button"
+                  className="ds-chat-starter"
+                  onClick={() => {
+                    setInputText(t(starter.promptKey));
+                    inputRef.current?.focus();
+                  }}
+                >
+                  {t(starter.labelKey)}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -962,10 +1003,9 @@ export default function ChatPage() {
           />
           <div className="ds-chat-composer-actions">
             <span className="ds-chat-current-config">
-              {apiControlsEnabled
-                ? getConfigLabel(chatConfig, t)
-                : t('sidepanel.chatPage.webProvider')}
+              {modeLabel}
             </span>
+            <span className="ds-chat-keyboard-hint">{t('sidepanel.chatPage.keyboardHint')}</span>
             <div className="ds-chat-composer-buttons">
               {imageUploadEnabled && (
                 <>
