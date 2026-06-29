@@ -291,12 +291,13 @@ Add a compact context bar below top navigation or inside page headers.
 Suggested first version:
 
 ```text
-Project: None
-Provider: Web
+Exec: Web
+Project: DeepSeek++
+Session: Current
 Memory: On
-Browser: Target selected
-Tools: 17
+Browser: Locked
 Runtime: Ready
+Tools: 17 enabled
 ```
 
 Each item should be clickable if useful.
@@ -332,10 +333,31 @@ Potential file areas:
 
 #### Phase 2B — Real state integration
 
-- Add project state.
-- Add memory/prompt state.
-- Add Browser Control target summary.
+- Add shared global operational context model.
+- Add one sidepanel provider that loads and subscribes to operational context.
+- Add project state from current conversation membership or pending next-project state.
+- Add session strategy from existing personal convenience configuration via Runtime Doctor summary.
+- Add memory state from prompt injection settings.
+- Add Browser Control target summary from Runtime Doctor browser state.
 - Add Runtime Doctor readiness summary.
+- Add tool availability summary from the existing runtime tool descriptor registry.
+
+Architecture decision:
+
+- The context bar must not own state fetching.
+- `core/operational-context.ts` owns the normalized source-of-truth shape.
+- `entrypoints/sidepanel/global-operational-context.tsx` owns sidepanel loading/subscription.
+- The context bar is the first consumer, not the owner.
+- Future consumers should use the same context snapshot before adding new direct Runtime Doctor/store reads.
+
+Extension points:
+
+- Dashboard can compose the same `execution`, `project`, `memory`, `browser`, `runtime`, and `tools` fields.
+- Attention Queue can derive blockers from `runtime`, `browser`, and `tools`.
+- Activity Center can attach activity state beside the existing `source` metadata.
+- Context Inspector can expand `context.activeProjectName`, memory scope, and session strategy.
+- Command Palette can route against the same operational categories.
+- Browser Control, Runtime Doctor, Automation, and Chat can gradually consume this shared snapshot.
 
 #### Phase 2C — Click-through actions
 
@@ -1987,14 +2009,25 @@ A UIUX item is not done unless:
   - Runtime Doctor report integration without polling
   - Click-through navigation to relevant top-level surfaces
   - English and Chinese i18n
-  - Tests/build verification required before commit
+  - Tests/build verification passed before commit
+
+- Phase 2B operational context integration:
+  - Shared `GlobalOperationalContext` model added in core.
+  - Single sidepanel provider added for operational context loading and subscriptions.
+  - Context bar now consumes shared execution, project, session, memory, browser, runtime, and tools state.
+  - Browser, Runtime, and Tools chips route to exact Capabilities subtabs.
+  - Project chip uses real current-conversation project first, then pending next-project state, then none/unknown.
+  - Memory chip uses real prompt injection settings.
+  - Tools chip uses existing runtime tool descriptors.
+  - Runtime Doctor remains the cockpit summary source for runtime and Browser Control readiness.
+  - No polling added.
 
 ### Next Recommended Work
 
-Phase 2B:
+Phase 3A:
 
 ```text
-Global Context Bar Real State Integration
+Attention Queue UI Shell
 ```
 
-Expand the shell with project state, richer memory/tool state, and more precise Browser Control target summaries without heavy polling.
+Use the shared operational context to derive the first attention items for Runtime Doctor blockers, Browser Control target issues, and unavailable tools.

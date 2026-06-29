@@ -2,13 +2,13 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import type { LocaleMessageKey } from '../../core/i18n';
 import { getChatEnabled } from '../../core/chat/store';
 import GlobalContextBar from './components/GlobalContextBar';
+import { GlobalOperationalContextProvider } from './global-operational-context';
+import type { CapabilitiesSubTab, SidepanelNavigationTarget, SidepanelTab } from './navigation';
 import WhatsNewPanel from './components/WhatsNewPanel';
 import { SkeletonList } from './components/settings/primitives';
 import { useI18n } from './i18n';
 import { setPendingText } from './pending-text';
 import { useHorizontalScrollHints } from './use-horizontal-scroll-hints';
-
-type Tab = 'chat' | 'library' | 'projects' | 'capabilities' | 'settings';
 
 const LibraryPage = lazy(() => import('./pages/LibraryPage'));
 const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
@@ -16,7 +16,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const CapabilitiesPage = lazy(() => import('./pages/CapabilitiesPage'));
 const ChatPage = lazy(() => import('./pages/ChatPage'));
 
-const TABS: { key: Tab; labelKey: LocaleMessageKey; icon: string }[] = [
+const TABS: { key: SidepanelTab; labelKey: LocaleMessageKey; icon: string }[] = [
   { key: 'chat', labelKey: 'app.tabs.chat', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
   { key: 'library', labelKey: 'app.tabs.library', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5s3.332.477 4.5 1.253v13C19.832 18.477 18.246 18 16.5 18s-3.332.477-4.5 1.253' },
   { key: 'projects', labelKey: 'app.tabs.projects', icon: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z' },
@@ -26,9 +26,15 @@ const TABS: { key: Tab; labelKey: LocaleMessageKey; icon: string }[] = [
 
 export default function App() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<Tab>('chat');
+  const [tab, setTab] = useState<SidepanelTab>('chat');
+  const [capabilitiesSubTab, setCapabilitiesSubTab] = useState<CapabilitiesSubTab>('skill');
   const [chatEnabled, setChatEnabledState] = useState<boolean | null>(null);
   const sideTabs = useHorizontalScrollHints<HTMLElement>();
+
+  const navigate = (target: SidepanelNavigationTarget) => {
+    if (target.capabilitiesSubTab) setCapabilitiesSubTab(target.capabilitiesSubTab);
+    setTab(target.tab);
+  };
 
   useEffect(() => {
     getChatEnabled().then(setChatEnabledState);
@@ -108,25 +114,32 @@ export default function App() {
         })}
       </nav>
 
-      <GlobalContextBar activeTab={tab} onNavigate={setTab} />
+      <GlobalOperationalContextProvider>
+        <GlobalContextBar activeTab={tab} onNavigate={navigate} />
 
-      <main className="ds-app-main">
-        <WhatsNewPanel />
-        <Suspense fallback={<div className="p-4"><SkeletonList rows={3} /></div>}>
-          {tab === 'chat' && <ChatPage />}
-          {tab === 'library' && (
-            <LibraryPage
-              onInsertPrompt={(text) => {
-                setPendingText(text);
-                setTab('chat');
-              }}
-            />
-          )}
-          {tab === 'projects' && <ProjectsPage />}
-          {tab === 'capabilities' && <CapabilitiesPage />}
-          {tab === 'settings' && <SettingsPage />}
-        </Suspense>
-      </main>
+        <main className="ds-app-main">
+          <WhatsNewPanel />
+          <Suspense fallback={<div className="p-4"><SkeletonList rows={3} /></div>}>
+            {tab === 'chat' && <ChatPage />}
+            {tab === 'library' && (
+              <LibraryPage
+                onInsertPrompt={(text) => {
+                  setPendingText(text);
+                  setTab('chat');
+                }}
+              />
+            )}
+            {tab === 'projects' && <ProjectsPage />}
+            {tab === 'capabilities' && (
+              <CapabilitiesPage
+                activeSubTab={capabilitiesSubTab}
+                onSubTabChange={setCapabilitiesSubTab}
+              />
+            )}
+            {tab === 'settings' && <SettingsPage />}
+          </Suspense>
+        </main>
+      </GlobalOperationalContextProvider>
     </div>
   );
 }

@@ -1,111 +1,49 @@
-import { useEffect, useState } from 'react';
-import { getChatEnabled } from '../../../core/chat/store';
-import type { RuntimeDoctorReport } from '../../../core/chat/runtime-doctor';
-import type { LocaleMessageKey } from '../../../core/i18n';
+import type {
+  GlobalOperationalContext,
+  OperationalBrowserState,
+  OperationalExecutionRoute,
+  OperationalMemoryState,
+  OperationalRuntimeState,
+  OperationalSessionStrategy,
+  OperationalTone,
+} from '../../../core/operational-context';
+import type { LocaleMessageKey, MessageParams } from '../../../core/i18n';
+import { useGlobalOperationalContext } from '../global-operational-context';
+import type { SidepanelNavigationTarget, SidepanelTab } from '../navigation';
 import { useI18n } from '../i18n';
 
-type AppTab = 'chat' | 'library' | 'projects' | 'capabilities' | 'settings';
-
 interface GlobalContextBarProps {
-  activeTab: AppTab;
-  onNavigate: (tab: AppTab) => void;
+  activeTab: SidepanelTab;
+  onNavigate: (target: SidepanelNavigationTarget) => void;
 }
 
-interface ContextState {
-  chatEnabled: boolean | null;
-  report: RuntimeDoctorReport | null;
+interface ContextItem {
+  label: string;
+  value: string;
+  tone: OperationalTone;
+  active: boolean;
+  target: SidepanelNavigationTarget;
+  title?: string;
 }
 
 export default function GlobalContextBar({ activeTab, onNavigate }: GlobalContextBarProps) {
   const { t } = useI18n();
-  const [state, setState] = useState<ContextState>({ chatEnabled: null, report: null });
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async () => {
-      const [chatEnabled, report] = await Promise.all([
-        getStoredChatEnabled(),
-        getRuntimeDoctorReport(),
-      ]);
-
-      if (!cancelled) {
-        setState({ chatEnabled, report });
-      }
-    };
-
-    void load();
-
-    const storageHandler = (changes: Record<string, chrome.storage.StorageChange>) => {
-      if (
-        'deepseek_pp_chat_enabled' in changes ||
-        'deepseek_pp_browser_control_settings' in changes ||
-        'deepseek_pp_personal_convenience' in changes
-      ) {
-        void load();
-      }
-    };
-
-    if (typeof chrome !== 'undefined') chrome.storage?.onChanged?.addListener(storageHandler);
-    return () => {
-      cancelled = true;
-      if (typeof chrome !== 'undefined') chrome.storage?.onChanged?.removeListener(storageHandler);
-    };
-  }, []);
-
-  const providerLabel = formatProvider(state.report?.provider, state.chatEnabled, t);
-  const providerKnown = state.report?.provider === 'official-api' || state.report?.provider === 'deepseek-web';
-  const providerTone = state.chatEnabled === false || !providerKnown ? 'unknown' : 'ready';
-  const readiness = state.report?.readiness;
-  const readinessStatus = readiness?.status;
-  const runtimeTone = readinessStatus === 'ready' || readinessStatus === 'needs_attention' || readinessStatus === 'blocked'
-    ? readinessStatus
-    : 'unknown';
-  const runtimeLabel = formatRuntime(state.report, t);
-  const browserControl = state.report?.browserControl;
-  const browserSelected = browserControl?.targetSelected === true;
-  const browserReady = browserControl?.monitorReady === true;
-  const browserTone = browserReady
-    ? 'ready'
-    : browserSelected
-      ? 'attention'
-      : 'unknown';
-  const browserLabel = browserReady
-    ? t('app.context.browserReady')
-    : browserSelected
-      ? t('app.context.browserSelected')
-      : t('app.context.browserNone');
+  const { context } = useGlobalOperationalContext();
+  const items = createContextItems(context, activeTab, t);
 
   return (
     <div className="ds-context-bar" aria-label={t('app.context.label')}>
-      <ContextButton
-        label={t('app.context.provider')}
-        value={providerLabel}
-        tone={providerTone}
-        active={activeTab === 'chat'}
-        onClick={() => onNavigate('chat')}
-      />
-      <ContextButton
-        label={t('app.context.memory')}
-        value={t('app.context.memoryOn')}
-        tone="ready"
-        active={activeTab === 'library'}
-        onClick={() => onNavigate('library')}
-      />
-      <ContextButton
-        label={t('app.context.browser')}
-        value={browserLabel}
-        tone={browserTone}
-        active={activeTab === 'capabilities'}
-        onClick={() => onNavigate('capabilities')}
-      />
-      <ContextButton
-        label={t('app.context.runtime')}
-        value={runtimeLabel}
-        tone={runtimeTone === 'blocked' ? 'blocked' : runtimeTone === 'needs_attention' ? 'attention' : runtimeTone === 'ready' ? 'ready' : 'unknown'}
-        active={activeTab === 'capabilities'}
-        onClick={() => onNavigate('capabilities')}
-      />
+      {items.map((item) => (
+        <ContextButton
+          key={item.label}
+          label={item.label}
+          value={item.value}
+          tone={item.tone}
+          active={item.active}
+          title={item.title}
+          onClick={() => onNavigate(item.target)}
+        />
+      ))}
     </div>
   );
 }
@@ -115,12 +53,14 @@ function ContextButton({
   value,
   tone,
   active,
+  title,
   onClick,
 }: {
   label: string;
   value: string;
-  tone: 'ready' | 'attention' | 'blocked' | 'unknown';
+  tone: OperationalTone;
   active: boolean;
+  title?: string;
   onClick: () => void;
 }) {
   return (
@@ -128,7 +68,7 @@ function ContextButton({
       type="button"
       className={`ds-context-item ds-context-item-${tone}${active ? ' ds-context-item-active' : ''}`}
       onClick={onClick}
-      title={`${label}: ${value}`}
+      title={title ?? `${label}: ${value}`}
     >
       <span className="ds-context-dot" aria-hidden="true" />
       <span className="ds-context-label">{label}</span>
@@ -137,46 +77,157 @@ function ContextButton({
   );
 }
 
-function formatProvider(
-  provider: RuntimeDoctorReport['provider'] | undefined,
-  chatEnabled: boolean | null,
-  t: (key: LocaleMessageKey) => string,
-): string {
-  if (chatEnabled === false) return t('app.context.chatOff');
-  if (provider === 'official-api') return t('app.context.providerApi');
-  if (provider === 'deepseek-web') return t('app.context.providerWeb');
-  return t('app.context.providerUnknown');
+function createContextItems(
+  context: GlobalOperationalContext,
+  activeTab: SidepanelTab,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): ContextItem[] {
+  const executionValue = formatExecutionRoute(context.execution.route, t);
+  const projectValue = formatProject(context, t);
+  const sessionValue = formatSessionStrategy(context.session.strategy, t);
+  const memoryValue = formatMemory(context.memory.state, t);
+  const browserValue = formatBrowser(context.browser.state, t);
+  const runtimeValue = formatRuntime(context.runtime.state, t);
+  const toolsValue = context.tools.enabledCount === null
+    ? t('app.context.toolsUnavailable')
+    : t('app.context.toolsEnabled', { count: context.tools.enabledCount });
+
+  return [
+    {
+      label: t('app.context.execution'),
+      value: executionValue,
+      tone: context.execution.tone,
+      active: activeTab === 'chat',
+      target: { tab: 'chat' },
+      title: t('app.context.executionTitle', { value: executionValue }),
+    },
+    {
+      label: t('app.context.project'),
+      value: projectValue,
+      tone: context.project.tone,
+      active: activeTab === 'projects',
+      target: { tab: 'projects' },
+      title: t('app.context.projectTitle', { value: projectValue }),
+    },
+    {
+      label: t('app.context.session'),
+      value: sessionValue,
+      tone: context.session.tone,
+      active: activeTab === 'chat',
+      target: { tab: 'chat' },
+      title: t('app.context.sessionTitle', { value: sessionValue }),
+    },
+    {
+      label: t('app.context.memory'),
+      value: memoryValue,
+      tone: context.memory.tone,
+      active: activeTab === 'library',
+      target: { tab: 'library' },
+      title: t('app.context.memoryTitle', { value: memoryValue }),
+    },
+    {
+      label: t('app.context.browser'),
+      value: browserValue,
+      tone: context.browser.tone,
+      active: activeTab === 'capabilities',
+      target: { tab: 'capabilities', capabilitiesSubTab: 'browser' },
+      title: formatBrowserTitle(context, browserValue, t),
+    },
+    {
+      label: t('app.context.runtime'),
+      value: runtimeValue,
+      tone: context.runtime.tone,
+      active: activeTab === 'capabilities',
+      target: { tab: 'capabilities', capabilitiesSubTab: 'doctor' },
+      title: formatRuntimeTitle(context, runtimeValue, t),
+    },
+    {
+      label: t('app.context.tools'),
+      value: toolsValue,
+      tone: context.tools.tone,
+      active: activeTab === 'capabilities',
+      target: { tab: 'capabilities', capabilitiesSubTab: 'tools' },
+      title: t('app.context.toolsTitle', { value: toolsValue }),
+    },
+  ];
 }
 
-function formatRuntime(report: RuntimeDoctorReport | null, t: (key: LocaleMessageKey) => string): string {
-  const status = report?.readiness?.status;
-  if (status === 'ready') return t('app.context.runtimeReady');
-  if (status === 'blocked') return t('app.context.runtimeBlocked');
-  if (status === 'needs_attention') return t('app.context.runtimeAttention');
+function formatExecutionRoute(
+  route: OperationalExecutionRoute,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  if (route === 'official-web') return t('app.context.executionWeb');
+  if (route === 'official-api') return t('app.context.executionApi');
+  if (route === 'browser-control') return t('app.context.executionBrowser');
+  if (route === 'unavailable') return t('app.context.executionUnavailable');
+  return t('app.context.executionUnknown');
+}
+
+function formatProject(
+  context: GlobalOperationalContext,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  if (context.project.name) return context.project.name;
+  if (context.project.source === 'unknown') return t('app.context.projectUnknown');
+  return t('app.context.projectNone');
+}
+
+function formatSessionStrategy(
+  strategy: OperationalSessionStrategy | null,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  if (strategy === 'current') return t('app.context.sessionCurrent');
+  if (strategy === 'last') return t('app.context.sessionLast');
+  if (strategy === 'new') return t('app.context.sessionNew');
+  return t('app.context.sessionUnknown');
+}
+
+function formatMemory(
+  state: OperationalMemoryState,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  if (state === 'enabled') return t('app.context.memoryOn');
+  if (state === 'disabled') return t('app.context.memoryOff');
+  return t('app.context.memoryUnavailable');
+}
+
+function formatBrowser(
+  state: OperationalBrowserState,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  if (state === 'target-locked') return t('app.context.browserLocked');
+  if (state === 'target-selected') return t('app.context.browserSelected');
+  if (state === 'no-target') return t('app.context.browserNone');
+  if (state === 'unavailable') return t('app.context.browserUnavailable');
+  return t('app.context.browserUnknown');
+}
+
+function formatRuntime(
+  state: OperationalRuntimeState,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  if (state === 'ready') return t('app.context.runtimeReady');
+  if (state === 'blocked') return t('app.context.runtimeBlocked');
+  if (state === 'needs_attention') return t('app.context.runtimeAttention');
   return t('app.context.runtimeUnknown');
 }
 
-async function getStoredChatEnabled(): Promise<boolean | null> {
-  if (typeof chrome === 'undefined' || !chrome.storage?.local) return null;
-  try {
-    return await getChatEnabled();
-  } catch {
-    return null;
-  }
+function formatBrowserTitle(
+  context: GlobalOperationalContext,
+  value: string,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  const target = context.browser.targetLabel ?? context.browser.targetOrigin;
+  if (target) return t('app.context.browserTitleWithTarget', { value, target });
+  return t('app.context.browserTitle', { value });
 }
 
-async function getRuntimeDoctorReport(): Promise<RuntimeDoctorReport | null> {
-  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return null;
-  try {
-    const value = await chrome.runtime.sendMessage({ type: 'GET_RUNTIME_DOCTOR_REPORT' });
-    return isRuntimeDoctorReport(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function isRuntimeDoctorReport(value: unknown): value is RuntimeDoctorReport {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Partial<RuntimeDoctorReport>;
-  return record.ok === true && typeof record.generatedAt === 'number';
+function formatRuntimeTitle(
+  context: GlobalOperationalContext,
+  value: string,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  const blockerCount = context.runtime.blockerCount;
+  if (blockerCount === null) return t('app.context.runtimeTitle', { value });
+  return t('app.context.runtimeTitleWithBlockers', { value, count: blockerCount });
 }

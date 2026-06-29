@@ -8,9 +8,8 @@ import RuntimeDoctorPage from './RuntimeDoctorPage';
 import SkillPage from './SkillPage';
 import ToolsPage from './ToolsPage';
 import { useI18n } from '../i18n';
+import type { CapabilitiesSubTab } from '../navigation';
 import { useHorizontalScrollHints } from '../use-horizontal-scroll-hints';
-
-type CapabilitiesSubTab = 'skill' | 'mcp' | 'tools' | 'browser' | 'doctor' | 'preset' | 'automation';
 
 const SUB_TABS: { key: CapabilitiesSubTab; labelKey: LocaleMessageKey; titleKey?: LocaleMessageKey }[] = [
   { key: 'skill', labelKey: 'sidepanel.capabilitiesPage.tabs.skill' },
@@ -26,10 +25,22 @@ const SUB_TABS: { key: CapabilitiesSubTab; labelKey: LocaleMessageKey; titleKey?
   },
 ];
 
-export default function CapabilitiesPage() {
-  const [sub, setSub] = useState<CapabilitiesSubTab>('skill');
+export default function CapabilitiesPage({
+  activeSubTab,
+  onSubTabChange,
+}: {
+  activeSubTab?: CapabilitiesSubTab;
+  onSubTabChange?: (tab: CapabilitiesSubTab) => void;
+}) {
+  const [localSub, setLocalSub] = useState<CapabilitiesSubTab>('skill');
   const { t } = useI18n();
   const subTabs = useHorizontalScrollHints<HTMLElement>({ compact: false });
+  const sub = activeSubTab ?? localSub;
+
+  const setSub = (next: CapabilitiesSubTab) => {
+    setLocalSub(next);
+    onSubTabChange?.(next);
+  };
 
   return (
     <div className="flex flex-col h-full">
