@@ -615,7 +615,10 @@ function McpServerForm({
         </div>
 
         {form.transportKind !== 'native_messaging' && (
-          <Field label={form.transportKind === 'stdio_bridge' ? 'Bridge URL' : t('sidepanel.mcpPage.form.serviceUrl')}>
+          <Field
+            label={form.transportKind === 'stdio_bridge' ? t('sidepanel.mcpPage.form.bridgeEndpointUrl') : t('sidepanel.mcpPage.form.serviceUrl')}
+            hint={form.transportKind === 'stdio_bridge' ? t('sidepanel.mcpPage.form.bridgeEndpointHint') : undefined}
+          >
             <input
               value={form.url}
               onChange={(event) => update('url', event.target.value)}
@@ -1159,11 +1162,12 @@ function EmptyState({ label, hint, actions }: { label: string; hint?: string; ac
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
       <span className="block text-xs mb-1" style={{ color: 'var(--ds-text-secondary)' }}>{label}</span>
       {children}
+      {hint && <span className="block text-[11px] mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>{hint}</span>}
     </label>
   );
 }
@@ -1280,7 +1284,13 @@ function transportFromForm(
   }
 
   const url = form.url.trim();
-  if (!url) return { error: t('sidepanel.mcpPage.validation.serviceUrlRequired') };
+  if (!url) {
+    return {
+      error: t(form.transportKind === 'stdio_bridge'
+        ? 'sidepanel.mcpPage.validation.bridgeEndpointRequired'
+        : 'sidepanel.mcpPage.validation.serviceUrlRequired'),
+    };
+  }
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return { error: t('sidepanel.mcpPage.validation.serviceUrlUnsupported') };

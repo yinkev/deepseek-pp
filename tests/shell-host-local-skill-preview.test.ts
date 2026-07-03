@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -101,12 +101,34 @@ describe('shell native host local_file_* tools', () => {
 });
 
 describe('shell native host logLine resilience', () => {
+  it('creates the configured log file parent directory and writes diagnostics', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'deepseek-pp-host-log-'));
+    tempRoots.push(root);
+    const logFile = join(root, 'logs', 'host.log');
+
+    const response = await callNativeHost('shell_status', {}, { DPP_LOG_FILE: logFile });
+
+    expect(response.error).toBeUndefined();
+    expect(existsSync(logFile)).toBe(true);
+    const log = readFileSync(logFile, 'utf8');
+    expect(log).toContain('[shell-mcp-host] started');
+    expect(log).toContain('tools/call name=shell_status');
+  });
+
   it('returns a normal response when DPP_LOG_FILE points to an unwritable path', async () => {
     const response = await callNativeHost('shell_status', {}, {
       DPP_LOG_FILE: '/nonexistent-dir-dpp-test-xyz/unwritable.log',
     });
     expect(response.error).toBeUndefined();
     expect(response.result?.structuredContent?.data?.platform).toBeTruthy();
+  });
+
+  it('writes a stderr diagnostic when DPP_LOG_FILE cannot be initialized', async () => {
+    const { response, stderr } = await callNativeHostWithStderr('shell_status', {}, {
+      DPP_LOG_FILE: '/nonexistent-dir-dpp-test-xyz/unwritable.log',
+    });
+    expect(response.error).toBeUndefined();
+    expect(stderr).toContain('failed to initialize log file');
   });
 });
 
@@ -201,6 +223,62 @@ async function callNativeHost(name: string, args: Record<string, unknown>, env?:
 
   child.kill();
   return response;
+}
+
+async function callNativeHostWithStderr(name: string, args: Record<string, unknown>, env?: Record<string, string>): Promise<{ response: any; stderr: string }> {
+  const child = spawn(process.execPath, [hostPath], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: env ? { ...process.env, ...env } : undefined,
+  });
+  let stdout = Buffer.alloc(0);
+  let stderr = '';
+  let settled = false;
+
+  const response = await new Promise<any>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error(`Native host timed out. stderr: ${stderr}`));
+    }, 10_000);
+
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout = Buffer.concat([stdout, chunk]);
+      const message = tryReadNativeMessage(stdout);
+      if (!message || settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.stdin.end();
+      resolve(message);
+    });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`Native host exited before responding (${code}). stderr: ${stderr}`));
+    });
+
+    child.stdin.end(createNativeFrame({
+      protocol: 'deepseek-pp-mcp-native',
+      version: 1,
+      message: {
+        jsonrpc: '2.0',
+        id: 'test-call',
+        method: 'tools/call',
+        params: { name, arguments: args },
+      },
+    }));
+  });
+
+  child.kill();
+  return { response, stderr };
 }
 
 function createNativeFrame(message: unknown): Buffer {

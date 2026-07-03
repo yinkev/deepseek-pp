@@ -285,6 +285,20 @@ const TOOL_DEFINITIONS = [
 // trace by reinstalling with --log-file and reproducing once. See issue #287.
 const LOG_FILE = process.env.DPP_LOG_FILE || '';
 const LOG_PREFIX = '[shell-mcp-host]';
+let logWriteFailureReported = false;
+
+initializeLogFile();
+
+function initializeLogFile() {
+  if (!LOG_FILE) return;
+  try {
+    mkdirSync(dirname(LOG_FILE), { recursive: true });
+    appendFileSync(LOG_FILE, `${new Date().toISOString()} ${LOG_PREFIX} started pid=${process.pid} platform=${platform()} node=${process.version}\n`, { encoding: 'utf8' });
+  } catch (err) {
+    process.stderr.write(`${LOG_PREFIX} failed to initialize log file ${LOG_FILE}: ${err instanceof Error ? err.message : String(err)}\n`);
+    logWriteFailureReported = true;
+  }
+}
 
 function logLine(message) {
   const line = typeof message === 'string' ? message : String(message);
@@ -292,7 +306,11 @@ function logLine(message) {
   if (LOG_FILE) {
     try {
       appendFileSync(LOG_FILE, `${new Date().toISOString()} ${LOG_PREFIX} ${line}\n`, { encoding: 'utf8' });
-    } catch {
+    } catch (err) {
+      if (!logWriteFailureReported) {
+        process.stderr.write(`${LOG_PREFIX} failed to write log file ${LOG_FILE}: ${err instanceof Error ? err.message : String(err)}\n`);
+        logWriteFailureReported = true;
+      }
       // best-effort; never let logging failure crash the host
     }
   }

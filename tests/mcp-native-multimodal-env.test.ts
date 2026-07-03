@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMcpNativeMessagingTransport } from '../core/mcp/transports/native';
 import type { McpServerConfig } from '../core/mcp/types';
 import { MULTIMODAL_MCP_NATIVE_HOST } from '../core/multimodal/contracts';
 import { saveMultimodalSettings } from '../core/multimodal/settings';
@@ -53,6 +52,7 @@ describe('multimodal native messaging env', () => {
       EXTRA_STALE_VALUE: 'hidden',
     });
 
+    const { createMcpNativeMessagingTransport } = await import('../core/mcp/transports/native');
     await createMcpNativeMessagingTransport(server).notify!({
       jsonrpc: '2.0',
       method: 'notifications/initialized',
@@ -69,7 +69,130 @@ describe('multimodal native messaging env', () => {
   });
 });
 
-function createServer(env: Record<string, string>): McpServerConfig {
+describe('native messaging payload limits', () => {
+  it('rejects oversized local_file_write content before opening the native host', async () => {
+    const connectNative = vi.fn();
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        connectNative,
+      },
+    });
+
+    const server = createServer({}, 'com.deepseek_pp.shell');
+
+    const { createMcpNativeMessagingTransport } = await import('../core/mcp/transports/native');
+    await expect(createMcpNativeMessagingTransport(server).request({
+      jsonrpc: '2.0',
+      id: 'write-big-file',
+      method: 'tools/call',
+      params: {
+        name: 'local_file_write',
+        arguments: {
+          path: '/tmp/big.txt',
+          content: 'x'.repeat(2_000_001),
+        },
+      },
+    })).rejects.toMatchObject({
+      code: 'mcp_native_payload_too_large',
+      retryable: false,
+    });
+
+    expect(connectNative).not.toHaveBeenCalled();
+  });
+
+  it('does not size-gate multimodal native host payloads (regression for analyze_images/analyze_video)', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: {
+        connectNative: vi.fn(() => ({
+          postMessage: vi.fn(),
+          onMessage: { addListener: vi.fn((handler: (msg: unknown) => void) => {
+            setTimeout(() => handler({
+              jsonrpc: '2.0',
+              id: 'analyze-big',
+              result: { content: [{ type: 'text', text: 'ok' }] },
+            }), 0);
+          }) },
+          onDisconnect: { addListener: vi.fn() },
+        })),
+      },
+      storage: {
+        local: {
+          get: vi.fn(async () => ({})),
+        },
+      },
+    });
+
+    const server = createServer({}, 'com.deepseek_pp.multimodal.test-payload');
+    const largeImage = 'x'.repeat(10 * 1024 * 1024);
+
+    const { createMcpNativeMessagingTransport } = await import('../core/mcp/transports/native');
+    const result = await createMcpNativeMessagingTransport(server).request({
+      jsonrpc: '2.0',
+      id: 'analyze-big',
+      method: 'tools/call',
+      params: {
+        name: 'analyze_images',
+        arguments: {
+          prompt: 'describe',
+          images: [{ type: 'input_image', image_url: `data:image/png;base64,${largeImage}`, detail: 'auto' }],
+        },
+      },
+    }, { timeoutMs: 5_000 });
+
+    expect(result).toBeDefined();
+  });
+
+  it('rejects oversized non-local_file_write shell host envelope', async () => {
+    const connectNative = vi.fn();
+    vi.stubGlobal('chrome', {
+      runtime: { connectNative },
+    });
+
+    const server = createServer({}, 'com.deepseek_pp.shell');
+    const { createMcpNativeMessagingTransport } = await import('../core/mcp/transports/native');
+
+    await expect(createMcpNativeMessagingTransport(server).request({
+      jsonrpc: '2.0',
+      id: 'big-shell-call',
+      method: 'tools/call',
+      params: {
+        name: 'shell_exec',
+        arguments: { command: 'x'.repeat(10 * 1024 * 1024) },
+      },
+    })).rejects.toMatchObject({
+      code: 'mcp_native_payload_too_large',
+      retryable: false,
+    });
+
+    expect(connectNative).not.toHaveBeenCalled();
+  });
+
+  it('does not size-gate notifications on the shell host', async () => {
+    const postedEnvelopes: unknown[] = [];
+    vi.stubGlobal('chrome', {
+      runtime: {
+        connectNative: vi.fn(() => ({
+          postMessage: vi.fn((value: unknown) => { postedEnvelopes.push(value); }),
+          onMessage: { addListener: vi.fn() },
+          onDisconnect: { addListener: vi.fn() },
+        })),
+      },
+    });
+
+    const server = createServer({}, 'com.deepseek_pp.shell');
+    const { createMcpNativeMessagingTransport } = await import('../core/mcp/transports/native');
+
+    await createMcpNativeMessagingTransport(server).notify!({
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+    });
+
+    expect(postedEnvelopes).toHaveLength(1);
+  });
+});
+
+function createServer(env: Record<string, string>, nativeHost = MULTIMODAL_MCP_NATIVE_HOST): McpServerConfig {
   return {
     version: 1,
     id: 'multimodal',
@@ -77,7 +200,7 @@ function createServer(env: Record<string, string>): McpServerConfig {
     enabled: true,
     transport: {
       kind: 'native_messaging',
-      nativeHost: MULTIMODAL_MCP_NATIVE_HOST,
+      nativeHost,
       env,
     },
     headers: [],
