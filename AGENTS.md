@@ -19,6 +19,20 @@ This repo should be driven as an autonomous worker system, not a supervised help
 
 Full durable rule: `docs/plan/autonomous-worker-instructions.md`.
 
+## Grok CLI Usage
+
+Grok Build is installed locally and should be used as a fast reviewer/worker when useful.
+
+- CLI path on this machine: `/Users/kyin/.grok/bin/grok`; `grok` is on PATH.
+- Official headless docs: `https://docs.x.ai/build/cli/headless-scripting`.
+- For headless automation, use `grok -p "prompt"` or `grok --single "prompt"` with `--cwd /path`; add `--no-alt-screen` for inline output and `--output-format plain|json|streaming-json` when needed.
+- Verified command shape on 2026-07-01: `grok --no-auto-update --single "prompt" --cwd /Users/kyin/Projects/Deepseek-pp --permission-mode plan --no-alt-screen --output-format plain`.
+- Use the official headless docs as the command source. Do not use local CLI help for Grok Build command discovery.
+- Shell safety: do not put the local-help command text inside shell backticks or double-quoted search patterns; for literal checks use fixed-string single-quoted searches such as `rg -n -F 'grok --help' AGENTS.md .ai-bridge/current-plan.md`.
+- Do not add `--effort`, `--reasoning-effort`, or invented reasoning flags to the default Grok Build path. Grok Build can reject them as `400 invalid-argument: Model grok-build does not support parameter reasoningEffort`.
+- For read-only review, prefer a prompt that explicitly says "read-only review, do not edit files" plus `--permission-mode plan`; do not set an unrealistically low `--max-turns`, because that causes useless `Max turns reached` failures.
+- If Grok fails, record the exact failure and continue with local verification; do not keep retrying the same bad invocation.
+
 ## Claude Project Memory
 
 > Auto-synced from `/Users/zcl/.claude/projects/-Users-zcl-code-deepseek-pp/memory`.
