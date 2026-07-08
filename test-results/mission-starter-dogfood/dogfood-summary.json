@@ -1,0 +1,25 @@
+{
+  "url": "http://127.0.0.1:55484/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/mission-starter-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real primary navigation opened Mission",
+    "first-run Mission empty state rendered through shadcn Empty",
+    "Start mission opened the visible starter form",
+    "Mission starter fields rendered through shared shadcn Field/Textarea slots with label wiring",
+    "Cancel/Create actions rendered through shadcn Button slots",
+    "typed objective, done criteria, and required evidence saved to the autonomous run ledger",
+    "Mission status rendered through shadcn Badge/Card substrate after creation",
+    "Mission action route opened Activity and returned to Mission",
+    "Pause changed ledger status to paused",
+    "Resume changed ledger status to running",
+    "Stop changed ledger status to cancelled and exposed Start mission again",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

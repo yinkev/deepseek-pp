@@ -1,4 +1,18 @@
 import { useEffect, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { ChevronRightIcon, DownloadIcon, FolderDownIcon, PlusIcon } from 'lucide-react';
 import type { LocaleMessageKey, MessageParams, SupportedLocale } from '../../../core/i18n';
 import type { GitHubSkillSource, GitHubSkillUpdatePreview, Skill, SkillImportSource } from '../../../core/types';
 import GitHubSkillImportPanel from '../components/GitHubSkillImportPanel';
@@ -6,11 +20,13 @@ import LocalSkillImportPanel from '../components/LocalSkillImportPanel';
 import PageIntro from '../components/PageIntro';
 import SkillCard from '../components/SkillCard';
 import SkillForm from '../components/SkillForm';
-import { SkeletonList, useConfirm } from '../components/settings/primitives';
+import { StatusMessage, TextField, useBanner, useConfirm } from '../components/settings/primitives';
 import { requestGitHubApiPermission } from '../github-permission';
 import { useI18n } from '../i18n';
+import { getSafeRuntimeIssueMessage, unwrapRuntimeResponse } from '../runtime-response';
 
 type SourceActionStatus = 'checking' | 'updating' | 'success' | 'error';
+type SkillStatusFilter = 'all' | 'enabled' | 'disabled';
 
 interface SourceActionState {
   status: SourceActionStatus;
@@ -22,8 +38,153 @@ interface SkillGroup {
   id: string;
   title: string;
   subtitle: string;
-  badgeKey?: LocaleMessageKey;
   skills: Skill[];
+  githubSource?: GitHubSkillSource;
+}
+
+interface SkillOverviewCounts {
+  total: number;
+  enabled: number;
+  disabled: number;
+  githubSources: number;
+  localSources: number;
+}
+
+type CommandStatusState = 'checking' | 'attention' | 'empty' | 'off' | 'ready';
+
+function CommandsStatusCard({
+  loading,
+  counts,
+  loadError,
+  sourceLoadError,
+  onRetry,
+  onCreate,
+}: {
+  loading: boolean;
+  counts: SkillOverviewCounts;
+  loadError: string;
+  sourceLoadError: string;
+  onRetry: () => void;
+  onCreate: () => void;
+}) {
+  const { t } = useI18n();
+  const sourceCount = counts.githubSources + counts.localSources;
+  const isChecking = loading && counts.total === 0 && !loadError;
+  const hasIssue = Boolean(loadError || sourceLoadError);
+  const state: CommandStatusState = isChecking
+    ? 'checking'
+    : hasIssue
+      ? 'attention'
+      : counts.total === 0
+        ? 'empty'
+        : counts.enabled > 0
+          ? 'ready'
+          : 'off';
+  const badgeVariant = state === 'attention'
+    ? 'destructive'
+    : state === 'empty' || state === 'off'
+      ? 'outline'
+      : 'secondary';
+  const badgeLabel = state === 'checking'
+    ? t('sidepanel.skillPage.statusChecking')
+    : state === 'attention'
+      ? t('sidepanel.skillPage.statusNeedsRefresh')
+      : state === 'empty'
+        ? t('sidepanel.skillPage.statusEmpty')
+        : state === 'ready'
+          ? t('sidepanel.skillPage.statusReady')
+          : t('sidepanel.skillPage.statusAllOff');
+  const description = state === 'checking'
+    ? t('sidepanel.skillPage.statusCheckingDescription')
+    : state === 'attention'
+      ? loadError
+        ? t('sidepanel.skillPage.statusLibraryNeedsRefreshDescription')
+        : t('sidepanel.skillPage.statusNeedsRefreshDescription')
+      : state === 'empty'
+        ? t('sidepanel.skillPage.statusEmptyDescription')
+        : state === 'ready'
+          ? t('sidepanel.skillPage.statusReadyDescription')
+          : t('sidepanel.skillPage.statusAllOffDescription');
+  const commandState = isChecking
+    ? t('sidepanel.skillPage.statusCommandsChecking')
+    : loadError
+      ? t('sidepanel.skillPage.statusCommandsUnavailable')
+      : t('sidepanel.skillPage.statusCommandsCount', { enabled: counts.enabled, total: counts.total });
+  const sourceState = isChecking
+    ? t('sidepanel.skillPage.statusSourcesChecking')
+    : loadError
+      ? t('sidepanel.skillPage.statusSourcesUnavailable')
+      : sourceLoadError
+        ? t('sidepanel.skillPage.statusSourcesNeedsRefresh')
+        : sourceCount > 0
+          ? t('sidepanel.skillPage.statusSourcesCount', { sources: sourceCount })
+          : t('sidepanel.skillPage.statusSourcesNone');
+  const next = loadError
+    ? t('sidepanel.skillPage.statusNextRetryLibrary')
+    : sourceLoadError
+      ? t('sidepanel.skillPage.statusNextRetrySources')
+      : state === 'empty'
+        ? t('sidepanel.skillPage.statusNextCreate')
+        : state === 'off'
+          ? t('sidepanel.skillPage.statusNextTurnOn')
+          : t('sidepanel.skillPage.statusNextUseAsk');
+  const canRetry = Boolean(loadError || sourceLoadError);
+  const canCreate = state === 'empty';
+
+  return (
+    <Card
+      size="sm"
+      className="ds-command-status-card"
+      data-state={state}
+      aria-live="polite"
+      aria-busy={isChecking ? true : undefined}
+    >
+      <CardHeader>
+        <CardTitle>{t('sidepanel.skillPage.statusCardTitle')}</CardTitle>
+        <CardDescription>{description}</CardDescription>
+        <CardAction>
+          <Badge variant={badgeVariant}>{badgeLabel}</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {isChecking ? (
+          <div className="ds-command-status-skeleton" aria-hidden="true">
+            <Skeleton className="ds-command-status-skeleton-line" />
+            <Skeleton className="ds-command-status-skeleton-line" />
+          </div>
+        ) : (
+          <div className="ds-command-status-rows">
+            <div className="ds-command-status-row">
+              <span>{t('sidepanel.skillPage.statusCommands')}</span>
+              <strong>{commandState}</strong>
+            </div>
+            <div className="ds-command-status-row">
+              <span>{t('sidepanel.skillPage.statusSources')}</span>
+              <strong>{sourceState}</strong>
+            </div>
+            <div className="ds-command-status-row">
+              <span>{t('sidepanel.skillPage.statusNext')}</span>
+              <strong>{next}</strong>
+            </div>
+          </div>
+        )}
+      </CardContent>
+      {(canRetry || canCreate) && !isChecking && (
+        <CardFooter>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ds-command-status-action"
+            aria-label={canRetry ? t('common.retry') : t('sidepanel.skillPage.createCustomAction')}
+            onClick={canRetry ? onRetry : onCreate}
+          >
+            {canRetry ? t('common.retry') : t('sidepanel.skillPage.createCustom')}
+          </Button>
+        </CardFooter>
+      )}
+    </Card>
+  );
 }
 
 export default function SkillPage() {
@@ -34,18 +195,62 @@ export default function SkillPage() {
   const [importMode, setImportMode] = useState<'github' | 'local' | null>(null);
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
   const [sourceActions, setSourceActions] = useState<Record<string, SourceActionState>>({});
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({ builtin: true });
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<SkillStatusFilter>('all');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [sourceLoadError, setSourceLoadError] = useState('');
+  const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
+  const getCommandIssue = (
+    error: unknown,
+    fallback = t('sidepanel.skillPage.backendUnavailable'),
+  ) => getSafeRuntimeIssueMessage(error, fallback);
 
   const load = async () => {
-    const [list, sources]: [Skill[], SkillImportSource[]] = await Promise.all([
-      chrome.runtime.sendMessage({ type: 'GET_SKILL_LIBRARY' }),
-      chrome.runtime.sendMessage({ type: 'GET_SKILL_SOURCES' }),
-    ]);
-    setSkills(list ?? []);
-    setSkillSources(sources ?? []);
-    setLoading(false);
+    const hadSourceLoadError = Boolean(sourceLoadError);
+    setLoading(true);
+    setLoadError('');
+    setSourceLoadError('');
+    try {
+      const listResponse = await chrome.runtime.sendMessage({ type: 'GET_SKILL_LIBRARY' });
+      const list = unwrapRuntimeResponse<Skill[]>(listResponse, t('sidepanel.skillPage.backendUnavailable'));
+      if (!Array.isArray(list)) throw new Error(t('sidepanel.skillPage.backendUnavailable'));
+      setSkills(list ?? []);
+
+      try {
+        const sourcesResponse = await chrome.runtime.sendMessage({ type: 'GET_SKILL_SOURCES' });
+        const sources = unwrapRuntimeResponse<SkillImportSource[]>(sourcesResponse, t('sidepanel.skillPage.backendUnavailable'));
+        if (!Array.isArray(sources)) throw new Error(t('sidepanel.skillPage.backendUnavailable'));
+        const resolvedSources = sources ?? [];
+        setSkillSources(resolvedSources);
+        if (hadSourceLoadError) {
+          const recoveredGroups = createThirdPartySkillGroups(
+            list.filter((skill) => isThirdPartySkillSource(skill.source)),
+            resolvedSources,
+            t,
+          );
+          if (recoveredGroups.length > 0) {
+            setExpandedGroups((current) => ({
+              ...current,
+              ...Object.fromEntries(recoveredGroups.map((group) => [group.id, true])),
+            }));
+          }
+        }
+      } catch (error) {
+        setSkillSources([]);
+        setSourceLoadError(t('sidepanel.skillPage.sourcesLoadFailed', {
+          error: getCommandIssue(error),
+        }));
+      }
+    } catch (error) {
+      setLoadError(t('sidepanel.skillPage.loadFailed', {
+        error: getCommandIssue(error),
+      }));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, [locale]);
@@ -56,43 +261,65 @@ export default function SkillPage() {
   };
 
   const handleCreate = () => {
+    banner.clear();
     setImportMode(null);
     setEditingSkill(null);
     setShowForm((current) => (editingSkill ? true : !current));
   };
 
   const handleImport = (mode: 'github' | 'local') => {
+    banner.clear();
     closeForm();
     setImportMode((current) => (current === mode ? null : mode));
   };
 
   const handleEdit = (skill: Skill) => {
+    banner.clear();
     setImportMode(null);
     setEditingSkill(skill);
     setShowForm(true);
   };
 
   const handleDelete = async (name: string) => {
-    await chrome.runtime.sendMessage({ type: 'DELETE_SKILL', payload: { name } });
-    if (editingSkill?.name === name) closeForm();
-    await load();
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'DELETE_SKILL', payload: { name } });
+      unwrapRuntimeResponse(response, t('sidepanel.skillPage.backendUnavailable'));
+      if (editingSkill?.name === name) closeForm();
+      await load();
+    } catch (error) {
+      banner.show('error', t('sidepanel.skillPage.operationFailed', { error: getCommandIssue(error) }));
+    }
   };
 
   const handleToggleEnabled = async (skill: Skill) => {
-    await chrome.runtime.sendMessage({
-      type: 'SET_SKILL_ENABLED',
-      payload: { name: skill.name, enabled: skill.enabled === false },
-    });
-    await load();
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SET_SKILL_ENABLED',
+        payload: { name: skill.name, enabled: skill.enabled === false },
+      });
+      unwrapRuntimeResponse(response, t('sidepanel.skillPage.backendUnavailable'));
+      await load();
+    } catch (error) {
+      banner.show('error', t('sidepanel.skillPage.operationFailed', { error: getCommandIssue(error) }));
+    }
   };
 
   const handleToggleGroupEnabled = async (group: SkillGroup) => {
-    const shouldEnable = !group.skills.every((skill) => skill.enabled !== false);
-    await Promise.all(group.skills.map((skill) => chrome.runtime.sendMessage({
-      type: 'SET_SKILL_ENABLED',
-      payload: { name: skill.name, enabled: shouldEnable },
-    })));
-    await load();
+    const toggleableSkills = group.skills.filter(isSkillToggleable);
+    if (toggleableSkills.length === 0) return;
+    const shouldEnable = !toggleableSkills.every((skill) => skill.enabled !== false);
+    try {
+      await Promise.all(toggleableSkills.map(async (skill) => {
+        const response = await chrome.runtime.sendMessage({
+          type: 'SET_SKILL_ENABLED',
+          payload: { name: skill.name, enabled: shouldEnable },
+        });
+        unwrapRuntimeResponse(response, t('sidepanel.skillPage.backendUnavailable'));
+      }));
+      await load();
+    } catch (error) {
+      banner.show('error', t('sidepanel.skillPage.operationFailed', { error: getCommandIssue(error) }));
+    }
   };
 
   const handleToggleGroup = (groupId: string) => {
@@ -103,12 +330,17 @@ export default function SkillPage() {
   };
 
   const handleSave = async (skill: Skill) => {
-    await chrome.runtime.sendMessage({
-      type: 'SAVE_SKILL',
-      payload: editingSkill ? { skill, previousName: editingSkill.name } : skill,
-    });
-    closeForm();
-    await load();
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SAVE_SKILL',
+        payload: editingSkill ? { skill, previousName: editingSkill.name } : skill,
+      });
+      unwrapRuntimeResponse(response, t('sidepanel.skillPage.backendUnavailable'));
+      closeForm();
+      await load();
+    } catch (error) {
+      banner.show('error', t('sidepanel.skillPage.operationFailed', { error: getCommandIssue(error) }));
+    }
   };
 
   const handleCheckSource = async (source: GitHubSkillSource) => {
@@ -123,7 +355,9 @@ export default function SkillPage() {
         type: 'CHECK_GITHUB_SKILL_SOURCE_UPDATES',
         payload: { sourceId: source.id },
       });
-      if (response?.ok === false) throw new Error(response.error ?? t('sidepanel.skillPage.checkFailed'));
+      if (response?.ok === false) throw new Error(
+        response.error === undefined ? t('sidepanel.skillPage.checkFailed') : getCommandIssue(response.error, t('sidepanel.skillPage.checkFailed')),
+      );
       const update = response as GitHubSkillUpdatePreview;
       setSourceActions((current) => ({
         ...current,
@@ -139,7 +373,7 @@ export default function SkillPage() {
         ...current,
         [source.id]: {
           status: 'error',
-          message: error instanceof Error ? error.message : String(error),
+          message: getCommandIssue(error, t('sidepanel.skillPage.checkFailed')),
         },
       }));
     }
@@ -157,7 +391,9 @@ export default function SkillPage() {
         type: 'UPDATE_GITHUB_SKILL_SOURCE',
         payload: { sourceId: source.id },
       });
-      if (response?.ok === false) throw new Error(response.error ?? t('sidepanel.skillPage.syncFailed'));
+      if (response?.ok === false) throw new Error(
+        response.error === undefined ? t('sidepanel.skillPage.syncFailed') : getCommandIssue(response.error, t('sidepanel.skillPage.syncFailed')),
+      );
       setSourceActions((current) => ({
         ...current,
         [source.id]: {
@@ -173,44 +409,64 @@ export default function SkillPage() {
         ...current,
         [source.id]: {
           status: 'error',
-          message: error instanceof Error ? error.message : String(error),
+          message: getCommandIssue(error, t('sidepanel.skillPage.syncFailed')),
         },
       }));
     }
   };
 
   const handleDeleteSource = async (source: GitHubSkillSource) => {
-    const message = t('sidepanel.skillPage.deleteSourceConfirm', {
+    const title = t('sidepanel.skillPage.deleteSourceConfirm', {
       repository: source.repository,
       count: source.importedSkillNames.length,
     });
     const ok = await confirm({
-      title: message,
-      message,
+      title,
+      message: t('sidepanel.skillPage.deleteSourceConfirmMessage', {
+        repository: source.repository,
+        count: source.importedSkillNames.length,
+      }),
       confirmLabel: t('common.delete'),
       cancelLabel: t('common.cancel'),
     });
     if (!ok) return;
-    await chrome.runtime.sendMessage({
-      type: 'DELETE_GITHUB_SKILL_SOURCE',
-      payload: { sourceId: source.id },
-    });
-    setSourceActions((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
-    await load();
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'DELETE_GITHUB_SKILL_SOURCE',
+        payload: { sourceId: source.id },
+      });
+      unwrapRuntimeResponse(response, t('sidepanel.skillPage.backendUnavailable'));
+      setSourceActions((current) => {
+        const next = { ...current };
+        delete next[source.id];
+        return next;
+      });
+      await load();
+    } catch (error) {
+      setSourceActions((current) => ({
+        ...current,
+        [source.id]: {
+          status: 'error',
+          message: getCommandIssue(error),
+        },
+      }));
+    }
   };
 
-  const builtin = skills.filter((s) => s.source === 'builtin');
+  const visibleSkills = filterSkills(skills, searchQuery, statusFilter);
+  const builtin = visibleSkills.filter((s) => s.source === 'builtin');
   const githubSources = skillSources.filter((source): source is GitHubSkillSource => source.provider === 'github');
+  const localSources = skillSources.filter((source) => source.provider === 'local');
   const thirdPartyGroups = createThirdPartySkillGroups(
-    skills.filter((s) => isThirdPartySkillSource(s.source)),
+    visibleSkills.filter((s) => isThirdPartySkillSource(s.source)),
     skillSources,
     t,
   );
-  const custom = skills.filter((s) => s.source === 'custom');
+  const visibleGroupedGitHubSourceIds = new Set(thirdPartyGroups
+    .map((group) => group.githubSource?.id)
+    .filter((id): id is string => Boolean(id)));
+  const ungroupedGitHubSources = githubSources.filter((source) => !visibleGroupedGitHubSourceIds.has(source.id));
+  const custom = visibleSkills.filter((s) => s.source === 'custom');
   const builtinGroup: SkillGroup | null = builtin.length > 0
     ? {
       id: 'builtin',
@@ -219,7 +475,6 @@ export default function SkillPage() {
         enabled: builtin.filter((skill) => skill.enabled !== false).length,
         total: builtin.length,
       }),
-      badgeKey: 'sidepanel.skill.sources.builtin',
       skills: builtin,
     }
     : null;
@@ -231,149 +486,294 @@ export default function SkillPage() {
         enabled: custom.filter((skill) => skill.enabled !== false).length,
         total: custom.length,
       }),
-      badgeKey: 'sidepanel.skill.sources.custom',
       skills: custom,
     }
     : null;
   const enabledCount = skills.filter((s) => s.enabled !== false).length;
+  const overviewCounts: SkillOverviewCounts = {
+    total: skills.length,
+    enabled: enabledCount,
+    disabled: skills.length - enabledCount,
+    githubSources: githubSources.length,
+    localSources: localSources.length,
+  };
+  const hasVisibleSkills = Boolean(builtinGroup || customGroup || thirdPartyGroups.length > 0);
+  const isFilteredView = searchQuery.trim().length > 0 || statusFilter !== 'all';
+  const isInitialLoading = loading && skills.length === 0 && !loadError;
 
   return (
-    <div className="ds-page">
+    <div className="ds-page ds-skill-page">
       <PageIntro
         title={t('sidepanel.skillPage.title')}
         description={t('sidepanel.skillPage.description')}
-        meta={t('sidepanel.skillPage.summary', { total: skills.length, enabled: enabledCount })}
-        actions={(
-          <>
-            <button
-              onClick={() => handleImport('github')}
-              className="ds-btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-150 flex items-center gap-1"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M5 19h14" />
-              </svg>
-              GitHub
-            </button>
-            <button
-              onClick={() => handleImport('local')}
-              className="ds-btn-secondary px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-150 flex items-center gap-1"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.3}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5h6l2 2h10v8.5a2 2 0 01-2 2H5a2 2 0 01-2-2V7.5z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 12v5m0 0l-2-2m2 2l2-2" />
-              </svg>
-              {t('sidepanel.skillPage.importLocal')}
-            </button>
-            <button
-              onClick={handleCreate}
-              className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              {t('sidepanel.skillPage.createCustom')}
-            </button>
-          </>
-        )}
+      />
+
+      <CommandsStatusCard
+        loading={loading}
+        counts={overviewCounts}
+        loadError={loadError}
+        sourceLoadError={sourceLoadError}
+        onRetry={() => { void load(); }}
+        onCreate={handleCreate}
       />
 
       {confirmNode}
+      {banner.node}
 
-      {importMode === 'github' && (
-        <div className="animate-slide-down">
-          <GitHubSkillImportPanel onImported={load} onCancel={() => setImportMode(null)} />
+      {isInitialLoading ? (
+        <div className="ds-skill-loading" role="status">
+          {t('sidepanel.skillPage.loading')}
         </div>
-      )}
-
-      {importMode === 'local' && (
-        <div className="animate-slide-down">
-          <LocalSkillImportPanel onImported={load} onCancel={() => setImportMode(null)} />
-        </div>
-      )}
-
-      {showForm && (
-        <div className="animate-slide-down">
-          <SkillForm initialSkill={editingSkill} onSave={handleSave} onCancel={closeForm} />
-        </div>
-      )}
-
-      {loading ? (
-        <SkeletonList rows={3} />
       ) : (
         <>
-      {githubSources.length > 0 && (
-        <GitHubSourceSection
-          sources={githubSources}
-          actions={sourceActions}
-          onCheck={handleCheckSource}
-          onUpdate={handleUpdateSource}
-          onDelete={handleDeleteSource}
-        />
-      )}
+          {loadError && (
+            <StatusMessage tone="error">
+              <div className="font-medium">{t('sidepanel.skillPage.loadFailedTitle')}</div>
+              <div>{loadError}</div>
+              <div className="mt-1.5">{t('sidepanel.skillPage.loadFailedHint')}</div>
+            </StatusMessage>
+          )}
 
-      {builtinGroup && (
-        <SkillGroupsPanel
-          groups={[builtinGroup]}
-          expandedGroups={expandedGroups}
-          onToggleGroup={handleToggleGroup}
-          onToggleGroupEnabled={handleToggleGroupEnabled}
-          onToggleEnabled={handleToggleEnabled}
-        />
-      )}
-      <SkillGroupsPanel
-        sectionLabel={t('sidepanel.skillPage.sectionThirdParty')}
-        groups={thirdPartyGroups}
-        expandedGroups={expandedGroups}
-        onToggleGroup={handleToggleGroup}
-        onToggleGroupEnabled={handleToggleGroupEnabled}
-        onDelete={handleDelete}
-        onToggleEnabled={handleToggleEnabled}
-      />
-      {customGroup && (
-        <SkillGroupsPanel
-          groups={[customGroup]}
-          expandedGroups={expandedGroups}
-          onToggleGroup={handleToggleGroup}
-          onToggleGroupEnabled={handleToggleGroupEnabled}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-          onToggleEnabled={handleToggleEnabled}
-        />
-      )}
+          {sourceLoadError && !loadError && (
+            <StatusMessage tone="error">
+              <div className="font-medium">{t('sidepanel.skillPage.sourcesLoadFailedTitle')}</div>
+              <div>{sourceLoadError}</div>
+              <div className="mt-1.5">{t('sidepanel.skillPage.sourcesLoadFailedHint')}</div>
+            </StatusMessage>
+          )}
 
-      <div className="ds-info-panel rounded-xl p-3.5">
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--ds-text-secondary)' }}>
-          {t('sidepanel.skillPage.usagePrefix')}{' '}
-          <code className="ds-code font-mono text-[11px] px-1.5 py-0.5 rounded">
-            {t('sidepanel.skillPage.usageTrigger')}
-          </code>{' '}
-          {t('sidepanel.skillPage.usageSuffix')}
-          <code className="ds-code font-mono text-[11px] px-1.5 py-0.5 rounded">
-            {t('sidepanel.skillPage.usageExample')}
-          </code>
-        </p>
-      </div>
+          {!loadError && (
+            <>
+              <SkillOverviewPanel
+                counts={overviewCounts}
+                searchQuery={searchQuery}
+                statusFilter={statusFilter}
+                onSearchChange={setSearchQuery}
+                onStatusFilterChange={setStatusFilter}
+                onImportGitHub={() => handleImport('github')}
+                onImportLocal={() => handleImport('local')}
+                onCreateCustom={handleCreate}
+              />
+
+              {importMode === 'github' && (
+                <GitHubSkillImportPanel onImported={load} onCancel={() => setImportMode(null)} />
+              )}
+
+              {importMode === 'local' && (
+                <LocalSkillImportPanel onImported={load} onCancel={() => setImportMode(null)} />
+              )}
+
+              {showForm && (
+                <SkillForm initialSkill={editingSkill} onSave={handleSave} onCancel={closeForm} />
+              )}
+
+              {customGroup && (
+                <SkillGroupsPanel
+                  groups={[customGroup]}
+                  filtered={isFilteredView}
+                  defaultExpanded
+                  expandedGroups={expandedGroups}
+                  onToggleGroup={handleToggleGroup}
+                  onToggleGroupEnabled={handleToggleGroupEnabled}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onToggleEnabled={handleToggleEnabled}
+                />
+              )}
+              <SkillGroupsPanel
+                sectionLabel={t('sidepanel.skillPage.sectionThirdParty')}
+                groups={thirdPartyGroups}
+                filtered={isFilteredView}
+                defaultExpanded={Boolean(sourceLoadError)}
+                expandedGroups={expandedGroups}
+                sourceActions={sourceActions}
+                onToggleGroup={handleToggleGroup}
+                onToggleGroupEnabled={handleToggleGroupEnabled}
+                onCheckSource={handleCheckSource}
+                onUpdateSource={handleUpdateSource}
+                onDeleteSource={handleDeleteSource}
+                onDelete={handleDelete}
+                onToggleEnabled={handleToggleEnabled}
+              />
+              {builtinGroup && (
+                <SkillGroupsPanel
+                  groups={[builtinGroup]}
+                  filtered={isFilteredView}
+                  expandedGroups={expandedGroups}
+                  onToggleGroup={handleToggleGroup}
+                  onToggleGroupEnabled={handleToggleGroupEnabled}
+                  onToggleEnabled={handleToggleEnabled}
+                />
+              )}
+
+              {!hasVisibleSkills && (
+                <div className="ds-skill-empty-state">
+                  <strong>
+                    {t(isFilteredView ? 'sidepanel.skillPage.emptyFiltered' : 'sidepanel.skillPage.emptyLibrary')}
+                  </strong>
+                </div>
+              )}
+
+              {ungroupedGitHubSources.length > 0 && (
+                <UngroupedGitHubSourceSection
+                  sources={ungroupedGitHubSources}
+                  actions={sourceActions}
+                  onCheck={handleCheckSource}
+                  onUpdate={handleUpdateSource}
+                  onDelete={handleDeleteSource}
+                />
+              )}
+            </>
+          )}
         </>
       )}
     </div>
   );
 }
 
+function SkillOverviewPanel({
+  counts,
+  searchQuery,
+  statusFilter,
+  onSearchChange,
+  onStatusFilterChange,
+  onImportGitHub,
+  onImportLocal,
+  onCreateCustom,
+}: {
+  counts: SkillOverviewCounts;
+  searchQuery: string;
+  statusFilter: SkillStatusFilter;
+  onSearchChange: (query: string) => void;
+  onStatusFilterChange: (filter: SkillStatusFilter) => void;
+  onImportGitHub: () => void;
+  onImportLocal: () => void;
+  onCreateCustom: () => void;
+}) {
+  const { t } = useI18n();
+  const hasExternalSources = counts.githubSources + counts.localSources > 0;
+  const sourceSummary = hasExternalSources
+    ? t('sidepanel.skillPage.sourceSummary', {
+      disabled: counts.disabled,
+      sources: counts.githubSources + counts.localSources,
+    })
+    : t('sidepanel.skillPage.sourceEmptySummary', { disabled: counts.disabled });
+  const filters: { id: SkillStatusFilter; label: string }[] = [
+    { id: 'all', label: t('sidepanel.skillPage.filterAll') },
+    { id: 'enabled', label: t('sidepanel.skillPage.filterEnabled') },
+    { id: 'disabled', label: t('sidepanel.skillPage.filterDisabled') },
+  ];
+
+  return (
+    <section className="ds-skill-overview" aria-label={t('sidepanel.skillPage.libraryOverview')}>
+      <div className="ds-skill-controls">
+        <TextField
+          value={searchQuery}
+          onChange={onSearchChange}
+          placeholder={t('sidepanel.skillPage.searchPlaceholder')}
+          ariaLabel={t('common.search')}
+          fieldClassName="ds-skill-search"
+          inputClassName="ds-skill-search-input"
+        />
+        <ToggleGroup
+          type="single"
+          value={statusFilter}
+          onValueChange={(value) => {
+            if (value) onStatusFilterChange(value as SkillStatusFilter);
+          }}
+          className="ds-skill-filter-row"
+          aria-label={t('sidepanel.skillPage.filterLabel')}
+          variant="outline"
+          size="sm"
+          spacing={0}
+        >
+          {filters.map((filter) => (
+            <ToggleGroupItem
+              key={filter.id}
+              value={filter.id}
+              data-active={statusFilter === filter.id}
+              aria-pressed={statusFilter === filter.id}
+              aria-label={filter.label}
+            >
+              {filter.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
+
+      <div className="ds-skill-overview-head">
+        <div className="ds-skill-overview-copy" aria-live="polite">
+          <span>{t('sidepanel.skillPage.summary', { total: counts.total, enabled: counts.enabled })}</span>
+          <span aria-hidden="true">·</span>
+          <span>{sourceSummary}</span>
+        </div>
+        <div className="ds-skill-action-row" aria-label={t('sidepanel.skillPage.addSkills')}>
+          <Button
+            type="button"
+            onClick={onImportGitHub}
+            aria-label={t('sidepanel.skillPage.importGithubAction')}
+            variant="outline"
+            size="sm"
+            className="ds-skill-add-button"
+          >
+            <DownloadIcon data-icon="inline-start" aria-hidden="true" />
+            {t('sidepanel.skillPage.importGithub')}
+          </Button>
+          <Button
+            type="button"
+            onClick={onImportLocal}
+            aria-label={t('sidepanel.skillPage.importLocalAction')}
+            variant="outline"
+            size="sm"
+            className="ds-skill-add-button"
+          >
+            <FolderDownIcon data-icon="inline-start" aria-hidden="true" />
+            {t('sidepanel.skillPage.importLocal')}
+          </Button>
+          <Button
+            type="button"
+            onClick={onCreateCustom}
+            aria-label={t('sidepanel.skillPage.createCustomAction')}
+            variant="default"
+            size="sm"
+            className="ds-skill-add-button"
+          >
+            <PlusIcon data-icon="inline-start" aria-hidden="true" />
+            {t('sidepanel.skillPage.createCustom')}
+          </Button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function SkillGroupsPanel({
   sectionLabel,
   groups,
+  filtered,
+  defaultExpanded = false,
   expandedGroups,
+  sourceActions = {},
   onToggleGroup,
   onToggleGroupEnabled,
+  onCheckSource,
+  onUpdateSource,
+  onDeleteSource,
   onEdit,
   onDelete,
   onToggleEnabled,
 }: {
   sectionLabel?: string;
   groups: SkillGroup[];
+  filtered: boolean;
+  defaultExpanded?: boolean;
   expandedGroups: Record<string, boolean>;
+  sourceActions?: Record<string, SourceActionState>;
   onToggleGroup: (groupId: string) => void;
   onToggleGroupEnabled: (group: SkillGroup) => void;
+  onCheckSource?: (source: GitHubSkillSource) => void;
+  onUpdateSource?: (source: GitHubSkillSource) => void;
+  onDeleteSource?: (source: GitHubSkillSource) => void;
   onEdit?: (skill: Skill) => void;
   onDelete?: (name: string) => void;
   onToggleEnabled: (skill: Skill) => void;
@@ -384,73 +784,87 @@ function SkillGroupsPanel({
   return (
     <section className="ds-section">
       {sectionLabel && (
-        <h3 className="ds-section-title text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
+        <h3 className="ds-skill-section-label">
           {sectionLabel}
         </h3>
       )}
       {groups.map((group) => {
-        const expanded = expandedGroups[group.id] === true;
-        const allEnabled = group.skills.every((skill) => skill.enabled !== false);
+        const expanded = filtered || expandedGroups[group.id] === true || (expandedGroups[group.id] === undefined && defaultExpanded);
+        const toggleableSkills = group.skills.filter(isSkillToggleable);
+        const canToggleGroup = toggleableSkills.length > 0;
+        const allEnabled = canToggleGroup && toggleableSkills.every((skill) => skill.enabled !== false);
+        const groupState = formatGroupState(group, t);
+        const githubSource = group.githubSource;
+        const groupSubtitle = group.id === 'builtin' || group.id === 'custom'
+          ? groupState
+          : `${groupState} · ${group.subtitle}`;
         const toggleAllLabel = allEnabled
-          ? t('sidepanel.skillPage.disableSourceSkills')
-          : t('sidepanel.skillPage.enableSourceSkills');
+          ? t(filtered ? 'sidepanel.skillPage.disableVisibleSkills' : 'sidepanel.skillPage.disableSourceSkills')
+          : t(filtered ? 'sidepanel.skillPage.enableVisibleSkills' : 'sidepanel.skillPage.enableSourceSkills');
+        const toggleAllAriaLabel = allEnabled
+          ? t(filtered ? 'sidepanel.skillPage.disableVisibleSkillsFor' : 'sidepanel.skillPage.disableSourceSkillsFor', {
+            source: group.title,
+          })
+          : t(filtered ? 'sidepanel.skillPage.enableVisibleSkillsFor' : 'sidepanel.skillPage.enableSourceSkillsFor', {
+            source: group.title,
+          });
 
         return (
-          <div key={group.id} className="ds-surface-panel">
-            <div className="ds-list-row">
-              <button
+          <div key={group.id} className="ds-command-group">
+            <div className="ds-command-group-header">
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 aria-expanded={expanded}
                 aria-label={expanded
                   ? t('sidepanel.skillPage.collapseSource', { source: group.title })
                   : t('sidepanel.skillPage.expandSource', { source: group.title })}
                 onClick={() => onToggleGroup(group.id)}
-                className="min-w-0 flex-1 flex items-center gap-2 text-left rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--ds-blue)]"
+                className="ds-command-group-toggle"
               >
-                <svg
-                  className={`w-3.5 h-3.5 shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={2.4}
-                  style={{ color: 'var(--ds-text-tertiary)' }}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs font-semibold truncate" style={{ color: 'var(--ds-text)' }}>
-                      {group.title}
-                    </span>
-                    {group.badgeKey && (
-                      <span className="ds-tag inline-flex text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0">
-                        {t(group.badgeKey)}
-                      </span>
-                    )}
+                <ChevronRightIcon
+                  className={`ds-command-group-chevron ${expanded ? 'ds-command-group-chevron-open' : ''}`}
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
+                <span className="ds-command-group-copy">
+                  <span className="ds-command-group-title">
+                    {group.title}
                   </span>
-                  <span className="block text-[11px] mt-0.5 truncate" style={{ color: 'var(--ds-text-tertiary)' }}>
-                    {group.id === 'builtin' || group.id === 'custom'
-                      ? group.subtitle
-                      : `${group.subtitle} · ${t('sidepanel.skillPage.enabledSkillCount', {
-                        enabled: group.skills.filter((skill) => skill.enabled !== false).length,
-                        total: group.skills.length,
-                      })}`}
+                  <span className="ds-command-group-state">
+                    {groupSubtitle}
                   </span>
                 </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onToggleGroupEnabled(group)}
-                className="ds-btn-secondary px-2 py-1 text-[11px] font-medium rounded-md shrink-0"
-              >
-                {toggleAllLabel}
-              </button>
+              </Button>
+              {canToggleGroup && (
+                <Button
+                  type="button"
+                  variant={allEnabled ? 'destructive' : 'outline'}
+                  size="sm"
+                  onClick={() => onToggleGroupEnabled(group)}
+                  aria-label={toggleAllAriaLabel}
+                  title={filtered ? t('sidepanel.skillPage.visibleOnlyHint') : undefined}
+                  data-action={allEnabled ? 'off' : 'on'}
+                  className="ds-btn-secondary ds-command-group-action"
+                >
+                  {toggleAllLabel}
+                </Button>
+              )}
             </div>
             {expanded && (
               <div
-                className="ds-section ds-panel-block pt-0 animate-slide-down"
-                style={{ borderTop: '1px solid var(--ds-border)' }}
+                className="ds-skill-list"
               >
+                {githubSource && onCheckSource && onUpdateSource && onDeleteSource && (
+                  <GitHubSourceControls
+                    source={githubSource}
+                    action={sourceActions[githubSource.id]}
+                    onCheck={() => onCheckSource(githubSource)}
+                    onUpdate={() => onUpdateSource(githubSource)}
+                    onDelete={() => onDeleteSource(githubSource)}
+                  />
+                )}
                 {group.skills.map((skill) => (
                   <SkillCard
                     key={skill.name}
@@ -462,7 +876,7 @@ function SkillGroupsPanel({
                         ? () => onDelete(skill.name)
                         : undefined
                     }
-                    onToggleEnabled={() => onToggleEnabled(skill)}
+                    onToggleEnabled={isSkillToggleable(skill) ? () => onToggleEnabled(skill) : undefined}
                   />
                 ))}
               </div>
@@ -474,7 +888,7 @@ function SkillGroupsPanel({
   );
 }
 
-function GitHubSourceSection({ sources, actions, onCheck, onUpdate, onDelete }: {
+function UngroupedGitHubSourceSection({ sources, actions, onCheck, onUpdate, onDelete }: {
   sources: GitHubSkillSource[];
   actions: Record<string, SourceActionState>;
   onCheck: (source: GitHubSkillSource) => void;
@@ -484,25 +898,26 @@ function GitHubSourceSection({ sources, actions, onCheck, onUpdate, onDelete }: 
   const { t } = useI18n();
 
   return (
-    <section className="space-y-2">
-      <h3 className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
+    <section className="ds-section">
+      <h3 className="ds-skill-section-label">
         {t('sidepanel.skillPage.githubSourceTitle')}
       </h3>
       {sources.map((source) => (
-        <GitHubSourceCard
-          key={source.id}
-          source={source}
-          action={actions[source.id]}
-          onCheck={() => onCheck(source)}
-          onUpdate={() => onUpdate(source)}
-          onDelete={() => onDelete(source)}
-        />
+        <div key={source.id} className="ds-command-group ds-source-orphan">
+          <GitHubSourceControls
+            source={source}
+            action={actions[source.id]}
+            onCheck={() => onCheck(source)}
+            onUpdate={() => onUpdate(source)}
+            onDelete={() => onDelete(source)}
+          />
+        </div>
       ))}
     </section>
   );
 }
 
-function GitHubSourceCard({ source, action, onCheck, onUpdate, onDelete }: {
+function GitHubSourceControls({ source, action, onCheck, onUpdate, onDelete }: {
   source: GitHubSkillSource;
   action?: SourceActionState;
   onCheck: () => void;
@@ -511,9 +926,19 @@ function GitHubSourceCard({ source, action, onCheck, onUpdate, onDelete }: {
 }) {
   const { t, locale } = useI18n();
   const busy = action?.status === 'checking' || action?.status === 'updating';
+  const sourceLabel = source.repository;
+  const metadata = [
+    t('sidepanel.skillPage.skillCount', { count: source.importedSkillNames.length }),
+    source.licenseSpdxId ?? source.licenseName ?? t('sidepanel.skillPage.unknownLicense'),
+    source.packageVersion ? `v${source.packageVersion}` : null,
+    t('sidepanel.skillPage.syncedAt', { time: formatTime(source.updatedAt, locale) }),
+    source.lastCheckedAt ? t('sidepanel.skillPage.checkedAt', { time: formatTime(source.lastCheckedAt, locale) }) : null,
+  ].filter((item): item is string => Boolean(item));
+  const actionTone = getSourceActionTone(action);
+
   return (
-    <div className="ds-surface-panel rounded-xl p-3.5 space-y-3">
-      <div className="flex items-start justify-between gap-3">
+    <div className="ds-source-inline">
+      <div className="ds-source-header">
         <div className="min-w-0">
           <div className="text-xs font-semibold truncate" style={{ color: 'var(--ds-text)' }}>
             {source.repository}
@@ -522,49 +947,52 @@ function GitHubSourceCard({ source, action, onCheck, onUpdate, onDelete }: {
             {source.rootPath || t('sidepanel.skillPage.repoRoot')} · {source.ref} · {shortSha(source.commitSha)}
           </div>
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <button
+        <div className="ds-source-actions">
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={onCheck}
             disabled={busy}
-            className="ds-btn-secondary px-2 py-1 text-[11px] font-medium rounded-md disabled:opacity-40"
+            aria-label={t('sidepanel.skillPage.checkSource', { source: sourceLabel })}
+            className="ds-source-action"
           >
             {t('sidepanel.skillPage.check')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={onUpdate}
             disabled={busy}
-            className="ds-btn-secondary px-2 py-1 text-[11px] font-medium rounded-md disabled:opacity-40"
+            aria-label={t('sidepanel.skillPage.syncSource', { source: sourceLabel })}
+            className="ds-source-action"
           >
             {t('sidepanel.skillPage.sync')}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="destructive"
+            size="sm"
             onClick={onDelete}
             disabled={busy}
-            className="ds-text-btn-delete px-2 py-1 text-[11px] font-medium rounded-md disabled:opacity-40"
+            aria-label={t('sidepanel.skillPage.removeSource', { source: sourceLabel })}
+            className="ds-source-action ds-source-action-delete"
           >
             {t('sidepanel.skillPage.remove')}
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 text-[10px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-        <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.skillPage.skillCount', { count: source.importedSkillNames.length })}</span>
-        <span className="ds-tag px-1.5 py-0.5 rounded-full">{source.licenseSpdxId ?? source.licenseName ?? t('sidepanel.skillPage.unknownLicense')}</span>
-        {source.packageVersion && <span className="ds-tag px-1.5 py-0.5 rounded-full">v{source.packageVersion}</span>}
-        <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.skillPage.syncedAt', { time: formatTime(source.updatedAt, locale) })}</span>
-        {source.lastCheckedAt && <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.skillPage.checkedAt', { time: formatTime(source.lastCheckedAt, locale) })}</span>}
+      <div className="ds-source-meta-line" aria-label={t('sidepanel.skillPage.sourceMetadata')}>
+        {metadata.join(' · ')}
       </div>
 
       {action && (
         <div
-          className="rounded-lg px-3 py-2 text-[11px] leading-relaxed"
-          style={{
-            color: action.status === 'error' ? 'var(--ds-danger)' : action.update?.hasUpdates ? 'var(--ds-warning)' : 'var(--ds-success)',
-            background: action.status === 'error' ? 'var(--ds-danger-bg)' : action.update?.hasUpdates ? 'var(--ds-warning-bg)' : 'var(--ds-success-bg)',
-          }}
+          className="ds-source-action-message"
+          data-tone={actionTone}
+          role={actionTone === 'danger' ? 'alert' : 'status'}
         >
           {busy && <span className="inline-block w-3 h-3 mr-1.5 border-2 border-current border-t-transparent rounded-full animate-spin align-[-2px]" />}
           {action.message}
@@ -572,6 +1000,23 @@ function GitHubSourceCard({ source, action, onCheck, onUpdate, onDelete }: {
       )}
     </div>
   );
+}
+
+function formatGroupState(
+  group: SkillGroup,
+  t: (key: LocaleMessageKey, params?: MessageParams) => string,
+): string {
+  const enabled = group.skills.filter((skill) => skill.enabled !== false).length;
+  if (enabled === group.skills.length) return t('sidepanel.skillPage.groupAllEnabled');
+  if (enabled === 0) return t('sidepanel.skillPage.groupAllDisabled');
+  return t('sidepanel.skillPage.enabledSkillCount', { enabled, total: group.skills.length });
+}
+
+function getSourceActionTone(action?: SourceActionState): 'neutral' | 'attention' | 'danger' {
+  if (!action) return 'neutral';
+  if (action.status === 'error') return 'danger';
+  if (action.update?.hasUpdates) return 'attention';
+  return 'neutral';
 }
 
 function createThirdPartySkillGroups(
@@ -613,7 +1058,6 @@ function getThirdPartyGroupDescriptor(
         id: `local:${localSource?.id ?? skill.remote.sourceId ?? title}`,
         title,
         subtitle: localPath ?? t('sidepanel.skillPage.localReferencedSource'),
-        badgeKey: 'sidepanel.skill.sources.local',
       };
     }
 
@@ -628,7 +1072,7 @@ function getThirdPartyGroupDescriptor(
         rootPath || t('sidepanel.skillPage.repoRoot'),
         ref,
       ].filter(Boolean).join(' · '),
-      badgeKey: 'sidepanel.skill.sources.remote',
+      githubSource,
     };
   }
 
@@ -637,12 +1081,38 @@ function getThirdPartyGroupDescriptor(
     id: `bundled:${provider}`,
     title: provider,
     subtitle: t('sidepanel.skillPage.bundledThirdPartySource'),
-    badgeKey: 'sidepanel.skill.sources.thirdParty',
   };
 }
 
 function isThirdPartySkillSource(source: Skill['source']): boolean {
   return source === 'third-party' || source === 'official' || source === 'remote';
+}
+
+function isSkillToggleable(skill: Skill): boolean {
+  return skill.source !== 'builtin';
+}
+
+function filterSkills(skills: Skill[], query: string, status: SkillStatusFilter): Skill[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  return skills.filter((skill) => {
+    const enabled = skill.enabled !== false;
+    if (status === 'enabled' && !enabled) return false;
+    if (status === 'disabled' && enabled) return false;
+    if (!normalizedQuery) return true;
+
+    const haystack = [
+      skill.name,
+      typeof skill.description === 'string' ? skill.description : '',
+      skill.source,
+      skill.remote?.repository,
+      skill.remote?.path,
+      skill.remote?.localDisplayName,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
 }
 
 function formatUpdateMessage(

@@ -1,0 +1,23 @@
+{
+  "url": "http://127.0.0.1:59071/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/browser-readiness-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened Browser through shadcn CommandDialog",
+    "Browser readiness Card/Header/Title/Description/Action/Content slots verified",
+    "Browser readiness Badge variants verified for needs-target, ready, and load-failure states",
+    "Browser readiness Button action focused the first controllable target",
+    "keyboard Enter selected the focused target",
+    "target lock and clear-lock actions were clicked and verified",
+    "advanced snapshot details were opened and verified",
+    "load failure rendered a retry action and recovered after click",
+    "target action failure surfaced sanitized copy without removing reachable targets",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

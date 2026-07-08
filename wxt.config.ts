@@ -156,6 +156,7 @@ export default defineConfig({
     plugins: [tailwindcss(), pyodideAssetsPlugin(), asciiJavaScriptOutputPlugin()],
     resolve: {
       alias: {
+        '@': rootDir,
         '@wxt-dev/browser': safeWxtBrowser,
         'wxt/browser': safeWxtBrowser,
       },

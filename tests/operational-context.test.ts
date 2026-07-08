@@ -11,6 +11,12 @@ import {
 } from '../core/operational-context';
 import { PROJECT_CONTEXT_SCHEMA_VERSION, type ProjectContextState } from '../core/project';
 import type { ToolDescriptor, ToolRegistrySnapshot } from '../core/tool/types';
+import {
+  createSidebarV2Navigation,
+  getSidebarV2ActiveKey,
+  getSidebarV2ContextLine,
+  isSidebarV2TargetActive,
+} from '../entrypoints/sidepanel/sidebar-v2';
 
 describe('createGlobalOperationalContext', () => {
   it('summarizes the current operational route, project, memory, session, and tools', () => {
@@ -250,6 +256,180 @@ describe('createGlobalOperationalContext', () => {
       status: 'running',
       updatedAt: 20,
     });
+  });
+});
+
+describe('sidebar v2 projection', () => {
+  it('projects only real primary and system routes without synthetic recent rows', () => {
+    const context = createGlobalOperationalContext({
+      chromeAvailable: false,
+    });
+    const sections = createSidebarV2Navigation({
+      context,
+      projectState: null,
+      currentConversation: null,
+      chatEnabled: true,
+    });
+
+    expect(sections.find((section) => section.key === 'primary')?.items.map((item) => item.key)).toEqual([
+      'ask',
+      'projects',
+      'context',
+      'mission',
+      'activity',
+      'review',
+    ]);
+    expect(sections.find((section) => section.key === 'primary')?.items.map((item) => item.target)).toEqual([
+      { tab: 'chat' },
+      { tab: 'projects' },
+      { tab: 'intelligence' },
+      { tab: 'mission' },
+      { tab: 'timeline' },
+      { tab: 'review' },
+    ]);
+    expect(sections.find((section) => section.key === 'recent')?.items).toEqual([]);
+    expect(sections.find((section) => section.key === 'workspace')?.items.map((item) => item.target)).toEqual([
+      { tab: 'chat' },
+      { tab: 'projects' },
+      { tab: 'intelligence' },
+      { tab: 'workingSet' },
+      { tab: 'timeline' },
+      { tab: 'review' },
+      { tab: 'skills' },
+      { tab: 'library' },
+    ]);
+    expect(sections.find((section) => section.key === 'system')?.items.map((item) => item.target)).toEqual([
+      { tab: 'capabilities', capabilitiesSubTab: 'automation' },
+      { tab: 'capabilities', capabilitiesSubTab: 'preset' },
+      { tab: 'capabilities', capabilitiesSubTab: 'browser' },
+      { tab: 'capabilities', capabilitiesSubTab: 'mcp' },
+      { tab: 'capabilities', capabilitiesSubTab: 'tools' },
+      { tab: 'capabilities', capabilitiesSubTab: 'doctor' },
+      { tab: 'settings' },
+    ]);
+    expect(sections.find((section) => section.key === 'system')?.items.map((item) => item.groupKey)).toEqual([
+      'app.sidebarV2.systemRunGroup',
+      'app.sidebarV2.systemRunGroup',
+      'app.sidebarV2.systemToolGroup',
+      'app.sidebarV2.systemToolGroup',
+      'app.sidebarV2.systemToolGroup',
+      'app.sidebarV2.systemHealthGroup',
+      'app.sidebarV2.systemConfigGroup',
+    ]);
+  });
+
+  it('derives recent rows from real current conversation and project store entries', () => {
+    const projectState = {
+      ...createProjectState(),
+      projects: [
+        ...createProjectState().projects,
+        {
+          id: 'project-3',
+          name: 'Receipts',
+          description: '',
+          instructions: '',
+          createdAt: 1,
+          updatedAt: 5,
+        },
+      ],
+      conversations: [
+        ...createProjectState().conversations,
+        {
+          conversationId: 'conversation-2',
+          projectId: 'project-2',
+          title: 'Schedule cleanup',
+          url: 'https://chat.deepseek.com/b',
+          addedAt: 2,
+          lastSeenAt: 3,
+        },
+      ],
+    };
+    const sections = createSidebarV2Navigation({
+      context: createGlobalOperationalContext({ projectState }),
+      projectState,
+      currentConversation: {
+        conversationId: 'conversation-1',
+        title: 'DeepSeek++ planning',
+        url: 'https://chat.deepseek.com/a',
+      },
+      chatEnabled: true,
+    });
+
+    const recentItems = sections.find((section) => section.key === 'recent')?.items ?? [];
+    expect(recentItems.map((item) => item.labelText)).toEqual([
+      'DeepSeek++ planning',
+      'Schedule cleanup',
+      'Receipts',
+    ]);
+    expect(recentItems.map((item) => item.target)).toEqual([
+      { tab: 'projects', projectId: 'project-1' },
+      { tab: 'projects', projectId: 'project-2' },
+      { tab: 'projects', projectId: 'project-3' },
+    ]);
+    expect(recentItems.map((item) => isSidebarV2TargetActive(item, { tab: 'projects' }))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(recentItems.map((item) => isSidebarV2TargetActive(item, {
+      tab: 'projects',
+      projectId: 'project-1',
+    }))).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    const workspaceProjects = sections.find((section) => section.key === 'workspace')?.items.find((item) => item.key === 'workspace-projects');
+    const primaryMission = sections.find((section) => section.key === 'primary')?.items.find((item) => item.key === 'mission');
+    const primaryProjects = sections.find((section) => section.key === 'primary')?.items.find((item) => item.key === 'projects');
+    expect(workspaceProjects && isSidebarV2TargetActive(workspaceProjects, {
+      tab: 'projects',
+      projectId: 'project-1',
+    })).toBe(false);
+    expect(workspaceProjects && isSidebarV2TargetActive(workspaceProjects, { tab: 'projects' })).toBe(true);
+    expect(primaryMission && isSidebarV2TargetActive(primaryMission, { tab: 'mission' })).toBe(true);
+    expect(primaryProjects && isSidebarV2TargetActive(primaryProjects, { tab: 'projects' })).toBe(true);
+  });
+
+  it('keeps active route and context-line projection deterministic', () => {
+    const context = createGlobalOperationalContext({
+      runtimeDoctorReport: createRuntimeReport({
+        browserControl: {
+          ...createRuntimeReport().browserControl,
+          targetSelected: true,
+          targetLock: {
+            enabled: true,
+            label: 'DeepSeek tab',
+            origin: 'https://chat.deepseek.com',
+            updatedAt: 1,
+          },
+        },
+      }),
+      projectState: createProjectState(),
+      currentConversation: {
+        conversationId: 'conversation-1',
+        title: 'DeepSeek++ planning',
+        url: 'https://chat.deepseek.com/a',
+      },
+      toolRegistry: createToolRegistry([createTool('web_search')]),
+    });
+
+    expect(getSidebarV2ActiveKey({ tab: 'capabilities', capabilitiesSubTab: 'browser' })).toBe('system-browser');
+    expect(getSidebarV2ActiveKey({ tab: 'capabilities', capabilitiesSubTab: 'mcp' })).toBe('system-mcp');
+    expect(getSidebarV2ActiveKey({ tab: 'chat' })).toBe('ask');
+    expect(getSidebarV2ActiveKey({ tab: 'mission' })).toBe('mission');
+    expect(getSidebarV2ActiveKey({ tab: 'projects' })).toBe('projects');
+    expect(getSidebarV2ActiveKey({ tab: 'intelligence' })).toBe('context');
+    expect(getSidebarV2ActiveKey({ tab: 'workingSet' })).toBe('workspace-working-set');
+    expect(getSidebarV2ActiveKey({ tab: 'timeline' })).toBe('activity');
+    expect(getSidebarV2ActiveKey({ tab: 'review' })).toBe('review');
+    expect(getSidebarV2ActiveKey({ tab: 'skills' })).toBe('workspace-skills');
+    expect(getSidebarV2ActiveKey({ tab: 'library' })).toBe('workspace-library');
+    expect(getSidebarV2ActiveKey({ tab: 'settings' })).toBe('system-settings');
+    expect(getSidebarV2ContextLine(context)).toEqual([
+      'DeepSeek++',
+      'https://chat.deepseek.com',
+    ]);
   });
 });
 

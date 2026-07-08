@@ -1,6 +1,8 @@
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
 import type { SystemPromptPreset } from '../../../core/types';
 import { useI18n } from '../i18n';
+import { TextAreaField, TextField } from './settings/primitives';
 
 interface Props {
   initial?: SystemPromptPreset;
@@ -27,42 +29,44 @@ export default function PresetForm({ initial, onSave, onCancel }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="ds-form rounded-xl p-4 space-y-3">
-      <input
-        type="text"
-        placeholder={t('sidepanel.preset.form.namePlaceholder')}
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        className="ds-input w-full px-3 py-2 text-sm rounded-lg transition-all duration-150"
-      />
-
-      <div>
-        <label className="text-[11px] mb-1.5 block font-medium" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {t('sidepanel.preset.form.contentLabel')}
-        </label>
-        <textarea
-          rows={8}
-          placeholder={t('sidepanel.preset.form.contentPlaceholder')}
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          className="ds-input w-full px-3 py-2 text-sm font-mono rounded-lg resize-none transition-all duration-150"
-        />
+    <form onSubmit={handleSubmit} className="ds-form ds-preset-form">
+      <div className="ds-preset-form-head">
+        <h3>{initial ? t('sidepanel.preset.form.editTitle') : t('sidepanel.preset.form.createTitle')}</h3>
       </div>
 
-      <div className="flex gap-2 justify-end pt-1">
-        <button
+      <TextField
+        label={t('sidepanel.preset.form.nameLabel')}
+        value={name}
+        placeholder={t('sidepanel.preset.form.namePlaceholder')}
+        onChange={setName}
+      />
+
+      <TextAreaField
+        label={t('sidepanel.preset.form.contentLabel')}
+        value={content}
+        placeholder={t('sidepanel.preset.form.contentPlaceholder')}
+        rows={6}
+        onChange={setContent}
+      />
+
+      <div className="ds-preset-form-actions">
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onCancel}
-          className="ds-btn-cancel px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all duration-150"
+          className="ds-preset-form-action"
         >
           {t('common.cancel')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="submit"
-          className="ds-btn-primary px-4 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150"
+          size="sm"
+          disabled={!name.trim() || !content.trim()}
+          className="ds-preset-form-action"
         >
           {initial ? t('common.update') : t('common.save')}
-        </button>
+        </Button>
       </div>
     </form>
   );

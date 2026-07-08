@@ -1,0 +1,42 @@
+{
+  "url": "http://127.0.0.1:61389/sidepanel.html",
+  "screenshots": [
+    "tools-ready-menu-420.png",
+    "tools-ready-420.png",
+    "tools-toggle-read-420.png",
+    "tools-diagnostics-open-420.png",
+    "tools-invalid-url-420.png",
+    "tools-all-sites-420.png",
+    "tools-local-failure-menu-420.png",
+    "tools-local-failure-420.png",
+    "tools-local-recovered-420.png",
+    "tools-empty-menu-420.png",
+    "tools-empty-420.png",
+    "tools-ready-menu-360.png",
+    "tools-ready-360.png",
+    "tools-toggle-read-360.png",
+    "tools-diagnostics-open-360.png",
+    "tools-invalid-url-360.png",
+    "tools-all-sites-360.png",
+    "tools-local-failure-menu-360.png",
+    "tools-local-failure-360.png",
+    "tools-local-recovered-360.png",
+    "tools-empty-menu-360.png",
+    "tools-empty-360.png"
+  ],
+  "checkedAt": "2026-07-02T07:40:57.965Z",
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage/permissions stub",
+    "real command menu opened Page tools",
+    "Tools status Card/Header/Title/Description/Action/Content slots verified",
+    "Tools status Badge variants verified for ready, source-failure, and no-tools states",
+    "Set up, Grant, Allow all sites, and Diagnose actions verified as small outline shadcn Button slots",
+    "Read page switch toggled and persisted through SET_WEB_TOOL_SETTING",
+    "Diagnostics disclosure opened and search diagnostic ran",
+    "invalid URL and all-sites permission paths were exercised",
+    "Local Python source failure rendered sanitized copy and recovered",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

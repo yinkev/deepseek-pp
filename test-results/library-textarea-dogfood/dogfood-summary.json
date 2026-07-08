@@ -1,0 +1,24 @@
+{
+  "url": "http://127.0.0.1:50954/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/library-textarea-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu navigation opened Library",
+    "Memory form opened from the visible New memory action",
+    "Memory textarea rendered through shadcn Textarea and Field slots",
+    "Memory form typed and submitted through the visible Save action",
+    "SAVE_MEMORY payload content and tags matched typed values",
+    "Saved tab opened through the visible shadcn tab trigger",
+    "Saved item form opened from the visible New saved item action",
+    "Saved item textarea rendered through shadcn Textarea and Field slots",
+    "Saved item form typed and submitted through the visible Save action",
+    "SAVE_SAVED_ITEM payload content and tags matched typed values",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

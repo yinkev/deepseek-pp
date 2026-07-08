@@ -1,0 +1,10 @@
+# Commands Status Card Dogfood
+
+Evidence source: production bundle `dist/chrome-mv3/sidepanel.html` served locally with a contract-shaped Chrome runtime/storage stub.
+
+1. Ready Commands through Menu - healthy. The command menu opened Commands, the status card showed Ready, overview search/filter/action controls used shadcn slots, row Badge/Button slots were verified, row Turn off/Turn on and Edit/Cancel worked, GitHub/local/New overview actions opened real panels/forms, import entry Field/Input/Button slots were verified, GitHub/local previews rendered shadcn Alert warning and Badge chips, Space and row label toggled preview selection, selected-path import payloads were recorded, success Alert messages showed renamed notices and disabled duplicate import, command form Textarea/Button slots were verified, search typing filtered rows, the imported source group expanded, source Check/Sync/Remove-Cancel worked, the Off filter isolated the disabled command, and Escape closed the menu.
+2. Empty and create - healthy. The status card showed No commands, its footer New action opened the real shadcn-backed command form, typed values saved through Save, and the created command appeared as an enabled row.
+3. Command library failure - healthy. A raw failing source rendered sanitized unavailable copy, a single Retry action, and recovered by keyboard Enter.
+4. Command source failure - healthy. Existing command rows stayed visible while sources needed refresh, Retry recovered source controls, and no false empty state appeared.
+
+Checked: 420px and 360px, command menu, Commands status card slots, overview control slots, command row slots/actions, group toggle/action slots, command form slots, import entry slots, GitHub/local preview warning/status/result slots, preview badges, keyboard and row-click preview selection, import payloads, duplicate-import disabled states, source action slots/actions, GitHub/local/New overview actions, search typing, imported source group toggle, Off filter, card New action, form typing/save, load failure, source failure, keyboard retry, DOM overflow, console/page errors, and visible leak patterns.

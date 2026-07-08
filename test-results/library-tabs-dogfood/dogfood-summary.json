@@ -1,0 +1,20 @@
+{
+  "url": "http://127.0.0.1:49815/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/library-tabs-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu navigation opened Library",
+    "Memory and Saved route tabs rendered through shadcn Tabs slots",
+    "Memory tab showed real memory rows",
+    "Saved tab click showed real saved item rows",
+    "ArrowLeft keyboard navigation returned from Saved to Memory",
+    "tab list labels and active states verified",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

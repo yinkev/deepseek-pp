@@ -1,0 +1,27 @@
+{
+  "url": "http://127.0.0.1:54282/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/projects-shadcn-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu navigation opened Projects",
+    "no-project state rendered through shadcn Empty",
+    "create and edit project forms used shadcn Field/Input/Textarea slots with labels",
+    "create, edit, assignment, link, retry, and destructive actions rendered through shadcn Button slots",
+    "memory row icon actions preserved shadcn Button variant/size through TooltipTrigger asChild",
+    "readiness state used shadcn Badge",
+    "project creation payload matched typed name, description, and instructions",
+    "project edit payload was recorded and visible state recovered",
+    "next-chat assignment payload matched selected project",
+    "current conversation link payload was recorded and visible state recovered",
+    "delete confirmation opened as shadcn AlertDialog and was cancelled",
+    "memory-source failure showed shadcn Alert instead of a false empty state",
+    "Retry recovered project memory rows",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

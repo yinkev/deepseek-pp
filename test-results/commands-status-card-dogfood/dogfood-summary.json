@@ -1,0 +1,30 @@
+{
+  "url": "http://127.0.0.1:58639/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/commands-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu navigation opened Commands and Escape closed the menu",
+    "Commands status Card/Header/Title/Description/Action/Content/Footer slots verified",
+    "Commands overview search Field/Input, filter ToggleGroup, and action Button slots verified",
+    "Commands form Textarea/Button slots and import entry Field/Input/Button slots verified",
+    "Commands row Badge/Button slots, group Button/lucide controls, and source action Button slots verified",
+    "overview GitHub import, local import, New form, and search typing exercised",
+    "GitHub/local import previews exercised warning Alert slots, preview Badge slots, keyboard and row checkbox toggles, selected-path import payloads, success Alert slots, renamed notices, and duplicate-import disabled states",
+    "command row Turn off/Turn on and Edit/Cancel controls exercised",
+    "imported source Check, Sync, and Remove/Cancel confirmation exercised",
+    "Commands status Badge variants verified for ready, empty, and failure states",
+    "ready flow expanded an imported source group and used the Off filter",
+    "status-card New action opened the real command form",
+    "form typed and submitted through visible Save action",
+    "SAVE_SKILL payload matched typed values",
+    "library-load failure showed one status-card Retry with sanitized visible text",
+    "source-load failure preserved visible commands and recovered through keyboard Enter on Retry",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

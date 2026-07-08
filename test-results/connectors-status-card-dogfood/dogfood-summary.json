@@ -1,0 +1,26 @@
+{
+  "url": "http://127.0.0.1:62736/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/connectors-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened Connectors through shadcn CommandDialog",
+    "Connectors status Card/Header/Title/Description/Action/Content slots verified",
+    "Connectors status Badge variants verified for ready, list-failure, and partial action-failure states",
+    "Local computer, Add connector, Edit, Delete, Test, Refresh actions, Save, and Cancel actions verified as shadcn Button slots",
+    "detail and form execution dropdowns were option-checked, changed, verified, and reset",
+    "connector details and recent activity disclosure were opened",
+    "add connector form was opened, connection type changed, and advanced controls opened",
+    "delete confirmation dialog opened and cancel flow was exercised",
+    "connector list load failure rendered retry and recovered",
+    "connector action-cache failure kept rows visible, rendered sanitized copy, and recovered",
+    "permission denial rendered a truthful permission state",
+    "test action failure rendered sanitized failure copy without raw runtime names",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

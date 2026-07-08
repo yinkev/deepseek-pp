@@ -1,0 +1,23 @@
+{
+  "url": "http://127.0.0.1:57291/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/review-lane-table-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened and filtered to Review",
+    "Review route rendered an active mission with quality gate and reviewer lanes",
+    "reviewer lane details rendered through shadcn Table slots",
+    "lane state rendered through shadcn Badge variants",
+    "table headers, caption, rows, and cells were verified at 420px and 360px",
+    "focused table screenshots were captured after scrolling the Review lane table into view",
+    "blocked/running/passed reviewer states were visible without raw reviewer summaries",
+    "legacy review lane div layout was absent",
+    "menu Escape interaction was dogfooded after Review opened",
+    "no page or table horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

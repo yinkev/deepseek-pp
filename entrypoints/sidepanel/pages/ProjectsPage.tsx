@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import type {
   CurrentDeepSeekConversation,
   Memory,
@@ -8,10 +11,11 @@ import type {
   ProjectConversation,
 } from '../../../core/types';
 import { PROJECT_CONTEXT_SCHEMA_VERSION } from '../../../core/project';
-import MemoryCard from '../components/MemoryCard';
 import MemoryForm from '../components/MemoryForm';
 import PageIntro from '../components/PageIntro';
-import { SkeletonList, StatusBadge, useBanner, useConfirm } from '../components/settings/primitives';
+import WorkbenchTooltip from '../components/WorkbenchTooltip';
+import { EmptyState, SkeletonList, TextAreaField, TextField, useBanner, useConfirm } from '../components/settings/primitives';
+import { MEMORY_TYPE_MAP, SVG_PATHS } from '../constants';
 import { useI18n } from '../i18n';
 import { getRuntimeErrorMessage, unwrapRuntimeResponse } from '../runtime-response';
 
@@ -22,34 +26,56 @@ const EMPTY_PROJECT_STATE: ProjectContextState = {
   pendingProjectId: null,
 };
 
-export default function ProjectsPage() {
+interface ProjectsPageProps {
+  initialProjectId?: string | null;
+  initialProjectNavigationKey?: number;
+}
+
+export default function ProjectsPage({
+  initialProjectId = null,
+  initialProjectNavigationKey = 0,
+}: ProjectsPageProps = {}) {
   const { t } = useI18n();
   const [state, setState] = useState<ProjectContextState>(EMPTY_PROJECT_STATE);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [projectDescription, setProjectDescription] = useState('');
   const [instructions, setInstructions] = useState('');
   const [editing, setEditing] = useState<ProjectContext | null>(null);
   const [editName, setEditName] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editInstructions, setEditInstructions] = useState('');
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
   const [showMemoryForm, setShowMemoryForm] = useState(false);
+  const [showFullInstructions, setShowFullInstructions] = useState(false);
+  const [instructionsOverflow, setInstructionsOverflow] = useState(false);
   const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
   const [currentConversation, setCurrentConversation] = useState<CurrentDeepSeekConversation | null>(null);
+  const [appliedProjectNavigationKey, setAppliedProjectNavigationKey] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [memoryLoadError, setMemoryLoadError] = useState<string | null>(null);
+  const instructionsBodyRef = useRef<HTMLDivElement | null>(null);
   const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
 
   useEffect(() => {
-    void loadAll().catch(showProjectError);
+    void loadAll();
     void refreshCurrentConversation();
     const handler = (msg: { type?: string; state?: ProjectContextState; memories?: Memory[] }) => {
       if (msg.type === 'PROJECT_CONTEXT_UPDATED' && isProjectContextState(msg.state)) {
         applyState(msg.state);
+        setLoadError(null);
+        setLoading(false);
+        banner.clear();
         return;
       }
       if (msg.type === 'STATE_UPDATED' && Array.isArray(msg.memories)) {
         setMemories(msg.memories);
+        setMemoryLoadError(null);
+        banner.clear();
       }
     };
     chrome.runtime.onMessage.addListener(handler);
@@ -60,9 +86,21 @@ export default function ProjectsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!initialProjectId) return;
+    if (appliedProjectNavigationKey === initialProjectNavigationKey) return;
+    if (!state.projects.some((project) => project.id === initialProjectId)) return;
+    setSelectedProjectId(initialProjectId);
+    setAppliedProjectNavigationKey(initialProjectNavigationKey);
+  }, [appliedProjectNavigationKey, initialProjectId, initialProjectNavigationKey, state.projects]);
+
   const selectedProject = useMemo(
     () => state.projects.find((project) => project.id === selectedProjectId) ?? state.projects[0] ?? null,
     [selectedProjectId, state.projects],
+  );
+  const pendingProject = useMemo(
+    () => state.projects.find((project) => project.id === state.pendingProjectId) ?? null,
+    [state.pendingProjectId, state.projects],
   );
   const projectConversations = useMemo(
     () => selectedProject
@@ -79,39 +117,135 @@ export default function ProjectsPage() {
     [memories, selectedProject],
   );
   const currentConversationProject = currentConversation
-    ? state.conversations.find((item) => item.conversationId === currentConversation.conversationId)
+    ? state.conversations.find((item) => item.conversationId === currentConversation.conversationId) ?? null
+    : null;
+  const currentConversationBelongsToSelected = Boolean(
+    selectedProject && currentConversationProject?.projectId === selectedProject.id,
+  );
+  const selectedProjectIsPending = Boolean(selectedProject && state.pendingProjectId === selectedProject.id);
+  const nextConversationStatus = selectedProjectIsPending
+    ? t('sidepanel.projectsPage.nextConversationAssigned')
+    : pendingProject
+      ? t('sidepanel.projectsPage.nextConversationAssignedElsewhere', { name: pendingProject.name })
+      : t('sidepanel.projectsPage.nextConversationNotAssigned');
+  const currentConversationStatus = currentConversation
+    ? currentConversationBelongsToSelected
+      ? t('sidepanel.projectsPage.currentConversationLinked')
+      : currentConversationProject
+        ? t('sidepanel.projectsPage.currentConversationLinkedElsewhere')
+        : t('sidepanel.projectsPage.currentConversationReady')
+    : t('sidepanel.projectsPage.noCurrentConversation');
+  const instructionsNeedDisclosure = Boolean(
+    selectedProject?.instructions.trim() && (
+      instructionsOverflow
+      || selectedProject.instructions.length > 160
+      || selectedProject.instructions.split('\n').length > 3
+    ),
+  );
+  const projectStatus = selectedProject
+    ? createProjectStatus({
+      project: selectedProject,
+      hasInstructions: Boolean(selectedProject.instructions.trim()),
+      currentConversation,
+      currentConversationProject,
+      currentConversationBelongsToSelected,
+      selectedProjectIsPending,
+      pendingProject,
+      memoryCount: projectMemories.length,
+      t,
+    })
     : null;
 
   useEffect(() => {
     if (!selectedProject) {
       setEditing(null);
+      setInstructionsOverflow(false);
       return;
     }
-    setSelectedProjectId(selectedProject.id);
-    setEditing(selectedProject);
-    setEditName(selectedProject.name);
-    setEditDescription(selectedProject.description);
-    setEditInstructions(selectedProject.instructions);
-  }, [selectedProject]);
+    syncProjectDraft(selectedProject);
+    setShowProjectSettings(false);
+    setShowMemoryForm(false);
+    setShowFullInstructions(false);
+    setInstructionsOverflow(false);
+    setEditingMemory(null);
+  }, [selectedProject?.id]);
 
-  async function loadAll() {
-    const [projectState, memoryList] = await Promise.all([
+  useEffect(() => {
+    if (!selectedProject || showProjectSettings) return;
+    syncProjectDraft(selectedProject);
+  }, [selectedProject, showProjectSettings]);
+
+  useLayoutEffect(() => {
+    const element = instructionsBodyRef.current;
+    if (!element || showFullInstructions) return undefined;
+
+    const measure = () => {
+      const hasVerticalOverflow = element.scrollHeight > element.clientHeight + 1;
+      const hasHorizontalOverflow = element.scrollWidth > element.clientWidth + 1;
+      setInstructionsOverflow(hasVerticalOverflow || hasHorizontalOverflow);
+    };
+
+    measure();
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(measure)
+      : null;
+    resizeObserver?.observe(element);
+    window.addEventListener('resize', measure);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [selectedProject?.id, selectedProject?.instructions, showFullInstructions]);
+
+  function syncProjectDraft(project: ProjectContext) {
+    setEditing(project);
+    setEditName(project.name);
+    setEditDescription(project.description);
+    setEditInstructions(project.instructions);
+  }
+
+  async function loadAll(preferredProjectId?: string | null) {
+    if (loading || loadError) setLoading(true);
+    const [projectStateResult, memoryListResult] = await Promise.allSettled([
       chrome.runtime.sendMessage({ type: 'GET_PROJECT_CONTEXT_STATE' }),
       chrome.runtime.sendMessage({ type: 'GET_MEMORIES' }),
     ]);
-    const next = unwrapProjectResponse<ProjectContextState>(
-      projectState,
-      t('sidepanel.projectsPage.backendUnavailable'),
-    );
-    if (!isProjectContextState(next)) throw new Error(t('sidepanel.projectsPage.backendUnavailable'));
-    applyState(next);
-    setMemories(Array.isArray(memoryList) ? memoryList : []);
-    setLoading(false);
+    try {
+      if (projectStateResult.status === 'rejected') throw projectStateResult.reason;
+      const next = unwrapProjectResponse<ProjectContextState>(
+        projectStateResult.value,
+        t('sidepanel.projectsPage.backendUnavailable'),
+      );
+      if (!isProjectContextState(next)) throw new Error(t('sidepanel.projectsPage.backendUnavailable'));
+      applyState(next, preferredProjectId);
+      setLoadError(null);
+      banner.clear();
+
+      if (memoryListResult.status === 'fulfilled' && Array.isArray(memoryListResult.value)) {
+        setMemories(memoryListResult.value);
+        setMemoryLoadError(null);
+      } else {
+        const error = memoryListResult.status === 'rejected'
+          ? memoryListResult.reason
+          : new Error(t('sidepanel.projectsPage.backendUnavailable'));
+        const message = t('sidepanel.projectsPage.memoriesLoadFailed', { error: getRuntimeErrorMessage(error) });
+        setMemories([]);
+        setMemoryLoadError(message);
+        banner.show('error', message);
+      }
+    } catch (error) {
+      const message = t('sidepanel.projectsPage.loadFailed', { error: getRuntimeErrorMessage(error) });
+      setLoadError(message);
+      banner.show('error', message);
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function applyState(next: ProjectContextState) {
+  function applyState(next: ProjectContextState, preferredProjectId?: string | null) {
     setState(next);
     setSelectedProjectId((current) => {
+      if (preferredProjectId && next.projects.some((project) => project.id === preferredProjectId)) return preferredProjectId;
       if (current && next.projects.some((project) => project.id === current)) return current;
       return next.projects[0]?.id ?? null;
     });
@@ -136,17 +270,23 @@ export default function ProjectsPage() {
       banner.clear();
       const response = await chrome.runtime.sendMessage({
         type: 'CREATE_PROJECT_CONTEXT',
-        payload: { name, instructions },
+        payload: {
+          name,
+          instructions,
+          ...(projectDescription.trim() ? { description: projectDescription } : {}),
+        },
       });
       const project = unwrapProjectResponse<ProjectContext>(
         response,
         t('sidepanel.projectsPage.backendUnavailable'),
       );
       setName('');
+      setProjectDescription('');
       setInstructions('');
+      setShowCreateForm(false);
       setSelectedProjectId(project.id);
       banner.show('success', t('sidepanel.projectsPage.projectCreated', { name: project.name }));
-      await loadAll();
+      await loadAll(project.id);
     } catch (error) {
       showProjectError(error);
     }
@@ -177,7 +317,7 @@ export default function ProjectsPage() {
   async function deleteProject(project: ProjectContext) {
     const ok = await confirm({
       title: t('sidepanel.projectsPage.deleteConfirm', { name: project.name }),
-      message: t('sidepanel.projectsPage.deleteConfirm', { name: project.name }),
+      message: t('sidepanel.projectsPage.deleteConfirmMessage'),
       confirmLabel: t('common.delete'),
       cancelLabel: t('common.cancel'),
     });
@@ -230,6 +370,21 @@ export default function ProjectsPage() {
       await loadAll();
     } catch (error) {
       showProjectError(error);
+    }
+  }
+
+  function applyProjectStatusAction() {
+    if (!projectStatus || !selectedProject) return;
+    if (projectStatus.action === 'editInstructions') {
+      setShowProjectSettings(true);
+      return;
+    }
+    if (projectStatus.action === 'linkCurrent') {
+      void addCurrentConversation();
+      return;
+    }
+    if (projectStatus.action === 'setNext') {
+      void setPending(selectedProject.id);
     }
   }
 
@@ -298,228 +453,443 @@ export default function ProjectsPage() {
   }
 
   return (
-    <div className="ds-page">
+    <div className="ds-page ds-project-page">
       <PageIntro
         title={t('sidepanel.projectsPage.title')}
         description={t('sidepanel.projectsPage.description')}
-        meta={t('sidepanel.projectsPage.summary', {
-          projects: state.projects.length,
-          conversations: state.conversations.length,
-        })}
+        actions={(
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowCreateForm((visible) => !visible)}
+            className="ds-btn-secondary ds-project-small-button"
+            aria-expanded={showCreateForm}
+            aria-controls="ds-project-create-panel"
+          >
+            {showCreateForm ? t('common.cancel') : t('sidepanel.projectsPage.createTitle')}
+          </Button>
+        )}
       />
 
-      <section className="ds-surface-panel rounded-xl p-4 space-y-3">
-        <div className="text-xs font-semibold" style={{ color: 'var(--ds-text)' }}>
-          {t('sidepanel.projectsPage.createTitle')}
-        </div>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder={t('sidepanel.projectsPage.namePlaceholder')}
-          className="w-full px-3 py-2 text-xs rounded-lg border outline-none"
-          style={inputStyle}
-        />
-        <textarea
-          value={instructions}
-          onChange={(event) => setInstructions(event.target.value)}
-          placeholder={t('sidepanel.projectsPage.instructionsPlaceholder')}
-          className="w-full px-3 py-2 text-xs rounded-lg border outline-none min-h-[72px]"
-          style={inputStyle}
-        />
-        <button
-          type="button"
-          onClick={createProject}
-          disabled={!name.trim()}
-          className="ds-btn-primary px-3 py-2 text-xs rounded-lg disabled:opacity-40"
+      {showCreateForm && (
+        <section
+          id="ds-project-create-panel"
+          className="ds-project-form-panel"
+          aria-label={t('sidepanel.projectsPage.createTitle')}
         >
-          {t('sidepanel.projectsPage.createProject')}
-        </button>
-      </section>
+          <div className="ds-project-section-head">
+            <h3>{t('sidepanel.projectsPage.createTitle')}</h3>
+          </div>
+          <div className="ds-project-form-stack">
+            <TextField
+              label={t('sidepanel.projectsPage.nameLabel')}
+              value={name}
+              onChange={setName}
+              placeholder={t('sidepanel.projectsPage.namePlaceholder')}
+            />
+            <TextField
+              label={t('sidepanel.projectsPage.descriptionLabel')}
+              value={projectDescription}
+              onChange={setProjectDescription}
+              placeholder={t('sidepanel.projectsPage.descriptionPlaceholder')}
+            />
+            <TextAreaField
+              label={t('sidepanel.projectsPage.instructionsTitle')}
+              value={instructions}
+              onChange={setInstructions}
+              placeholder={t('sidepanel.projectsPage.instructionsPlaceholder')}
+              rows={4}
+            />
+            <div className="ds-project-form-actions">
+              <Button
+                type="button"
+                size="sm"
+                onClick={createProject}
+                disabled={!name.trim()}
+                className="ds-btn-primary ds-project-submit"
+              >
+                {t('sidepanel.projectsPage.createProject')}
+              </Button>
+            </div>
+          </div>
+        </section>
+      )}
 
       {banner.node}
       {confirmNode}
 
       {loading ? (
         <SkeletonList rows={3} />
+      ) : loadError ? (
+        <EmptyState
+          title={t('sidepanel.projectsPage.loadFailedTitle')}
+          description={loadError}
+          icon={<FolderIcon />}
+          actions={(
+            <Button type="button" variant="outline" size="sm" className="ds-btn-secondary ds-project-small-button" onClick={() => void loadAll()}>
+              {t('common.retry')}
+            </Button>
+          )}
+        />
       ) : state.projects.length === 0 ? (
-        <div className="ds-empty-state">
-          <div className="ds-empty-state-icon">
-            <FolderIcon />
-          </div>
-          <div className="ds-empty-state-title">{t('sidepanel.projectsPage.empty')}</div>
-          <div className="ds-empty-state-description">{t('sidepanel.projectsPage.emptyHelp')}</div>
-        </div>
+        <EmptyState
+          title={t('sidepanel.projectsPage.empty')}
+          description={t('sidepanel.projectsPage.emptyHelp')}
+          icon={<FolderIcon />}
+        />
       ) : (
-        <div className="grid grid-cols-1 gap-4">
-          <section className="space-y-2">
-            {state.projects.map((project) => {
-              const count = state.conversations.filter((conversation) => conversation.projectId === project.id).length;
-              const selected = project.id === selectedProject?.id;
-              const pending = project.id === state.pendingProjectId;
-              return (
-                <button
-                  key={project.id}
-                  type="button"
-                  onClick={() => setSelectedProjectId(project.id)}
-                  className="w-full ds-surface-panel p-3 rounded-xl flex items-center gap-3 text-left transition-all duration-150"
-                  style={{
-                    borderColor: selected ? 'var(--ds-selected-border)' : 'var(--ds-border)',
-                    background: selected ? 'var(--ds-blue-light)' : 'var(--ds-surface-panel)',
-                  }}
-                >
-                  <span className="shrink-0" style={{ color: selected ? 'var(--ds-blue)' : 'var(--ds-text-tertiary)' }}>
-                    <FolderIcon />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>{project.name}</span>
-                    <span className="block text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-                      {t('sidepanel.projectsPage.conversationCount', { count })}
+        <div className="ds-project-layout">
+          <section className="ds-project-picker" aria-label={t('sidepanel.projectsPage.listTitle')}>
+            <div className="ds-project-picker-head">
+              <span>{t('sidepanel.projectsPage.listTitle')}</span>
+            </div>
+            <div className="ds-project-list">
+              {state.projects.map((project) => {
+                const count = state.conversations.filter((conversation) => conversation.projectId === project.id).length;
+                const selected = project.id === selectedProject?.id;
+                return (
+                  <Button
+                    key={project.id}
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedProjectId(project.id)}
+                    className={`ds-project-row${selected ? ' ds-project-row-active' : ''}`}
+                    aria-current={selected ? 'true' : undefined}
+                  >
+                    <span className="ds-project-row-icon">
+                      <FolderIcon />
                     </span>
-                  </span>
-                  {pending && (
-                    <StatusBadge
-                      configured
-                      configuredLabel={t('sidepanel.projectsPage.pendingBadge')}
-                      notConfiguredLabel={t('sidepanel.projectsPage.pendingBadge')}
-                    />
-                  )}
-                </button>
-              );
-            })}
+                    <span className="ds-project-row-copy">
+                      <span>{project.name}</span>
+                      {count > 0 && (
+                        <small>
+                          {t('sidepanel.projectsPage.conversationCount', { count })}
+                        </small>
+                      )}
+                    </span>
+                  </Button>
+                );
+              })}
+            </div>
           </section>
 
           {selectedProject && editing && (
-            <section className="ds-surface-panel rounded-xl p-4 space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold truncate" style={{ color: 'var(--ds-text)' }}>{selectedProject.name}</div>
-                  <div className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-                    {t('sidepanel.projectsPage.detailMeta', {
-                      conversations: projectConversations.length,
-                      memories: projectMemories.length,
-                    })}
+            <section className="ds-project-detail" aria-label={selectedProject.name}>
+              {projectStatus && (
+                <section className={`ds-project-readiness ds-project-readiness-${projectStatus.tone}`}>
+                  <div className="ds-project-readiness-head">
+                    <h3>{t('sidepanel.projectsPage.projectStatusTitle')}</h3>
+                    <Badge variant={projectStatus.tone === 'ready' ? 'secondary' : 'outline'} className={`ds-project-readiness-badge ds-project-readiness-badge-${projectStatus.tone}`}>
+                      {projectStatus.status}
+                    </Badge>
+                  </div>
+                  <p>{projectStatus.description}</p>
+                  <div className="ds-project-status-list">
+                    <ProjectStatusRow
+                      label={t('sidepanel.projectsPage.projectStatusProject')}
+                      value={projectStatus.project}
+                    />
+                    <ProjectStatusRow
+                      label={t('sidepanel.projectsPage.projectStatusOpenChat')}
+                      value={projectStatus.openChat}
+                      tone={projectStatus.openChatTone}
+                    />
+                    <ProjectStatusRow
+                      label={t('sidepanel.projectsPage.projectStatusNextChat')}
+                      value={projectStatus.nextChat}
+                      tone={projectStatus.nextChatTone}
+                    />
+                    <ProjectStatusRow
+                      label={t('sidepanel.projectsPage.projectStatusMemory')}
+                      value={projectStatus.memory}
+                      tone={projectStatus.memoryTone}
+                    />
+                  </div>
+                  {projectStatus.action && (
+                    <div className="ds-project-readiness-actions">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="ds-btn-secondary ds-project-small-button"
+                        onClick={applyProjectStatusAction}
+                      >
+                        {projectStatus.actionLabel}
+                      </Button>
+                    </div>
+                  )}
+                </section>
+              )}
+              <header className="ds-project-detail-header">
+                <div className="ds-project-title-block">
+                  <h3>{selectedProject.name}</h3>
+                  <p className="ds-project-status-line">
+                    <span>
+                      {selectedProject.instructions.trim()
+                        ? t('sidepanel.projectsPage.instructionsConfigured')
+                        : t('sidepanel.projectsPage.noInstructions')}
+                    </span>
+                  </p>
+                  {selectedProject.description && <p className="ds-project-description">{selectedProject.description}</p>}
+                </div>
+                <div className="ds-project-actions">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowProjectSettings((visible) => !visible)}
+                    className="ds-btn-secondary ds-project-small-button"
+                    aria-expanded={showProjectSettings}
+                    aria-controls="ds-project-settings-panel"
+                  >
+                    {showProjectSettings ? t('common.close') : t('sidepanel.projectsPage.settingsAction')}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => deleteProject(selectedProject)}
+                    className="ds-btn-danger ds-project-small-button"
+                  >
+                    {t('sidepanel.projectsPage.deleteProject')}
+                  </Button>
+                </div>
+              </header>
+
+              {showProjectSettings && (
+                <div
+                  id="ds-project-settings-panel"
+                  className="ds-project-edit-form"
+                  aria-label={t('sidepanel.projectsPage.settingsAction')}
+                >
+                  <TextField
+                    label={t('sidepanel.projectsPage.nameLabel')}
+                    value={editName}
+                    onChange={setEditName}
+                    placeholder={t('sidepanel.projectsPage.namePlaceholder')}
+                  />
+                  <TextField
+                    label={t('sidepanel.projectsPage.descriptionLabel')}
+                    value={editDescription}
+                    onChange={setEditDescription}
+                    placeholder={t('sidepanel.projectsPage.descriptionPlaceholder')}
+                  />
+                  <TextAreaField
+                    label={t('sidepanel.projectsPage.instructionsTitle')}
+                    value={editInstructions}
+                    onChange={setEditInstructions}
+                    placeholder={t('sidepanel.projectsPage.instructionsPlaceholder')}
+                    rows={6}
+                  />
+                  <div className="ds-project-edit-actions">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={saveProject}
+                      disabled={!editName.trim()}
+                      className="ds-btn-primary ds-project-submit"
+                    >
+                      {t('common.saveChanges')}
+                    </Button>
                   </div>
                 </div>
-                <button type="button" onClick={() => deleteProject(selectedProject)} className="ds-btn-danger px-2 py-1 text-[11px] rounded-md">
-                  {t('sidepanel.projectsPage.deleteProject')}
-                </button>
-              </div>
+              )}
 
-              <div className="space-y-2">
-                <input
-                  value={editName}
-                  onChange={(event) => setEditName(event.target.value)}
-                  placeholder={t('sidepanel.projectsPage.namePlaceholder')}
-                  className="w-full px-3 py-2 text-xs rounded-lg border outline-none"
-                  style={inputStyle}
-                />
-                <input
-                  value={editDescription}
-                  onChange={(event) => setEditDescription(event.target.value)}
-                  placeholder={t('sidepanel.projectsPage.descriptionPlaceholder')}
-                  className="w-full px-3 py-2 text-xs rounded-lg border outline-none"
-                  style={inputStyle}
-                />
-                <textarea
-                  value={editInstructions}
-                  onChange={(event) => setEditInstructions(event.target.value)}
-                  placeholder={t('sidepanel.projectsPage.instructionsPlaceholder')}
-                  className="w-full px-3 py-2 text-xs rounded-lg border outline-none min-h-[96px]"
-                  style={inputStyle}
-                />
-                <button type="button" onClick={saveProject} disabled={!editName.trim()} className="ds-btn-primary px-3 py-2 text-xs rounded-lg disabled:opacity-40">
-                  {t('common.saveChanges')}
-                </button>
-              </div>
-
-              <section className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.projectsPage.currentConversation')}</div>
-                  <button type="button" onClick={refreshCurrentConversation} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md">
-                    {t('common.refresh')}
-                  </button>
-                </div>
-                <div className="rounded-lg border px-3 py-2 space-y-2" style={{ borderColor: 'var(--ds-border)', background: 'var(--ds-bg)' }}>
-                  <div className="text-[11px] truncate" style={{ color: 'var(--ds-text-secondary)' }}>
-                    {currentConversation
-                      ? currentConversation.title
-                      : t('sidepanel.projectsPage.noCurrentConversation')}
+              <section className="ds-project-assignment-panel" aria-label={t('sidepanel.projectsPage.projectAssignmentTitle')}>
+                <div className="ds-project-assignment-row">
+                  <div className="ds-project-assignment-copy">
+                    <span>{t('sidepanel.projectsPage.nextConversationTitle')}</span>
+                    <strong>
+                      {nextConversationStatus}
+                    </strong>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPending(selectedProjectIsPending ? null : selectedProject.id)}
+                    className="ds-btn-secondary ds-project-small-button"
+                  >
+                    {selectedProjectIsPending
+                      ? t('sidepanel.projectsPage.cancelNextConversation')
+                      : t('sidepanel.projectsPage.useNextConversation')}
+                  </Button>
+                </div>
+                <div className="ds-project-assignment-row">
+                  <div className="ds-project-assignment-copy">
+                    <span>{t('sidepanel.projectsPage.currentConversation')}</span>
+                    <strong>
+                      {currentConversation
+                        ? currentConversation.title
+                        : t('sidepanel.projectsPage.noCurrentConversation')}
+                    </strong>
+                    {currentConversation && <small>{currentConversationStatus}</small>}
+                  </div>
+                  <div className="ds-project-command-row">
+                    <Button
                       type="button"
-                      onClick={addCurrentConversation}
-                      disabled={!currentConversation}
-                      className="ds-btn-primary px-3 py-1.5 text-[11px] rounded-md disabled:opacity-40"
+                      variant="outline"
+                      size="xs"
+                      onClick={refreshCurrentConversation}
+                      className="ds-btn-secondary ds-project-mini-button"
                     >
-                      {currentConversationProject
-                        ? t('sidepanel.projectsPage.moveCurrentConversation')
-                        : t('sidepanel.projectsPage.addCurrentConversation')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPending(state.pendingProjectId === selectedProject.id ? null : selectedProject.id)}
-                      className="ds-btn-secondary px-3 py-1.5 text-[11px] rounded-md"
-                    >
-                      {state.pendingProjectId === selectedProject.id
-                        ? t('sidepanel.projectsPage.cancelNextConversation')
-                        : t('sidepanel.projectsPage.useNextConversation')}
-                    </button>
+                      {t('common.refresh')}
+                    </Button>
+                    {currentConversation && (
+                      currentConversationBelongsToSelected ? (
+                        <>
+                          <Badge variant="outline" className="ds-project-linked-state">
+                            {t('sidepanel.projectsPage.currentConversationLinked')}
+                          </Badge>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={addCurrentConversation}
+                            className="ds-btn-secondary ds-project-small-button"
+                          >
+                            {t('sidepanel.projectsPage.refreshCurrentConversationLink')}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={addCurrentConversation}
+                          className="ds-btn-secondary ds-project-small-button"
+                        >
+                          {currentConversationProject
+                            ? t('sidepanel.projectsPage.moveCurrentConversation')
+                            : t('sidepanel.projectsPage.addCurrentConversation')}
+                        </Button>
+                      )
+                    )}
                   </div>
                 </div>
               </section>
 
-              <section className="space-y-2">
-                <div className="text-xs font-semibold" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.projectsPage.conversationsTitle')}</div>
+              <section className="ds-project-section">
+                <div className="ds-project-section-head">
+                  <h3>{t('sidepanel.projectsPage.instructionsTitle')}</h3>
+                </div>
+                {selectedProject.instructions.trim() ? (
+                  <>
+                    <div
+                      ref={instructionsBodyRef}
+                      className={`ds-project-instructions-body${showFullInstructions ? ' ds-project-instructions-body-full' : ''}`}
+                    >
+                      {selectedProject.instructions}
+                    </div>
+                    {instructionsNeedDisclosure && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="xs"
+                        onClick={() => setShowFullInstructions((visible) => !visible)}
+                        className="ds-project-text-button"
+                        aria-expanded={showFullInstructions}
+                      >
+                        {showFullInstructions
+                          ? t('sidepanel.projectsPage.hideFullInstructions')
+                          : t('sidepanel.projectsPage.showFullInstructions')}
+                      </Button>
+                    )}
+                  </>
+                ) : (
+                  <div className="ds-project-empty-line">
+                    {t('sidepanel.projectsPage.emptyInstructions')}
+                  </div>
+                )}
+              </section>
+
+              <section className="ds-project-section">
+                <div className="ds-project-section-head">
+                  <h3>{t('sidepanel.projectsPage.conversationsTitle')}</h3>
+                </div>
                 {projectConversations.length === 0 ? (
-                  <div className="text-[11px] rounded-lg px-3 py-2" style={{ color: 'var(--ds-text-tertiary)', background: 'var(--ds-bg)' }}>
+                  <div className="ds-project-empty-line">
                     {t('sidepanel.projectsPage.emptyConversations')}
                   </div>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="ds-project-conversation-list">
                     {projectConversations.map((conversation) => (
-                      <div key={conversation.conversationId} className="flex items-center gap-2 rounded-lg border px-2.5 py-2" style={{ borderColor: 'var(--ds-border)', background: 'var(--ds-bg)' }}>
-                        <a href={conversation.url || '#'} target="_blank" rel="noreferrer" className="flex-1 min-w-0 text-[11px] truncate" style={{ color: 'var(--ds-text)' }}>
+                      <div key={conversation.conversationId} className="ds-project-conversation-row">
+                        <a href={conversation.url || '#'} target="_blank" rel="noreferrer">
                           {conversation.title}
                         </a>
-                        <span className="text-[10px] shrink-0" style={{ color: 'var(--ds-text-tertiary)' }}>
+                        <span>
                           {formatAge(conversation.lastSeenAt, t)}
                         </span>
-                        <button type="button" onClick={() => removeConversation(conversation)} className="ds-btn-secondary px-2 py-1 text-[10px] rounded-md">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => removeConversation(conversation)}
+                          className="ds-btn-secondary ds-project-mini-button"
+                        >
                           {t('common.remove')}
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
                 )}
               </section>
 
-              <section className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.projectsPage.memoriesTitle')}</div>
-                  <button
-                    type="button"
-                    onClick={() => { setEditingMemory(null); setShowMemoryForm(!showMemoryForm); }}
-                    className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md"
-                  >
-                    {t('common.add')}
-                  </button>
+              <section className="ds-project-section">
+                <div className="ds-project-section-head ds-project-section-head-row">
+                  <div>
+                    <h3>
+                      {t('sidepanel.projectsPage.memoriesTitle')}
+                    </h3>
+                  </div>
+                  {memoryLoadError ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void loadAll(selectedProject.id)}
+                      className="ds-btn-secondary ds-project-small-button"
+                    >
+                      {t('common.retry')}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setEditingMemory(null); setShowMemoryForm(!showMemoryForm); }}
+                      className="ds-btn-secondary ds-project-small-button"
+                      aria-expanded={showMemoryForm}
+                      aria-controls="ds-project-memory-form"
+                    >
+                      {t('common.add')}
+                    </Button>
+                  )}
                 </div>
                 {showMemoryForm && (
-                  <MemoryForm
-                    initial={editingMemory}
-                    onSave={saveProjectMemory}
-                    onCancel={() => { setShowMemoryForm(false); setEditingMemory(null); }}
-                  />
+                  <div id="ds-project-memory-form">
+                    <MemoryForm
+                      initial={editingMemory}
+                      onSave={saveProjectMemory}
+                      onCancel={() => { setShowMemoryForm(false); setEditingMemory(null); }}
+                    />
+                  </div>
                 )}
-                {projectMemories.length === 0 ? (
-                  <div className="text-[11px] rounded-lg px-3 py-2" style={{ color: 'var(--ds-text-tertiary)', background: 'var(--ds-bg)' }}>
+                {memoryLoadError ? (
+                  <Alert variant="destructive" className="ds-project-source-alert">
+                    <AlertDescription>{memoryLoadError}</AlertDescription>
+                  </Alert>
+                ) : projectMemories.length === 0 ? (
+                  <div className="ds-project-empty-line">
                     {t('sidepanel.projectsPage.emptyMemories')}
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="ds-project-memory-list">
                     {projectMemories.map((memory) => (
-                      <MemoryCard
+                      <ProjectMemoryRow
                         key={memory.id}
                         memory={memory}
                         onDelete={() => deleteMemory(memory.id!)}
@@ -538,11 +908,204 @@ export default function ProjectsPage() {
   );
 }
 
-const inputStyle = {
-  background: 'var(--ds-bg)',
-  borderColor: 'var(--ds-border)',
-  color: 'var(--ds-text)',
-};
+type ProjectReadinessTone = 'ready' | 'attention';
+type ProjectFactTone = 'normal' | 'muted' | 'attention';
+type ProjectStatusAction = 'editInstructions' | 'linkCurrent' | 'setNext';
+
+interface ProjectStatusModel {
+  tone: ProjectReadinessTone;
+  status: string;
+  description: string;
+  project: string;
+  openChat: string;
+  openChatTone: ProjectFactTone;
+  nextChat: string;
+  nextChatTone: ProjectFactTone;
+  memory: string;
+  memoryTone: ProjectFactTone;
+  action: ProjectStatusAction | null;
+  actionLabel: string;
+}
+
+function createProjectStatus({
+  project,
+  hasInstructions,
+  currentConversation,
+  currentConversationProject,
+  currentConversationBelongsToSelected,
+  selectedProjectIsPending,
+  pendingProject,
+  memoryCount,
+  t,
+}: {
+  project: ProjectContext;
+  hasInstructions: boolean;
+  currentConversation: CurrentDeepSeekConversation | null;
+  currentConversationProject: ProjectConversation | null;
+  currentConversationBelongsToSelected: boolean;
+  selectedProjectIsPending: boolean;
+  pendingProject: ProjectContext | null;
+  memoryCount: number;
+  t: ReturnType<typeof useI18n>['t'];
+}): ProjectStatusModel {
+  const hasOpenChat = Boolean(currentConversation);
+  const openChat = currentConversationBelongsToSelected
+    ? t('sidepanel.projectsPage.currentConversationLinked')
+    : currentConversationProject
+      ? t('sidepanel.projectsPage.currentConversationLinkedElsewhere')
+      : hasOpenChat
+        ? t('sidepanel.projectsPage.currentConversationReady')
+        : t('sidepanel.projectsPage.noCurrentConversation');
+  const nextChat = selectedProjectIsPending
+    ? t('sidepanel.projectsPage.nextConversationAssigned')
+    : pendingProject
+      ? t('sidepanel.projectsPage.nextConversationAssignedElsewhere', { name: pendingProject.name })
+      : t('sidepanel.projectsPage.nextConversationNotAssigned');
+  const base = {
+    project: project.name,
+    openChat,
+    openChatTone: currentConversationBelongsToSelected
+      ? 'normal'
+      : hasOpenChat
+        ? 'attention'
+        : 'muted',
+    nextChat,
+    nextChatTone: selectedProjectIsPending ? 'normal' : 'muted',
+    memory: t('sidepanel.projectsPage.projectStatusMemoryCount', { count: memoryCount }),
+    memoryTone: memoryCount > 0 ? 'normal' : 'muted',
+  } satisfies Pick<ProjectStatusModel,
+    | 'project'
+    | 'openChat'
+    | 'openChatTone'
+    | 'nextChat'
+    | 'nextChatTone'
+    | 'memory'
+    | 'memoryTone'
+  >;
+
+  if (!hasInstructions) {
+    return {
+      ...base,
+      tone: 'attention',
+      status: t('sidepanel.projectsPage.projectStatusNeedsInstructions'),
+      description: t('sidepanel.projectsPage.projectStatusNeedsInstructionsDescription'),
+      action: 'editInstructions',
+      actionLabel: t('sidepanel.projectsPage.projectStatusActionEditInstructions'),
+    };
+  }
+
+  if (selectedProjectIsPending || currentConversationBelongsToSelected) {
+    return {
+      ...base,
+      tone: 'ready',
+      status: t('sidepanel.projectsPage.projectStatusReady'),
+      description: t('sidepanel.projectsPage.projectStatusReadyDescription'),
+      action: null,
+      actionLabel: t('sidepanel.projectsPage.projectStatusActionSetNext'),
+    };
+  }
+
+  if (currentConversation) {
+    const moving = Boolean(currentConversationProject);
+    return {
+      ...base,
+      tone: 'attention',
+      status: t(moving
+        ? 'sidepanel.projectsPage.projectStatusMoveChat'
+        : 'sidepanel.projectsPage.projectStatusLinkChat'),
+      description: t(moving
+        ? 'sidepanel.projectsPage.projectStatusMoveChatDescription'
+        : 'sidepanel.projectsPage.projectStatusLinkChatDescription'),
+      action: 'linkCurrent',
+      actionLabel: t(moving
+        ? 'sidepanel.projectsPage.projectStatusActionMoveChat'
+        : 'sidepanel.projectsPage.projectStatusActionLinkChat'),
+    };
+  }
+
+  return {
+    ...base,
+    tone: 'attention',
+    status: t('sidepanel.projectsPage.projectStatusSetNext'),
+    description: t('sidepanel.projectsPage.projectStatusSetNextDescription'),
+    action: 'setNext',
+    actionLabel: t('sidepanel.projectsPage.projectStatusActionSetNext'),
+  };
+}
+
+function ProjectStatusRow({ label, value, tone = 'normal' }: {
+  label: string;
+  value: string;
+  tone?: ProjectFactTone;
+}) {
+  return (
+    <div className={`ds-project-status-row ds-project-status-row-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ProjectMemoryRow({
+  memory,
+  onDelete,
+  onEdit,
+  onTogglePin,
+}: {
+  memory: Memory;
+  onDelete: () => void;
+  onEdit: () => void;
+  onTogglePin: () => void;
+}) {
+  const { t } = useI18n();
+  const typeInfo = MEMORY_TYPE_MAP[memory.type] ?? MEMORY_TYPE_MAP.topic;
+  const pinTitle = memory.pinned ? t('sidepanel.memory.actions.unpin') : t('sidepanel.memory.actions.pin');
+  const tagLine = memory.tags.map((tag) => `#${tag}`).join(' ');
+
+  return (
+    <article className="ds-project-memory-row">
+      <div className="ds-project-memory-copy">
+        <div className="ds-project-memory-kicker">
+          <span>{t(typeInfo.labelKey)}</span>
+          {memory.pinned && (
+            <svg className="ds-project-memory-pinned" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+              <path d={SVG_PATHS.star} />
+            </svg>
+          )}
+        </div>
+        <h4>{memory.name}</h4>
+        <p>{memory.content}</p>
+        <div className="ds-project-memory-footer">
+          {tagLine && <span className="ds-project-memory-tags">{tagLine}</span>}
+          <span>{formatAge(memory.createdAt, t)}</span>
+        </div>
+      </div>
+      <div className="ds-project-memory-actions">
+        <WorkbenchTooltip label={pinTitle}>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onTogglePin} className="ds-project-memory-action" aria-label={pinTitle}>
+            <svg fill={memory.pinned ? 'currentColor' : 'none'} viewBox="0 0 20 20" stroke="currentColor" strokeWidth={memory.pinned ? 0 : 1.5} aria-hidden="true">
+              <path d={SVG_PATHS.star} />
+            </svg>
+          </Button>
+        </WorkbenchTooltip>
+        <WorkbenchTooltip label={t('common.edit')}>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onEdit} className="ds-project-memory-action" aria-label={t('common.edit')}>
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d={SVG_PATHS.edit} />
+            </svg>
+          </Button>
+        </WorkbenchTooltip>
+        <WorkbenchTooltip label={t('common.delete')}>
+          <Button type="button" variant="ghost" size="icon-xs" onClick={onDelete} className="ds-project-memory-action ds-project-memory-action-danger" aria-label={t('common.delete')}>
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d={SVG_PATHS.trash} />
+            </svg>
+          </Button>
+        </WorkbenchTooltip>
+      </div>
+    </article>
+  );
+}
 
 function FolderIcon() {
   return (

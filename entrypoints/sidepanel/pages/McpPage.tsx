@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   SHELL_MCP_NATIVE_HOST,
   SHELL_MCP_SERVER_NAME,
@@ -39,6 +39,18 @@ import {
   ToggleRow,
   useConfirm,
 } from '../components/settings/primitives';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { getRuntimeErrorMessage, isRuntimeFailure } from '../runtime-response';
 
 type McpTransportKind = McpServerTransportConfig['kind'];
 type CacheByServer = Record<string, McpToolCacheEntry | null>;
@@ -46,6 +58,8 @@ type BusyAction = 'refresh' | 'test' | 'permission';
 type Translator = (key: LocaleMessageKey, params?: MessageParams) => string;
 type MessageTone = 'success' | 'error' | 'info';
 type Banner = { tone: MessageTone; text: string };
+type McpLoadIssueId = 'connectors' | 'platform' | 'actions' | 'history';
+type McpLoadIssue = { id: McpLoadIssueId; source?: string; message: string };
 
 type FormState = {
   displayName: string;
@@ -69,12 +83,19 @@ type FormState = {
 };
 
 const TRANSPORT_OPTIONS: { kind: McpTransportKind; label: string; hintKey: LocaleMessageKey }[] = [
-  { kind: 'streamable_http', label: 'Streamable HTTP', hintKey: 'sidepanel.mcpPage.transportHints.streamableHttp' },
-  { kind: 'http', label: 'HTTP', hintKey: 'sidepanel.mcpPage.transportHints.http' },
-  { kind: 'sse', label: 'SSE', hintKey: 'sidepanel.mcpPage.transportHints.sse' },
-  { kind: 'stdio_bridge', label: 'Stdio Bridge', hintKey: 'sidepanel.mcpPage.transportHints.stdioBridge' },
-  { kind: 'native_messaging', label: 'Native', hintKey: 'sidepanel.mcpPage.transportHints.nativeMessaging' },
+  { kind: 'streamable_http', label: 'Modern web', hintKey: 'sidepanel.mcpPage.transportHints.streamableHttp' },
+  { kind: 'http', label: 'Web service', hintKey: 'sidepanel.mcpPage.transportHints.http' },
+  { kind: 'sse', label: 'Event stream', hintKey: 'sidepanel.mcpPage.transportHints.sse' },
+  { kind: 'stdio_bridge', label: 'Local bridge', hintKey: 'sidepanel.mcpPage.transportHints.stdioBridge' },
+  { kind: 'native_messaging', label: 'Browser host', hintKey: 'sidepanel.mcpPage.transportHints.nativeMessaging' },
 ];
+
+const MCP_LOAD_ISSUE_LABEL_KEYS: Record<McpLoadIssueId, LocaleMessageKey> = {
+  connectors: 'sidepanel.mcpPage.loadIssues.connectors',
+  platform: 'sidepanel.mcpPage.loadIssues.platform',
+  actions: 'sidepanel.mcpPage.loadIssues.actions',
+  history: 'sidepanel.mcpPage.loadIssues.history',
+};
 
 const DEFAULT_FORM: FormState = {
   displayName: '',
@@ -97,6 +118,34 @@ const DEFAULT_FORM: FormState = {
   executionMode: 'auto',
 };
 
+function readMcpLoadResult<T>(
+  result: PromiseSettledResult<unknown>,
+  id: McpLoadIssueId,
+  issues: McpLoadIssue[],
+  fallback: T,
+  fallbackMessage: string,
+): T {
+  let reason: unknown;
+  if (result.status === 'fulfilled') {
+    const value: unknown = result.value;
+    if (!isRuntimeFailure(value)) return value as T;
+    reason = value.error;
+  } else {
+    reason = result.reason;
+  }
+  issues.push({ id, message: connectorLoadIssueMessage(reason, fallbackMessage) });
+  return fallback;
+}
+
+function connectorLoadIssueMessage(error: unknown, fallbackMessage: string): string {
+  const raw = getRuntimeErrorMessage(error).trim();
+  if (!raw) return fallbackMessage;
+  if (/\bGET_[A-Z0-9_]+\b|mcp[_:/-]|\/mcp|schemaVersion|Native Messaging|Streamable HTTP|SSE/i.test(raw)) {
+    return fallbackMessage;
+  }
+  return raw;
+}
+
 export default function McpPage() {
   const { t, locale } = useI18n();
   const [servers, setServers] = useState<McpServerConfig[]>([]);
@@ -108,6 +157,7 @@ export default function McpPage() {
   const [editing, setEditing] = useState<McpServerConfig | null>(null);
   const [busy, setBusy] = useState<Record<string, BusyAction | null>>({});
   const [banner, setBanner] = useState<Banner | null>(null);
+  const [loadIssues, setLoadIssues] = useState<McpLoadIssue[]>([]);
   const [platform, setPlatform] = useState<PlatformEnvironment | null>(null);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selectionInitialized = useRef(false);
@@ -135,45 +185,106 @@ export default function McpPage() {
   );
   const mcpHistory = history.filter((record) => record.call.provider?.kind === 'mcp');
   const nativeMessagingSupported = isShellNativeHostSupported(platform);
+  const hasConnectorListIssue = loadIssues.some((issue) => issue.id === 'connectors');
+  const connectorStatus = createConnectorStatusModel({
+    loading,
+    servers,
+    enabledCount,
+    toolCount,
+    loadIssues,
+    hasConnectorListIssue,
+    t,
+  });
 
   const load = async () => {
     setLoading(true);
-    try {
-      const [list, environment]: [McpServerConfig[], PlatformEnvironment | null] = await Promise.all([
-        chrome.runtime.sendMessage({ type: 'GET_MCP_SERVERS' }),
-        chrome.runtime.sendMessage({ type: 'GET_PLATFORM_CAPABILITIES' }),
-      ]);
-      const nextServers = list ?? [];
-      setPlatform(environment ?? null);
-      setServers(nextServers);
-      const shouldSelectInitialServer = !selectionInitialized.current && nextServers.length > 0;
-      if (shouldSelectInitialServer) selectionInitialized.current = true;
-      setSelectedId((current) => {
-        if (current && nextServers.some((server) => server.id === current)) return current;
-        return shouldSelectInitialServer ? nextServers[0]?.id ?? null : null;
+    const issues: McpLoadIssue[] = [];
+    const [listResult, environmentResult] = await Promise.allSettled([
+      chrome.runtime.sendMessage({ type: 'GET_MCP_SERVERS' }),
+      chrome.runtime.sendMessage({ type: 'GET_PLATFORM_CAPABILITIES' }),
+    ]);
+    const nextServers = readMcpLoadResult<McpServerConfig[]>(
+      listResult,
+      'connectors',
+      issues,
+      servers,
+      t('sidepanel.mcpPage.messages.loadFailed'),
+    ) ?? [];
+    const environment = readMcpLoadResult<PlatformEnvironment | null>(
+      environmentResult,
+      'platform',
+      issues,
+      platform,
+      t('sidepanel.mcpPage.messages.platformLoadFailed'),
+    );
+    setPlatform(environment ?? null);
+    setServers(nextServers);
+    const shouldSelectInitialServer = !selectionInitialized.current && nextServers.length > 0;
+    if (shouldSelectInitialServer) selectionInitialized.current = true;
+    setSelectedId((current) => {
+      if (current && nextServers.some((server) => server.id === current)) return current;
+      return shouldSelectInitialServer ? nextServers[0]?.id ?? null : null;
+    });
+
+    const cacheResults = await Promise.allSettled(
+      nextServers.map(async (server) => {
+        const response: unknown = await chrome.runtime.sendMessage({
+          type: 'GET_MCP_TOOL_CACHE',
+          payload: { serverId: server.id },
+        });
+        if (isRuntimeFailure(response)) throw new Error(response.error ? String(response.error) : t('sidepanel.mcpPage.messages.actionsLoadFailed'));
+        const cache = response as McpToolCacheEntry | null;
+        return [server.id, cache] as const;
+      }),
+    );
+    const cacheEntries = cacheResults.map((result, index) => {
+      const server = nextServers[index];
+      let reason: unknown;
+      if (result.status === 'fulfilled') {
+        const value: unknown = result.value;
+        if (!isRuntimeFailure(value)) return result.value;
+        reason = value.error;
+      } else {
+        reason = result.reason;
+      }
+      issues.push({
+        id: 'actions',
+        source: connectorDisplayName(server, t),
+        message: connectorLoadIssueMessage(reason, t('sidepanel.mcpPage.messages.actionsLoadFailed')),
       });
+      return [server.id, caches[server.id] ?? null] as const;
+    });
+    setCaches(Object.fromEntries(cacheEntries));
 
-      const cacheEntries = await Promise.all(
-        nextServers.map(async (server) => {
-          const cache: McpToolCacheEntry | null = await chrome.runtime.sendMessage({
-            type: 'GET_MCP_TOOL_CACHE',
-            payload: { serverId: server.id },
-          });
-          return [server.id, cache] as const;
-        }),
-      );
-      setCaches(Object.fromEntries(cacheEntries));
-
-      const recent: ToolCallHistoryRecord[] = await chrome.runtime.sendMessage({
+    const recentResult = await Promise.allSettled([
+      chrome.runtime.sendMessage({
         type: 'GET_TOOL_CALL_HISTORY',
         payload: { limit: 12 },
-      });
-      setHistory(recent ?? []);
-    } catch (err) {
-      showBanner('error', err instanceof Error ? err.message : t('sidepanel.mcpPage.messages.loadFailed'));
-    } finally {
-      setLoading(false);
+      }),
+    ]);
+    const recent = readMcpLoadResult<ToolCallHistoryRecord[]>(
+      recentResult[0],
+      'history',
+      issues,
+      history,
+      t('sidepanel.mcpPage.messages.historyLoadFailed'),
+    );
+    setHistory(recent ?? []);
+    setLoadIssues(issues);
+    if (issues.length === 0) clearBanner();
+    setLoading(false);
+  };
+
+  const retryLoad = () => {
+    clearBanner();
+    void load();
+  };
+
+  const loadIssueLabel = (issue: McpLoadIssue): string => {
+    if (issue.id === 'actions' && issue.source) {
+      return t('sidepanel.mcpPage.loadIssueActionsFor', { source: issue.source });
     }
+    return t(MCP_LOAD_ISSUE_LABEL_KEYS[issue.id]);
   };
 
   useEffect(() => {
@@ -301,9 +412,10 @@ export default function McpPage() {
   };
 
   const removeServer = async (server: McpServerConfig) => {
+    const name = connectorDisplayName(server, t);
     const ok = await confirm({
-      title: t('sidepanel.mcpPage.messages.deleteConfirm', { name: server.displayName }),
-      message: t('sidepanel.mcpPage.messages.deleteConfirm', { name: server.displayName }),
+      title: t('sidepanel.mcpPage.messages.deleteConfirm', { name }),
+      message: t('sidepanel.mcpPage.messages.deleteConfirm', { name }),
       confirmLabel: t('common.delete'),
       cancelLabel: t('common.cancel'),
     });
@@ -344,7 +456,7 @@ export default function McpPage() {
         const permission = await requestMcpOriginPermission(server);
         if (!permission?.ok) {
           showBanner('error', permission?.error ?? t('sidepanel.mcpPage.messages.permissionRequired', {
-            origin: permission?.origin ?? 'MCP Host',
+            origin: permission?.origin ?? t('sidepanel.mcpPage.localHost'),
           }));
           return;
         }
@@ -362,7 +474,10 @@ export default function McpPage() {
             latency: formatMs(cache.health.latencyMs),
           }));
         } else {
-          showBanner('error', cache.health.error ?? t('sidepanel.mcpPage.messages.connectionFailed'));
+          showBanner('error', connectorLoadIssueMessage(
+            cache.health.error,
+            t('sidepanel.mcpPage.messages.connectionFailed'),
+          ));
         }
       }
       await load();
@@ -381,6 +496,16 @@ export default function McpPage() {
     setBusy((prev) => ({ ...prev, [serverId]: action }));
   };
 
+  const applyConnectorStatusAction = () => {
+    if (connectorStatus.action === 'retry') {
+      retryLoad();
+      return;
+    }
+    if (connectorStatus.action === 'add') {
+      startCreate();
+    }
+  };
+
   return (
     <div className="ds-page">
       <PageIntro
@@ -393,23 +518,31 @@ export default function McpPage() {
         })}
         actions={(
           <>
-            <button
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={createShellPreset}
               disabled={!nativeMessagingSupported}
               title={!nativeMessagingSupported ? t('sidepanel.mcpPage.messages.nativeMessagingUnsupported') : undefined}
               className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg transition-all duration-150 disabled:opacity-50"
             >
               {t('sidepanel.mcpPage.shell')}
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={createMultimodalPreset}
               disabled={!nativeMessagingSupported}
               title={!nativeMessagingSupported ? t('sidepanel.mcpPage.messages.nativeMessagingUnsupported') : undefined}
               className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg transition-all duration-150 disabled:opacity-50"
             >
               {t('sidepanel.mcpPage.multimodal')}
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              size="sm"
               onClick={startCreate}
               className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
             >
@@ -417,14 +550,92 @@ export default function McpPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
               {t('sidepanel.mcpPage.addServer')}
-            </button>
+            </Button>
           </>
         )}
       />
 
+      <Card size="sm" className={`ds-connector-status ds-connector-status-${connectorStatus.tone}`}>
+        <CardHeader className="ds-connector-status-head">
+          <CardTitle>{t('sidepanel.mcpPage.readinessTitle')}</CardTitle>
+          <CardDescription>{t(connectorStatus.descriptionKey)}</CardDescription>
+          <CardAction>
+            <Badge variant={getConnectorStatusBadgeVariant(connectorStatus.tone)} className={`ds-connector-status-badge ds-connector-status-badge-${connectorStatus.tone}`}>
+              {t(connectorStatus.statusKey)}
+            </Badge>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="ds-connector-status-body">
+          <div className="ds-connector-status-list">
+            <ConnectorStatusRow
+              label={t('sidepanel.mcpPage.readinessConnectorsLabel')}
+              value={connectorStatus.connectors}
+              tone={connectorStatus.connectorsTone}
+            />
+            <ConnectorStatusRow
+              label={t('sidepanel.mcpPage.readinessActionsLabel')}
+              value={connectorStatus.actions}
+              tone={connectorStatus.actionsTone}
+            />
+            <ConnectorStatusRow
+              label={t('sidepanel.mcpPage.readinessNextLabel')}
+              value={t(connectorStatus.nextKey)}
+              tone={connectorStatus.tone === 'blocked' ? 'blocked' : connectorStatus.tone === 'attention' ? 'attention' : 'normal'}
+            />
+          </div>
+        </CardContent>
+        {connectorStatus.action && (
+          <CardFooter className="ds-connector-status-actions">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={applyConnectorStatusAction}
+              disabled={loading}
+              className="ds-btn-secondary ds-connector-status-button disabled:opacity-50"
+            >
+              {t(connectorStatus.actionLabelKey)}
+            </Button>
+          </CardFooter>
+        )}
+      </Card>
+
       {banner && (
-        <StatusMessage tone={banner.tone === 'info' ? 'success' : banner.tone}>
+        <StatusMessage tone={banner.tone}>
           {banner.text}
+        </StatusMessage>
+      )}
+
+      {loadIssues.length > 0 && (
+        <StatusMessage tone="error">
+          <div className="ds-connector-load-issue">
+            <div className="ds-connector-load-issue-copy">
+              <div className="ds-connector-load-issue-title">
+                {t('sidepanel.mcpPage.loadIssuesTitle')}
+              </div>
+              <div className="ds-connector-load-issue-description">
+                {t('sidepanel.mcpPage.loadIssuesDescription')}
+              </div>
+              <div className="ds-connector-load-issue-list">
+                {loadIssues.slice(0, 4).map((issue) => (
+                  <div key={`${issue.id}:${issue.source ?? ''}`} className="ds-connector-load-issue-row">
+                    <span>{loadIssueLabel(issue)}</span>
+                    <span>{issue.message}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ds-btn-secondary ds-connector-load-retry"
+              onClick={retryLoad}
+              disabled={loading}
+            >
+              {t('common.retry')}
+            </Button>
+          </div>
         </StatusMessage>
       )}
 
@@ -444,13 +655,31 @@ export default function McpPage() {
 
       {loading && servers.length === 0 ? (
         <EmptyState label={t('sidepanel.mcpPage.loading')} />
+      ) : hasConnectorListIssue && servers.length === 0 && !showForm ? (
+        <EmptyState
+          label={t('sidepanel.mcpPage.loadIssuesTitle')}
+          hint={t('sidepanel.mcpPage.loadIssueEmptyHint')}
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={retryLoad}
+              className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg transition-all duration-150"
+            >
+              {t('common.retry')}
+            </Button>
+          }
+        />
       ) : servers.length === 0 && !showForm ? (
         <EmptyState
           label={t('sidepanel.mcpPage.empty')}
           hint={t('sidepanel.mcpPage.emptyHint')}
           actions={
             <>
-              <button
+              <Button
+                type="button"
+                size="sm"
                 onClick={startCreate}
                 className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
               >
@@ -458,14 +687,17 @@ export default function McpPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                 </svg>
                 {t('sidepanel.mcpPage.emptyCreateAction')}
-              </button>
+              </Button>
               {nativeMessagingSupported && (
-                <button
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={createShellPreset}
                   className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg transition-all duration-150"
                 >
                   {t('sidepanel.mcpPage.emptyInstallShell')}
-                </button>
+                </Button>
               )}
             </>
           }
@@ -523,7 +755,7 @@ function McpServerForm({
   onCancel: () => void;
 }) {
   const { t } = useI18n();
-  const [form, setForm] = useState<FormState>(() => initial ? formFromServer(initial) : DEFAULT_FORM);
+  const [form, setForm] = useState<FormState>(() => initial ? formFromServer(initial, t) : DEFAULT_FORM);
   const [error, setError] = useState('');
   const supportedTransportKinds = getSupportedMcpTransportKinds(
     TRANSPORT_OPTIONS.map((item) => item.kind),
@@ -586,7 +818,7 @@ function McpServerForm({
             value={form.displayName}
             onChange={(event) => update('displayName', event.target.value)}
             className="ds-input w-full rounded-lg px-3 py-2 text-sm"
-            placeholder="Filesystem MCP"
+            placeholder={t('sidepanel.mcpPage.form.namePlaceholder')}
           />
         </Field>
 
@@ -618,23 +850,23 @@ function McpServerForm({
         </div>
 
         {form.transportKind !== 'native_messaging' && (
-          <Field label={form.transportKind === 'stdio_bridge' ? 'Bridge URL' : t('sidepanel.mcpPage.form.serviceUrl')}>
+          <Field label={form.transportKind === 'stdio_bridge' ? t('sidepanel.mcpPage.form.bridgeUrl') : t('sidepanel.mcpPage.form.serviceUrl')}>
             <input
               value={form.url}
               onChange={(event) => update('url', event.target.value)}
               className="ds-input w-full rounded-lg px-3 py-2 text-sm"
-              placeholder={form.transportKind === 'stdio_bridge' ? 'http://127.0.0.1:8765/mcp' : 'https://example.com/mcp'}
+              placeholder={form.transportKind === 'stdio_bridge' ? t('sidepanel.mcpPage.form.bridgeUrlPlaceholder') : t('sidepanel.mcpPage.form.serviceUrlPlaceholder')}
             />
           </Field>
         )}
 
         {form.transportKind === 'native_messaging' && (
-          <Field label="Native Host">
+          <Field label={t('sidepanel.mcpPage.form.nativeHost')}>
             <input
               value={form.nativeHost}
               onChange={(event) => update('nativeHost', event.target.value)}
               className="ds-input w-full rounded-lg px-3 py-2 text-sm"
-              placeholder="com.example.mcp_host"
+              placeholder={t('sidepanel.mcpPage.form.nativeHostPlaceholder')}
             />
           </Field>
         )}
@@ -744,12 +976,12 @@ function McpServerForm({
       </div>
 
       <div className="flex justify-end gap-2 pt-1">
-        <button onClick={onCancel} className="ds-btn-cancel px-3 py-1.5 text-xs rounded-lg transition-colors">
+        <Button type="button" variant="outline" size="sm" onClick={onCancel} className="ds-btn-cancel px-3 py-1.5 text-xs rounded-lg transition-colors">
           {t('common.cancel')}
-        </button>
-        <button onClick={save} className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-colors">
+        </Button>
+        <Button type="button" size="sm" onClick={save} className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-colors">
           {t('sidepanel.mcpPage.form.save')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -778,12 +1010,15 @@ function HeaderEditor({
     <div className="ds-surface-panel rounded-lg p-3 space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>Headers</span>
-        <button
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
           onClick={() => onHeadersChange([...headers, { name: '', value: '' }])}
           className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md"
         >
           {t('common.add')}
-        </button>
+        </Button>
       </div>
       {headers.map((header, index) => (
         <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-1.5">
@@ -799,23 +1034,29 @@ function HeaderEditor({
             className="ds-input min-w-0 rounded-lg px-2 py-1.5 text-xs"
             placeholder={t('sidepanel.mcpPage.headers.headerValue')}
           />
-          <button
+          <Button
+            type="button"
+            variant="destructive"
+            size="xs"
             onClick={() => onHeadersChange(headers.filter((_, itemIndex) => itemIndex !== index))}
             className="ds-action-btn ds-action-btn-delete w-8 rounded-lg text-xs"
           >
             ×
-          </button>
+          </Button>
         </div>
       ))}
 
       <div className="flex items-center justify-between pt-1">
         <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>Secrets</span>
-        <button
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
           onClick={() => onSecretsChange([...secrets, { id: crypto.randomUUID(), kind: 'bearer', value: '' }])}
           className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md"
         >
           {t('common.add')}
-        </button>
+        </Button>
       </div>
       {secrets.map((secret, index) => (
         <div key={index} className="space-y-1.5">
@@ -836,12 +1077,15 @@ function HeaderEditor({
               placeholder={t('sidepanel.mcpPage.headers.secretValue')}
               type="password"
             />
-            <button
+            <Button
+              type="button"
+              variant="destructive"
+              size="xs"
               onClick={() => onSecretsChange(secrets.filter((_, itemIndex) => itemIndex !== index))}
               className="ds-action-btn ds-action-btn-delete w-8 rounded-lg text-xs"
             >
               ×
-            </button>
+            </Button>
           </div>
           {secret.kind === 'header' && (
             <input
@@ -880,50 +1124,49 @@ function ServerRow({
 }) {
   const status = statusMeta(cache?.health.status ?? server.status, t);
   const activeTools = enabledToolCount(server, cache?.descriptors ?? []);
+  const totalTools = cache?.descriptors.length ?? 0;
+  const displayName = connectorDisplayName(server, t);
 
   return (
     <div
-      className="ds-card rounded-lg p-3 cursor-pointer transition-colors"
-      style={{ borderColor: selected ? 'var(--ds-selected-border)' : undefined }}
+      className="ds-connector-row"
+      data-selected={selected ? 'true' : 'false'}
       onClick={onSelect}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="ds-connector-row-main">
+        <div className="ds-connector-row-titleline">
           <svg
-            className="w-3 h-3 shrink-0 transition-transform duration-200"
-            style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0)', color: 'var(--ds-text-tertiary)' }}
+            className="ds-connector-chevron"
+            style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0)' }}
             fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
-          <span className="text-sm font-medium truncate" style={{ color: 'var(--ds-text)' }}>{server.displayName}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style={{ color: status.color, background: status.bg }}>
+          <span className="ds-connector-row-title">{displayName}</span>
+          <span className="ds-connector-state" data-tone={status.tone}>
             {status.label}
           </span>
         </div>
-        <div onClick={(event) => event.stopPropagation()}>
-          <ToggleSwitch
-            checked={server.enabled}
-            onChange={() => onToggle()}
-            label={t('sidepanel.mcpPage.enabled')}
-          />
-        </div>
-      </div>
-      <div className="flex items-center justify-between gap-2 mt-1.5 pl-5">
-        <div className="text-[11px] truncate" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {transportLabel(server.transport.kind)} · {t('sidepanel.mcpPage.row.autoTools', {
+        <div className="ds-connector-row-meta">
+          {connectorKindLabel(server, t)} · {t('sidepanel.mcpPage.row.autoTools', {
             active: activeTools,
-            total: cache?.descriptors.length ?? 0,
+            total: totalTools,
           })}
         </div>
-        <div className="flex items-center gap-1 shrink-0" onClick={(event) => event.stopPropagation()}>
-          <button onClick={onEdit} className="ds-action-btn ds-action-btn-edit px-2 py-1 text-[11px] rounded-md">
-            {t('common.edit')}
-          </button>
-          <button onClick={onDelete} className="ds-action-btn ds-action-btn-delete px-2 py-1 text-[11px] rounded-md">
-            {t('common.delete')}
-          </button>
-        </div>
+      </div>
+      <div className="ds-connector-row-actions" onClick={(event) => event.stopPropagation()}>
+        <span className="ds-connector-enabled-state">{server.enabled ? t('common.on') : t('common.off')}</span>
+        <ToggleSwitch
+          checked={server.enabled}
+          onChange={() => onToggle()}
+          label={t('sidepanel.mcpPage.enabled')}
+        />
+        <Button type="button" variant="outline" size="xs" onClick={onEdit} className="ds-action-btn ds-action-btn-edit px-2 py-1 text-[11px] rounded-md">
+          {t('common.edit')}
+        </Button>
+        <Button type="button" variant="destructive" size="xs" onClick={onDelete} className="ds-action-btn ds-action-btn-delete px-2 py-1 text-[11px] rounded-md">
+          {t('common.delete')}
+        </Button>
       </div>
     </div>
   );
@@ -957,38 +1200,41 @@ function ServerDetail({
   const tools = cache?.descriptors ?? [];
   const serverHistory = history.filter((record) => record.call.provider?.id === server.id).slice(0, 5);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const status = statusMeta(cache?.health.status ?? server.status, t);
+  const errorMessage = connectorErrorMessage(server, cache, t);
 
   return (
-    <div className="ds-surface-panel rounded-lg p-3 space-y-3 animate-slide-down">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-[11px] truncate" style={{ color: 'var(--ds-text-tertiary)' }}>{endpointLabel(server)}</div>
+    <div className="ds-connector-detail animate-slide-down">
+      <div className="ds-connector-detail-head">
+        <div className="ds-connector-detail-copy">
+          <div className="ds-connector-section-title">{t('sidepanel.mcpPage.detail.connection')}</div>
+          <div className="ds-connector-endpoint">{connectionSummary(server, t)}</div>
         </div>
-        <div className="flex gap-1.5">
+        <div className="ds-connector-detail-actions">
           {requiresOriginPermission(server) && (
-            <button onClick={onRequestPermission} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>
+            <Button type="button" variant="outline" size="xs" onClick={onRequestPermission} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>
               {t('sidepanel.mcpPage.detail.grant')}
-            </button>
+            </Button>
           )}
-          <button onClick={onTest} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>
+          <Button type="button" variant="outline" size="xs" onClick={onTest} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>
             {busy === 'test' ? t('sidepanel.mcpPage.row.testing') : t('common.test')}
-          </button>
-          <button onClick={onRefresh} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>
+          </Button>
+          <Button type="button" variant="outline" size="xs" onClick={onRefresh} className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md" disabled={busy !== null}>
             {busy === 'refresh' ? t('sidepanel.toolsPage.pythonRefreshing') : t('sidepanel.mcpPage.row.refreshTools')}
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div className="ds-metric-strip">
-        <Metric label={t('sidepanel.mcpPage.detail.status')} value={statusMeta(cache?.health.status ?? server.status, t).label} />
-        <Metric label={t('sidepanel.mcpPage.detail.latency')} value={formatMs(cache?.health.latencyMs ?? null)} />
-        <Metric label={t('sidepanel.mcpPage.detail.lastConnected')} value={formatTime(server.lastConnectedAt ?? cache?.health.checkedAt ?? null, locale)} />
-        <Metric label={t('sidepanel.mcpPage.detail.transport')} value={transportLabel(server.transport.kind)} />
+      <div className="ds-connector-facts">
+        <ConnectorFact label={t('sidepanel.mcpPage.detail.status')} value={status.label} tone={status.tone} />
+        <ConnectorFact label={t('sidepanel.mcpPage.detail.latency')} value={formatMs(cache?.health.latencyMs ?? null)} />
+        <ConnectorFact label={t('sidepanel.mcpPage.detail.lastConnected')} value={formatTime(server.lastConnectedAt ?? cache?.health.checkedAt ?? null, locale)} />
+        <ConnectorFact label={t('sidepanel.mcpPage.detail.transport')} value={connectorKindLabel(server, t)} />
       </div>
 
-      {(cache?.health.error || server.lastError) && (
+      {errorMessage && (
         <div className="rounded-lg px-3 py-2 text-xs" style={{ color: 'var(--ds-danger)', background: 'var(--ds-danger-bg)', border: '1px solid var(--ds-danger-border)' }}>
-          {cache?.health.error ?? server.lastError}
+          {errorMessage}
         </div>
       )}
 
@@ -1000,18 +1246,13 @@ function ServerDetail({
         <MultimodalSetupHint server={server} cache={cache} t={t} />
       )}
 
-      <div className="ds-card rounded-lg p-3 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>{t('sidepanel.mcpPage.detail.executionPolicy')}</span>
-          <ToggleSwitch
-            checked={server.execution.enabled}
-            onChange={(enabled) => onPatch({ execution: { ...server.execution, enabled } })}
-            label={t('sidepanel.mcpPage.form.allowInject')}
-          />
-        </div>
-        <div className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {t('sidepanel.mcpPage.detail.injectionSummary', { count: enabledToolCount(server, tools) })}
-        </div>
+      <div className="ds-connector-policy">
+        <ToggleRow
+          title={t('sidepanel.mcpPage.detail.executionPolicy')}
+          description={t('sidepanel.mcpPage.detail.injectionSummary', { count: enabledToolCount(server, tools) })}
+          enabled={server.execution.enabled}
+          onToggle={(enabled) => onPatch({ execution: { ...server.execution, enabled } })}
+        />
         <select
           value={server.execution.mode}
           onChange={(event) => onPatch({ execution: { ...server.execution, mode: event.target.value as ToolExecutionMode } })}
@@ -1033,7 +1274,7 @@ function ServerDetail({
             {t('sidepanel.mcpPage.detail.noTools')}
           </div>
         ) : (
-          <div className="space-y-2">
+          <div className="ds-connector-tool-list">
             {tools.map((tool) => (
               <ToolRow key={tool.id} server={server} tool={tool} onToggle={() => onToggleTool(tool)} t={t} />
             ))}
@@ -1055,10 +1296,10 @@ function ServerDetail({
         ) : (
           <div className="space-y-1.5">
             {serverHistory.map((record) => (
-              <div key={record.id} className="ds-card rounded-lg px-3 py-2">
+              <div key={record.id} className="ds-connector-history-row">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>
-                    {record.call.name}
+                    {historyActionLabel(record, tools, t)}
                   </span>
                   <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ color: record.result.ok ? 'var(--ds-success)' : 'var(--ds-danger)', background: record.result.ok ? 'var(--ds-success-bg)' : 'var(--ds-danger-bg)' }}>
                     {record.result.ok ? t('sidepanel.mcpPage.success') : t('sidepanel.mcpPage.failure')}
@@ -1096,25 +1337,23 @@ function CollapsibleSection({
   const open = isControlled ? openProp : internalOpen;
   const toggle = () => (isControlled ? onToggleProp?.() : setInternalOpen((prev) => !prev));
   return (
-    <div className="space-y-2">
+    <div className="ds-connector-disclosure">
       <button
         type="button"
         onClick={toggle}
-        className="flex items-center justify-between w-full gap-2"
+        className="ds-connector-disclosure-trigger"
       >
-        <span className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+        <span className="ds-connector-disclosure-label">
           <svg
-            className="w-3 h-3 transition-transform duration-200"
-            style={{ transform: open ? 'rotate(90deg)' : 'rotate(0)', color: 'var(--ds-text-tertiary)' }}
+            className="ds-connector-chevron"
+            style={{ transform: open ? 'rotate(90deg)' : 'rotate(0)' }}
             fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
           >
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
           {label}
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ color: 'var(--ds-text-tertiary)', background: 'var(--ds-surface)' }}>
-            {count}
-          </span>
         </span>
+        <span className="ds-connector-disclosure-count">{count}</span>
       </button>
       {open && children}
     </div>
@@ -1133,24 +1372,22 @@ function ToolRow({
   t: Translator;
 }) {
   const enabled = isToolEnabled(server, tool);
+  const label = toolDisplayName(tool, t);
   return (
-    <div className="ds-card rounded-lg px-3 py-2">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>{tool.title || tool.name}</div>
-          <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--ds-blue)' }}>{tool.invocationName}</div>
-        </div>
+    <div className="ds-connector-tool-row">
+      <div className="ds-connector-tool-copy">
+        <div className="ds-connector-tool-title">{label}</div>
+        {tool.description && (
+          <div className="ds-connector-tool-description">{tool.description}</div>
+        )}
+      </div>
+      <div className="ds-connector-tool-action">
+        <span className="ds-connector-enabled-state">{enabled ? t('common.on') : t('common.off')}</span>
         <ToggleSwitch
           checked={enabled}
           onChange={() => onToggle()}
-          label={enabled ? t('sidepanel.mcpPage.auto') : t('sidepanel.mcpPage.disabled')}
+          label={label}
         />
-      </div>
-      <div className="text-[11px] mt-1 leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
-        {tool.description}
-      </div>
-      <div className="text-[10px] mt-2 truncate" style={{ color: 'var(--ds-text-tertiary)' }}>
-        {schemaSummary(tool, t)}
       </div>
     </div>
   );
@@ -1182,12 +1419,12 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function NumberField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <div className="min-w-[7.5rem] flex-1">
+    <div className="min-w-0 flex-1">
       <Field label={label}>
         <input
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="ds-input w-full rounded-lg px-2 py-1.5 text-xs"
+          className="ds-input min-w-0 w-full rounded-lg px-2 py-1.5 text-xs"
           inputMode="numeric"
         />
       </Field>
@@ -1195,11 +1432,186 @@ function NumberField({ label, value, onChange }: { label: string; value: string;
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+type ConnectorStatusTone = 'ready' | 'attention' | 'blocked';
+type ConnectorStatusFactTone = 'normal' | 'muted' | 'attention' | 'blocked';
+type ConnectorStatusAction = 'retry' | 'add';
+
+interface ConnectorStatusModel {
+  statusKey: LocaleMessageKey;
+  descriptionKey: LocaleMessageKey;
+  nextKey: LocaleMessageKey;
+  actionLabelKey: LocaleMessageKey;
+  tone: ConnectorStatusTone;
+  connectors: string;
+  connectorsTone: ConnectorStatusFactTone;
+  actions: string;
+  actionsTone: ConnectorStatusFactTone;
+  action: ConnectorStatusAction | null;
+}
+
+function getConnectorStatusBadgeVariant(tone: ConnectorStatusTone): ComponentProps<typeof Badge>['variant'] {
+  if (tone === 'blocked') return 'destructive';
+  if (tone === 'attention') return 'secondary';
+  return 'outline';
+}
+
+function createConnectorStatusModel({
+  loading,
+  servers,
+  enabledCount,
+  toolCount,
+  loadIssues,
+  hasConnectorListIssue,
+  t,
+}: {
+  loading: boolean;
+  servers: McpServerConfig[];
+  enabledCount: number;
+  toolCount: number;
+  loadIssues: McpLoadIssue[];
+  hasConnectorListIssue: boolean;
+  t: Translator;
+}): ConnectorStatusModel {
+  if (loading && servers.length === 0) {
+    return {
+      statusKey: 'sidepanel.mcpPage.readinessChecking',
+      descriptionKey: 'sidepanel.mcpPage.readinessCheckingDescription',
+      nextKey: 'sidepanel.mcpPage.readinessNextChecking',
+      actionLabelKey: 'sidepanel.mcpPage.readinessActionRetry',
+      tone: 'attention',
+      connectors: t('sidepanel.mcpPage.readinessValueChecking'),
+      connectorsTone: 'muted',
+      actions: t('sidepanel.mcpPage.readinessValueChecking'),
+      actionsTone: 'muted',
+      action: null,
+    };
+  }
+
+  if (hasConnectorListIssue && servers.length === 0) {
+    return {
+      statusKey: 'sidepanel.mcpPage.readinessNeedsRefresh',
+      descriptionKey: 'sidepanel.mcpPage.readinessBlockedDescription',
+      nextKey: 'sidepanel.mcpPage.readinessNextRetry',
+      actionLabelKey: 'sidepanel.mcpPage.readinessActionRetry',
+      tone: 'blocked',
+      connectors: t('common.unavailable'),
+      connectorsTone: 'blocked',
+      actions: t('common.unavailable'),
+      actionsTone: 'blocked',
+      action: 'retry',
+    };
+  }
+
+  if (loadIssues.length > 0) {
+    return {
+      statusKey: 'sidepanel.mcpPage.readinessNeedsRefresh',
+      descriptionKey: 'sidepanel.mcpPage.readinessPartialDescription',
+      nextKey: 'sidepanel.mcpPage.readinessNextRetry',
+      actionLabelKey: 'sidepanel.mcpPage.readinessActionRetry',
+      tone: 'attention',
+      connectors: formatConnectorStatusCount(enabledCount, servers.length, t),
+      connectorsTone: servers.length > 0 ? 'normal' : 'attention',
+      actions: formatConnectorActionCount(toolCount, t),
+      actionsTone: toolCount > 0 ? 'normal' : 'attention',
+      action: 'retry',
+    };
+  }
+
+  if (servers.length === 0) {
+    return {
+      statusKey: 'sidepanel.mcpPage.readinessEmpty',
+      descriptionKey: 'sidepanel.mcpPage.readinessEmptyDescription',
+      nextKey: 'sidepanel.mcpPage.readinessNextAdd',
+      actionLabelKey: 'sidepanel.mcpPage.readinessActionAdd',
+      tone: 'attention',
+      connectors: t('common.none'),
+      connectorsTone: 'muted',
+      actions: t('common.none'),
+      actionsTone: 'muted',
+      action: 'add',
+    };
+  }
+
+  if (enabledCount === 0) {
+    return {
+      statusKey: 'sidepanel.mcpPage.readinessAllOff',
+      descriptionKey: 'sidepanel.mcpPage.readinessAllOffDescription',
+      nextKey: 'sidepanel.mcpPage.readinessNextEnable',
+      actionLabelKey: 'sidepanel.mcpPage.readinessActionAdd',
+      tone: 'attention',
+      connectors: formatConnectorStatusCount(enabledCount, servers.length, t),
+      connectorsTone: 'attention',
+      actions: t('common.none'),
+      actionsTone: 'muted',
+      action: null,
+    };
+  }
+
+  if (toolCount === 0) {
+    return {
+      statusKey: 'sidepanel.mcpPage.readinessNeedsActions',
+      descriptionKey: 'sidepanel.mcpPage.readinessNeedsActionsDescription',
+      nextKey: 'sidepanel.mcpPage.readinessNextRefreshActions',
+      actionLabelKey: 'sidepanel.mcpPage.readinessActionRetry',
+      tone: 'attention',
+      connectors: formatConnectorStatusCount(enabledCount, servers.length, t),
+      connectorsTone: 'normal',
+      actions: t('common.none'),
+      actionsTone: 'attention',
+      action: null,
+    };
+  }
+
+  return {
+    statusKey: 'sidepanel.mcpPage.readinessReady',
+    descriptionKey: 'sidepanel.mcpPage.readinessReadyDescription',
+    nextKey: 'sidepanel.mcpPage.readinessNextContinue',
+    actionLabelKey: 'sidepanel.mcpPage.readinessActionRetry',
+    tone: 'ready',
+    connectors: formatConnectorStatusCount(enabledCount, servers.length, t),
+    connectorsTone: 'normal',
+    actions: formatConnectorActionCount(toolCount, t),
+    actionsTone: 'normal',
+    action: null,
+  };
+}
+
+function formatConnectorStatusCount(enabled: number, total: number, t: Translator): string {
+  return t('sidepanel.mcpPage.readinessConnectorsEnabled', { enabled, total });
+}
+
+function formatConnectorActionCount(count: number, t: Translator): string {
+  return count > 0
+    ? t('sidepanel.mcpPage.readinessActionsAvailable', { count })
+    : t('common.none');
+}
+
+function ConnectorStatusRow({ label, value, tone = 'normal' }: {
+  label: string;
+  value: string;
+  tone?: ConnectorStatusFactTone;
+}) {
   return (
-    <div className="ds-metric-chip">
-      <span className="ds-metric-chip-label">{label}</span>
-      <span className="ds-metric-chip-value">{value}</span>
+    <div className={`ds-connector-status-row ds-connector-status-row-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ConnectorFact({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label: string;
+  value: string;
+  tone?: 'neutral' | 'ready' | 'error' | 'muted';
+}) {
+  return (
+    <div className="ds-connector-fact">
+      <span className="ds-connector-fact-label">{label}</span>
+      <span className="ds-connector-fact-value" data-tone={tone}>{value}</span>
     </div>
   );
 }
@@ -1224,16 +1636,16 @@ function CopyableCommand({ command, copyLabel, copiedLabel }: {
   return (
     <div className="ds-command-block">
       <code className="ds-command-block-text">{command}</code>
-      <button type="button" onClick={handleCopy} className="ds-btn-secondary px-2 py-1 text-[10px] rounded-md shrink-0">
+      <Button type="button" variant="outline" size="xs" onClick={handleCopy} className="ds-btn-secondary px-2 py-1 text-[10px] rounded-md shrink-0">
         {copied ? copiedLabel : copyLabel}
-      </button>
+      </Button>
     </div>
   );
 }
 
-function formFromServer(server: McpServerConfig): FormState {
+function formFromServer(server: McpServerConfig, t: Translator): FormState {
   return {
-    displayName: server.displayName,
+    displayName: connectorDisplayName(server, t),
     enabled: server.enabled,
     transportKind: server.transport.kind,
     url: server.transport.url ?? '',
@@ -1486,23 +1898,74 @@ function nextAllowlistForTool(
   return allowlist;
 }
 
-function schemaSummary(tool: ToolDescriptor, t: Translator): string {
-  const props = Object.keys(tool.inputSchema.properties ?? {});
-  const required = tool.inputSchema.required ?? [];
-  if (props.length === 0) return t('sidepanel.mcpPage.detail.schemaNone');
-  return t('sidepanel.mcpPage.detail.schemaSummary', {
-    props: `${props.slice(0, 6).join(', ')}${props.length > 6 ? '...' : ''}`,
-    required: required.length
-      ? t('sidepanel.mcpPage.detail.schemaRequired', { required: required.join(', ') })
-      : '',
-  });
+function statusMeta(status: McpServerStatus, t: Translator) {
+  if (status === 'ready') return { label: t('sidepanel.mcpPage.status.ready'), tone: 'ready' as const };
+  if (status === 'error') return { label: t('sidepanel.mcpPage.status.error'), tone: 'error' as const };
+  if (status === 'disabled') return { label: t('sidepanel.mcpPage.status.disabled'), tone: 'muted' as const };
+  return { label: t('sidepanel.mcpPage.status.unknown'), tone: 'neutral' as const };
 }
 
-function statusMeta(status: McpServerStatus, t: Translator) {
-  if (status === 'ready') return { label: t('sidepanel.mcpPage.status.ready'), color: 'var(--ds-success)', bg: 'var(--ds-success-bg)' };
-  if (status === 'error') return { label: t('sidepanel.mcpPage.status.error'), color: 'var(--ds-danger)', bg: 'var(--ds-danger-bg)' };
-  if (status === 'disabled') return { label: t('sidepanel.mcpPage.status.disabled'), color: 'var(--ds-text-tertiary)', bg: 'var(--ds-surface)' };
-  return { label: t('sidepanel.mcpPage.status.unknown'), color: 'var(--ds-text-secondary)', bg: 'var(--ds-surface)' };
+function connectorKindLabel(server: McpServerConfig, t: Translator): string {
+  if (isShellServer(server)) return t('sidepanel.mcpPage.kind.localComputer');
+  if (isMultimodalServer(server)) return t('sidepanel.mcpPage.kind.mediaAnalysis');
+  if (server.transport.kind === 'native_messaging') return t('sidepanel.mcpPage.kind.browserHost');
+  if (server.transport.kind === 'stdio_bridge') return t('sidepanel.mcpPage.kind.localBridge');
+  return t('sidepanel.mcpPage.kind.webService');
+}
+
+function connectorDisplayName(server: McpServerConfig, t: Translator): string {
+  if (isShellServer(server) || isMultimodalServer(server)) return connectorKindLabel(server, t);
+  return server.displayName;
+}
+
+function connectionSummary(server: McpServerConfig, t: Translator): string {
+  if (server.transport.kind === 'native_messaging') return connectorKindLabel(server, t);
+  if (server.transport.kind === 'stdio_bridge') {
+    const origin = safeOrigin(server.transport.url);
+    const command = server.transport.command?.trim();
+    if (origin && command) return `${origin} · ${command}`;
+    return origin || command || connectorKindLabel(server, t);
+  }
+  return safeOrigin(server.transport.url) || connectorKindLabel(server, t);
+}
+
+function safeOrigin(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
+function toolDisplayName(tool: ToolDescriptor, t: Translator): string {
+  const title = tool.title.trim();
+  if (title) return title;
+  return t('sidepanel.mcpPage.detail.connectorAction');
+}
+
+function historyActionLabel(record: ToolCallHistoryRecord, tools: ToolDescriptor[], t: Translator): string {
+  const descriptor = tools.find((tool) =>
+    tool.id === record.call.descriptorId ||
+    tool.name === record.call.name ||
+    tool.invocationName === record.call.invocationName ||
+    tool.invocationName === record.call.name
+  );
+  if (descriptor) return toolDisplayName(descriptor, t);
+  return t('sidepanel.mcpPage.detail.connectorAction');
+}
+
+function connectorErrorMessage(
+  server: McpServerConfig,
+  cache: McpToolCacheEntry | null,
+  t: Translator,
+): string {
+  const raw = cache?.health.error ?? server.lastError;
+  if (!raw) return '';
+  if (server.transport.kind === 'native_messaging') {
+    return nativeSetupMessage(server, cache, t, isMultimodalServer(server) ? 'multimodal' : 'shell').message;
+  }
+  return t('sidepanel.mcpPage.messages.connectionFailed');
 }
 
 function isShellServer(server: McpServerConfig): boolean {
@@ -1528,7 +1991,7 @@ function ShellSetupHint({
   const setup = shellInstallCommand();
   return (
     <NativeHostHint
-      title="Shell Native Host"
+      title={t('sidepanel.mcpPage.shellSetup.title')}
       message={message}
       isError={isError}
       ready={cache?.health.status === 'ready'}
@@ -1584,7 +2047,7 @@ function MultimodalSetupHint({
   const setup = multimodalInstallCommand();
   return (
     <NativeHostHint
-      title="Legacy Multimodal MCP"
+      title={t('sidepanel.mcpPage.multimodalSetup.title')}
       message={message}
       isError={isError}
       ready={cache?.health.status === 'ready'}
@@ -1649,35 +2112,35 @@ function NativeHostHint({
   // never reset the user's choice.
   const [open, setOpen] = useState(() => !ready);
   return (
-    <div className="ds-card rounded-lg px-3 py-2 text-[11px] leading-4" style={{ color: 'var(--ds-text-secondary)' }}>
+    <div className="ds-connector-setup">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 w-full"
+        className="ds-connector-setup-trigger"
       >
         <svg
-          className="w-3 h-3 transition-transform duration-200"
-          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0)', color: 'var(--ds-text-tertiary)' }}
+          className="ds-connector-chevron"
+          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0)' }}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
-        <span className="font-medium" style={{ color: 'var(--ds-text)' }}>{title}</span>
+        <span>{title}</span>
       </button>
       {open ? (
         <>
           {isError ? (
-            <div className="rounded px-2 py-1 mt-1.5 mb-1.5" style={{ color: 'var(--ds-danger)', background: 'var(--ds-danger-bg)', border: '1px solid var(--ds-danger)' }}>
+            <div className="ds-connector-error">
               {message}
             </div>
           ) : (
-            <div className="mt-1">{message}</div>
+            <div className="ds-connector-setup-message">{message}</div>
           )}
-          <div className="mt-1.5 space-y-0.5">{installSteps}</div>
+          <div className="ds-connector-setup-steps">{installSteps}</div>
         </>
       ) : (
-        <div className="mt-1 text-[10px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+        <div className="ds-connector-setup-collapsed">
           {t('sidepanel.mcpPage.detail.hintExpand')}
         </div>
       )}
@@ -1788,16 +2251,6 @@ function nativeSetupMessage(
     return { message: t(`${setupKey}.disabled` as LocaleMessageKey), isError: false };
   }
   return { message: t(`${setupKey}.installFirst` as LocaleMessageKey), isError: false };
-}
-
-function transportLabel(kind: McpTransportKind): string {
-  return TRANSPORT_OPTIONS.find((item) => item.kind === kind)?.label ?? kind;
-}
-
-function endpointLabel(server: McpServerConfig): string {
-  if (server.transport.kind === 'native_messaging') return server.transport.nativeHost || 'Native Messaging';
-  if (server.transport.kind === 'stdio_bridge') return `${server.transport.url || 'Bridge URL'} · ${server.transport.command || 'command'}`;
-  return server.transport.url || transportLabel(server.transport.kind);
 }
 
 function formatMs(value: number | null | undefined): string {

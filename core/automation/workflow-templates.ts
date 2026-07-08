@@ -98,7 +98,7 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
       'Plan the objective, scope, autonomy boundary, and stop gates first, then fan out across feature inventory, user journeys, failing tests, high-risk defects, and verification commands.',
       'Evaluate findings against source truth and command evidence, review the strongest false-positive risks, grade confidence A through F, and iterate by patching only the smallest safe slice before rerunning the relevant gates.',
       'Stop only when no critical/high defects remain, no required verification checks are failing, no unresolved UX blockers remain, and incomplete journeys are either completed or explicitly listed as blocked.',
-      'Required artifacts: run-state, proof-ledger, defect-log, verification-matrix, coverage-summary, and final handoff. Do not claim verification without actual command, browser, or tool evidence.',
+      'Required handoff: current state, evidence log, defect list, verification checklist, coverage summary, and next action. Do not claim verification without actual command, browser, or tool evidence.',
     ]),
   },
   {
@@ -169,7 +169,7 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
     copyKey: 'browserWatchtower',
     title: 'Browser Watchtower',
     category: 'browser',
-    summary: 'Visual monitor for the selected Browser Control target with metadata-only evidence.',
+    summary: 'Visual monitor for the selected browser target with metadata-only evidence.',
     cadenceLabel: 'Manual or scheduled after target selection',
     schedule: manualSchedule(),
     promptOptions: {
@@ -179,7 +179,7 @@ export const AUTOMATION_WORKFLOW_TEMPLATES: readonly AutomationWorkflowTemplate[
       visualMonitorEnabled: true,
     },
     prompt: loopPrompt([
-      'Inspect the selected Browser Control target visually and tell me whether anything looks broken, stale, blocked, or ready for the next step.',
+      'Inspect the selected browser target visually and tell me whether anything looks broken, stale, blocked, or ready for the next step.',
       'Plan the visual check, fan out across page state, visible errors, auth/session state, controls, and task relevance.',
       'Evaluate the screenshot evidence, review likely causes, grade confidence, and iterate once with the safest next visible check.',
       'Stop with a plain human summary and one next action. Do not click, type, submit forms, purchase, delete, or change account settings without explicit confirmation.',

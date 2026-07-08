@@ -26,6 +26,7 @@ import type {
   SyncCounts,
 } from '../../../../core/types';
 import { validateImportedMemory } from '../../../../core/sync/schema';
+import { getRuntimeErrorMessage, isRuntimeFailure } from '../../runtime-response';
 
 /**
  * Central settings state + handlers.
@@ -55,6 +56,22 @@ const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
 export type ApiKeyStatus = 'idle' | 'saving' | 'clearing' | 'success' | 'error';
 export type MultimodalStatus = 'idle' | 'saving' | 'clearing' | 'success' | 'error';
 export type SyncStatus = 'idle' | 'testing' | 'uploading' | 'downloading' | 'success' | 'error';
+export type SettingsLoadIssueId =
+  | 'sidepanel-chat'
+  | 'api-key'
+  | 'multimodal'
+  | 'memory'
+  | 'version'
+  | 'sync'
+  | 'model'
+  | 'background'
+  | 'pet'
+  | 'personal-defaults';
+
+export interface SettingsLoadIssue {
+  id: SettingsLoadIssueId;
+  message: string;
+}
 
 const DEFAULT_MULTIMODAL: MultimodalSettingsStatus = {
   openaiConfigured: false,
@@ -65,6 +82,42 @@ const DEFAULT_MULTIMODAL: MultimodalSettingsStatus = {
   geminiBaseUrl: 'https://generativelanguage.googleapis.com',
 };
 
+function readSettingsLoadResult<T>(
+  result: PromiseSettledResult<T>,
+  id: SettingsLoadIssueId,
+  issues: SettingsLoadIssue[],
+  fallback: T,
+): T {
+  let reason: unknown;
+  if (result.status === 'fulfilled') {
+    const value: unknown = result.value;
+    if (!isRuntimeFailure(value)) return result.value;
+    reason = value.error;
+  } else {
+    reason = result.reason;
+  }
+  issues.push({ id, message: getSettingsActionIssueMessage(reason, 'Load failed') });
+  return fallback;
+}
+
+function getSettingsActionIssueMessage(error: unknown, fallback: string): string {
+  const message = getRuntimeErrorMessage(error).trim();
+  if (!message || message === 'undefined' || message === 'null') return fallback;
+  if (
+    /\b(GET|SAVE|CLEAR|SET|DELETE|WEBDAV)_[A-Z0-9_]+\b|schemaVersion|chrome\.runtime|chrome\.storage|IndexedDB|deepseek_pp_[a-z0-9_]+|Authorization|Bearer|Cookie|data:image|\[object Object\]|apiKey|openaiApiKey|geminiApiKey|OPENAI_API_KEY|GEMINI_API_KEY|DEEPSEEK_API_KEY|password|secret|token|sk-[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]+/i.test(message)
+  ) {
+    return fallback;
+  }
+  return message;
+}
+
+function getRuntimeActionFailureMessage(result: unknown, fallback: string): string {
+  if (isRuntimeFailure(result)) {
+    return getSettingsActionIssueMessage(result.error, fallback);
+  }
+  return fallback;
+}
+
 export function useSettingsState() {
   // --- shared / general ---
   const [memoryCount, setMemoryCount] = useState(0);
@@ -72,7 +125,9 @@ export function useSettingsState() {
   const [expertMode, setExpertMode] = useState(false);
   const [chatEnabled, setChatEnabledState] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadIssues, setLoadIssues] = useState<SettingsLoadIssue[]>([]);
   const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
+  const [generalMessage, setGeneralMessage] = useState('');
 
   // --- deepseek api key ---
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
@@ -97,6 +152,7 @@ export function useSettingsState() {
   const [bgUrl, setBgUrl] = useState('');
   const [bgImageData, setBgImageData] = useState('');
   const [bgOpacity, setBgOpacity] = useState(DEFAULT_BACKGROUND_OPACITY);
+  const [appearanceMessage, setAppearanceMessage] = useState('');
 
   // --- pet ---
   const [petEnabled, setPetEnabled] = useState(DEFAULT_PET_CONFIG.enabled);
@@ -113,6 +169,7 @@ export function useSettingsState() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bgConfigRef = useRef<BackgroundConfig>(DEFAULT_BACKGROUND_CONFIG);
   const petConfigRef = useRef<PetConfig>(DEFAULT_PET_CONFIG);
+  const loadGenerationRef = useRef(0);
 
   const bgPreview = bgType === 'url' ? bgUrl : bgImageData;
   const syncBusy = syncStatus === 'testing' || syncStatus === 'uploading' || syncStatus === 'downloading';
@@ -143,40 +200,68 @@ export function useSettingsState() {
     setGeminiBaseUrl(status.geminiBaseUrl);
   }, []);
 
+  const loadSettingsState = useCallback(async () => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    setLoading(true);
+
+    const [
+      chatOnResult,
+      keyStatusResult,
+      mmStatusResult,
+      memoriesResult,
+      cfgResult,
+      syncCfgResult,
+      modelTypeResult,
+      bgCfgResult,
+      petCfgResult,
+      personalResult,
+    ] = await Promise.allSettled([
+      Promise.resolve().then(() => getChatEnabled()),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_DEEPSEEK_API_KEY_STATUS' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_MULTIMODAL_SETTINGS_STATUS' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_MEMORIES' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_CONFIG' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_SYNC_CONFIG' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_MODEL_TYPE' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_BACKGROUND' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_PET' })),
+      Promise.resolve().then(() => chrome.runtime.sendMessage({ type: 'GET_PERSONAL_CONVENIENCE_CONFIG' })),
+    ]);
+
+    if (loadGenerationRef.current !== generation) return;
+
+    const issues: SettingsLoadIssue[] = [];
+    const chatOn = readSettingsLoadResult(chatOnResult, 'sidepanel-chat', issues, false);
+    const keyStatus = readSettingsLoadResult(keyStatusResult, 'api-key', issues, undefined);
+    const mmStatus = readSettingsLoadResult(mmStatusResult, 'multimodal', issues, undefined);
+    const memories = readSettingsLoadResult(memoriesResult, 'memory', issues, [] as Memory[]);
+    const cfg = readSettingsLoadResult(cfgResult, 'version', issues, undefined);
+    const syncCfg = readSettingsLoadResult(syncCfgResult, 'sync', issues, null);
+    const modelType = readSettingsLoadResult(modelTypeResult, 'model', issues, null);
+    const bgCfg = readSettingsLoadResult(bgCfgResult, 'background', issues, null);
+    const petCfg = readSettingsLoadResult(petCfgResult, 'pet', issues, null);
+    const personal = readSettingsLoadResult(personalResult, 'personal-defaults', issues, null);
+
+    setChatEnabledState(chatOn);
+    setApiKeyConfigured((keyStatus as { configured?: boolean } | undefined)?.configured === true);
+    const mm = mmStatus as ({ ok?: boolean } & MultimodalSettingsStatus) | undefined;
+    if (mm?.ok) syncMultimodalStatus(mm);
+    setMemoryCount((memories as Memory[] | null)?.length ?? 0);
+    setVersion((cfg as { version?: string } | undefined)?.version ?? '');
+    if (syncCfg) setSyncConfig(syncCfg as SyncConfig);
+    setExpertMode(modelType === 'expert');
+    const normalizedBg = normalizeBackgroundConfig(bgCfg as BackgroundConfig | null);
+    if (normalizedBg) syncBgState(normalizedBg);
+    syncPetState(normalizePetConfig(petCfg as PetConfig | null));
+    setPersonalConfig(normalizePersonalConvenienceConfig((personal as { config?: unknown } | null)?.config));
+    setLoadIssues(issues);
+    setLoading(false);
+  }, [syncBgState, syncPetState, syncMultimodalStatus]);
+
   // --- initial load ---
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const [chatOn, keyStatus, mmStatus, memories, cfg, syncCfg, modelType, bgCfg, petCfg, personal] = await Promise.all([
-        getChatEnabled().catch((error) => {
-          console.error('DeepSeek++ failed to read sidepanel chat setting', error);
-          return false;
-        }),
-        chrome.runtime.sendMessage({ type: 'GET_DEEPSEEK_API_KEY_STATUS' }).catch(() => undefined),
-        chrome.runtime.sendMessage({ type: 'GET_MULTIMODAL_SETTINGS_STATUS' }).catch(() => undefined),
-        chrome.runtime.sendMessage({ type: 'GET_MEMORIES' }).catch(() => [] as Memory[]),
-        chrome.runtime.sendMessage({ type: 'GET_CONFIG' }).catch(() => undefined),
-        chrome.runtime.sendMessage({ type: 'GET_SYNC_CONFIG' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_MODEL_TYPE' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_BACKGROUND' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_PET' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_PERSONAL_CONVENIENCE_CONFIG' }).catch(() => null),
-      ]);
-      if (cancelled) return;
-      setChatEnabledState(chatOn);
-      setApiKeyConfigured((keyStatus as { configured?: boolean } | undefined)?.configured === true);
-      const mm = mmStatus as ({ ok?: boolean } & MultimodalSettingsStatus) | undefined;
-      if (mm?.ok) syncMultimodalStatus(mm);
-      setMemoryCount((memories as Memory[])?.length ?? 0);
-      setVersion((cfg as { version?: string } | undefined)?.version ?? '');
-      if (syncCfg) setSyncConfig(syncCfg as SyncConfig);
-      setExpertMode(modelType === 'expert');
-      const normalizedBg = normalizeBackgroundConfig(bgCfg as BackgroundConfig | null);
-      if (normalizedBg) syncBgState(normalizedBg);
-      syncPetState(normalizePetConfig(petCfg as PetConfig | null));
-      setPersonalConfig(normalizePersonalConvenienceConfig((personal as { config?: unknown } | null)?.config));
-      setLoading(false);
-    })();
+    void loadSettingsState();
 
     const handlePetUpdate = (message: { type?: string; config?: PetConfig | null }) => {
       if (message.type === 'PET_UPDATED') {
@@ -185,27 +270,43 @@ export function useSettingsState() {
     };
     chrome.runtime.onMessage.addListener(handlePetUpdate);
     return () => {
-      cancelled = true;
+      loadGenerationRef.current += 1;
       chrome.runtime.onMessage.removeListener(handlePetUpdate);
     };
-  }, [syncBgState, syncPetState, syncMultimodalStatus]);
+  }, [syncPetState, loadSettingsState]);
 
   // --- expert mode ---
-  const handleExpertToggle = useCallback(async (enabled: boolean) => {
+  const handleExpertToggle = useCallback(async (enabled: boolean, saveFailed: string) => {
+    const previous = expertMode;
     setExpertMode(enabled);
-    await chrome.runtime.sendMessage({
-      type: 'SET_MODEL_TYPE',
-      payload: enabled ? 'expert' : null,
-    });
-  }, []);
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'SET_MODEL_TYPE',
+        payload: enabled ? 'expert' : null,
+      });
+      if (isRuntimeFailure(result)) throw new Error(getRuntimeActionFailureMessage(result, saveFailed));
+      setGeneralMessage('');
+    } catch (error) {
+      setExpertMode(previous);
+      setGeneralMessage(getSettingsActionIssueMessage(error, saveFailed));
+    }
+  }, [expertMode]);
 
   // --- sidepanel chat ---
-  const handleChatToggle = useCallback(async (next: boolean) => {
+  const handleChatToggle = useCallback(async (next: boolean, saveFailed: string) => {
+    const previous = chatEnabled;
     setChatEnabledState(next);
-    await setChatEnabled(next);
-  }, []);
+    try {
+      await setChatEnabled(next);
+      setGeneralMessage('');
+    } catch (error) {
+      setChatEnabledState(previous);
+      setGeneralMessage(getSettingsActionIssueMessage(error, saveFailed));
+    }
+  }, [chatEnabled]);
 
-  const handlePersonalConveniencePatch = useCallback(async (patch: Partial<PersonalConvenienceConfig>) => {
+  const handlePersonalConveniencePatch = useCallback(async (patch: Partial<PersonalConvenienceConfig>, saveFailed: string) => {
+    const previous = personalConfig;
     const optimistic = normalizePersonalConvenienceConfig({ ...personalConfig, ...patch });
     setPersonalConfig(optimistic);
     try {
@@ -213,9 +314,12 @@ export function useSettingsState() {
         type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
         payload: patch,
       });
+      if (isRuntimeFailure(result)) throw new Error(getRuntimeActionFailureMessage(result, saveFailed));
       setPersonalConfig(normalizePersonalConvenienceConfig(result?.config ?? optimistic));
-    } catch {
-      setPersonalConfig(personalConfig);
+      setGeneralMessage('');
+    } catch (error) {
+      setPersonalConfig(previous);
+      setGeneralMessage(getSettingsActionIssueMessage(error, saveFailed));
     }
   }, [personalConfig]);
 
@@ -239,7 +343,7 @@ export function useSettingsState() {
           type: 'SAVE_DEEPSEEK_API_KEY',
           payload: { apiKey },
         });
-        if (!result?.ok) throw new Error(result?.error || labels.saveFailed);
+        if (!result?.ok) throw new Error(getRuntimeActionFailureMessage(result, labels.saveFailed));
         if (!chatEnabled) {
           await setChatEnabled(true);
           setChatEnabledState(true);
@@ -250,7 +354,7 @@ export function useSettingsState() {
         setApiKeyMessage(labels.apiKeySaved);
       } catch (error) {
         setApiKeyStatus('error');
-        setApiKeyMessage(error instanceof Error ? error.message : labels.saveFailed);
+        setApiKeyMessage(getSettingsActionIssueMessage(error, labels.saveFailed));
       }
     },
     [apiKeyInput, chatEnabled],
@@ -262,14 +366,14 @@ export function useSettingsState() {
       setApiKeyMessage('');
       try {
         const result = await chrome.runtime.sendMessage({ type: 'CLEAR_DEEPSEEK_API_KEY' });
-        if (!result?.ok) throw new Error(result?.error || clearFailed);
+        if (!result?.ok) throw new Error(getRuntimeActionFailureMessage(result, clearFailed));
         setApiKeyConfigured(false);
         setApiKeyInput('');
         setApiKeyStatus('success');
         setApiKeyMessage(apiKeyCleared);
       } catch (error) {
         setApiKeyStatus('error');
-        setApiKeyMessage(error instanceof Error ? error.message : clearFailed);
+        setApiKeyMessage(getSettingsActionIssueMessage(error, clearFailed));
       }
     },
     [],
@@ -305,7 +409,7 @@ export function useSettingsState() {
           type: 'SAVE_MULTIMODAL_SETTINGS',
           payload,
         });
-        if (!result?.ok) throw new Error(result?.error || labels.saveFailed);
+        if (!result?.ok) throw new Error(getRuntimeActionFailureMessage(result, labels.saveFailed));
         syncMultimodalStatus(result as MultimodalSettingsStatus);
         setOpenaiApiKeyInput('');
         setGeminiApiKeyInput('');
@@ -313,7 +417,7 @@ export function useSettingsState() {
         setMultimodalMessage(labels.saved);
       } catch (error) {
         setMultimodalStatus('error');
-        setMultimodalMessage(error instanceof Error ? error.message : labels.saveFailed);
+        setMultimodalMessage(getSettingsActionIssueMessage(error, labels.saveFailed));
       }
     },
     [openaiBaseUrl, geminiBaseUrl, openaiImageModel, geminiVideoModel, openaiApiKeyInput, geminiApiKeyInput, isHttpBaseUrl, syncMultimodalStatus],
@@ -325,7 +429,7 @@ export function useSettingsState() {
       setMultimodalMessage('');
       try {
         const result = await chrome.runtime.sendMessage({ type: 'CLEAR_MULTIMODAL_SETTINGS' });
-        if (!result?.ok) throw new Error(result?.error || labels.clearFailed);
+        if (!result?.ok) throw new Error(getRuntimeActionFailureMessage(result, labels.clearFailed));
         syncMultimodalStatus(result as MultimodalSettingsStatus);
         setOpenaiApiKeyInput('');
         setGeminiApiKeyInput('');
@@ -333,27 +437,35 @@ export function useSettingsState() {
         setMultimodalMessage(labels.cleared);
       } catch (error) {
         setMultimodalStatus('error');
-        setMultimodalMessage(error instanceof Error ? error.message : labels.clearFailed);
+        setMultimodalMessage(getSettingsActionIssueMessage(error, labels.clearFailed));
       }
     },
     [syncMultimodalStatus],
   );
 
   // --- background ---
-  const saveBgConfig = useCallback(async (patch: Partial<BackgroundConfig>) => {
+  const saveBgConfig = useCallback(async (patch: Partial<BackgroundConfig>, saveFailed: string) => {
+    const previous = bgConfigRef.current;
     const config = normalizeBackgroundConfig({
       ...bgConfigRef.current,
       ...patch,
     });
     if (!config) return;
     bgConfigRef.current = config;
-    await chrome.runtime.sendMessage({ type: 'SAVE_BACKGROUND', payload: config });
-  }, []);
+    try {
+      const result = await chrome.runtime.sendMessage({ type: 'SAVE_BACKGROUND', payload: config });
+      if (isRuntimeFailure(result)) throw new Error(getRuntimeActionFailureMessage(result, saveFailed));
+      setAppearanceMessage('');
+    } catch (error) {
+      syncBgState(previous);
+      setAppearanceMessage(getSettingsActionIssueMessage(error, saveFailed));
+    }
+  }, [syncBgState]);
 
   const handleBgToggle = useCallback(
-    async (enabled: boolean) => {
+    async (enabled: boolean, saveFailed: string) => {
       setBgEnabled(enabled);
-      await saveBgConfig({ enabled });
+      await saveBgConfig({ enabled }, saveFailed);
     },
     [saveBgConfig],
   );
@@ -386,7 +498,7 @@ export function useSettingsState() {
   }, []);
 
   const handleFileSelect = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>, saveFailed: string) => {
       const file = e.target.files?.[0];
       if (!file) return;
       let data: string;
@@ -398,107 +510,103 @@ export function useSettingsState() {
       setBgType('upload');
       setBgImageData(data);
       setBgEnabled(true);
-      bgConfigRef.current = {
-        ...bgConfigRef.current,
-        enabled: true,
-        type: 'upload',
-        imageData: data,
-        url: '',
-      };
-      await saveBgConfig({ enabled: true, type: 'upload', imageData: data, url: '' });
+      await saveBgConfig({ enabled: true, type: 'upload', imageData: data, url: '' }, saveFailed);
       e.target.value = '';
     },
     [resizeImage, saveBgConfig],
   );
 
-  const handleUrlConfirm = useCallback(async () => {
+  const handleUrlConfirm = useCallback(async (saveFailed: string) => {
     if (!bgUrl.trim()) return;
     setBgType('url');
     setBgImageData('');
     setBgEnabled(true);
-    bgConfigRef.current = {
-      ...bgConfigRef.current,
-      enabled: true,
-      type: 'url',
-      url: bgUrl,
-      imageData: '',
-    };
-    await saveBgConfig({ enabled: true, type: 'url', url: bgUrl, imageData: '' });
+    await saveBgConfig({ enabled: true, type: 'url', url: bgUrl, imageData: '' }, saveFailed);
   }, [bgUrl, saveBgConfig]);
 
   const handleOpacityChange = useCallback(
-    (val: number) => {
+    (val: number, saveFailed: string) => {
       const opacity = clampBackgroundOpacity(val);
       setBgOpacity(opacity);
-      bgConfigRef.current = {
-        ...bgConfigRef.current,
-        opacity,
-      };
-      void saveBgConfig({ opacity });
+      void saveBgConfig({ opacity }, saveFailed);
     },
     [saveBgConfig],
   );
 
-  const handleClearBg = useCallback(async () => {
+  const handleClearBg = useCallback(async (clearFailed: string) => {
+    const previous = bgConfigRef.current;
     setBgEnabled(false);
     setBgType('upload');
     setBgUrl('');
     setBgImageData('');
     setBgOpacity(DEFAULT_BACKGROUND_OPACITY);
     bgConfigRef.current = DEFAULT_BACKGROUND_CONFIG;
-    await chrome.runtime.sendMessage({ type: 'CLEAR_BACKGROUND' });
-  }, []);
+    try {
+      const result = await chrome.runtime.sendMessage({ type: 'CLEAR_BACKGROUND' });
+      if (isRuntimeFailure(result)) throw new Error(getRuntimeActionFailureMessage(result, clearFailed));
+      setAppearanceMessage('');
+    } catch (error) {
+      syncBgState(previous);
+      setAppearanceMessage(getSettingsActionIssueMessage(error, clearFailed));
+    }
+  }, [syncBgState]);
 
   // --- pet ---
-  const savePetConfig = useCallback(async (patch: Partial<PetConfig>) => {
+  const savePetConfig = useCallback(async (patch: Partial<PetConfig>, saveFailed: string) => {
+    const previous = petConfigRef.current;
     const config = normalizePetConfig({
       ...petConfigRef.current,
       ...patch,
     });
     petConfigRef.current = config;
-    await chrome.runtime.sendMessage({ type: 'SAVE_PET', payload: config });
-  }, []);
+    try {
+      const result = await chrome.runtime.sendMessage({ type: 'SAVE_PET', payload: config });
+      if (isRuntimeFailure(result)) throw new Error(getRuntimeActionFailureMessage(result, saveFailed));
+      setAppearanceMessage('');
+    } catch (error) {
+      syncPetState(previous);
+      setAppearanceMessage(getSettingsActionIssueMessage(error, saveFailed));
+    }
+  }, [syncPetState]);
 
   const handlePetToggle = useCallback(
-    async (enabled: boolean) => {
+    async (enabled: boolean, saveFailed: string) => {
       setPetEnabled(enabled);
-      await savePetConfig({ enabled });
+      await savePetConfig({ enabled }, saveFailed);
     },
     [savePetConfig],
   );
 
   const handlePetPositionChange = useCallback(
-    async (position: Exclude<PetPosition, 'custom'>) => {
+    async (position: Exclude<PetPosition, 'custom'>, saveFailed: string) => {
       setPetPosition(position);
-      await savePetConfig({ position });
+      await savePetConfig({ position }, saveFailed);
     },
     [savePetConfig],
   );
 
   const handlePetSizeChange = useCallback(
-    (value: number) => {
+    (value: number, saveFailed: string) => {
       const size = clampPetSize(value);
       setPetSize(size);
-      petConfigRef.current = { ...petConfigRef.current, size };
-      void savePetConfig({ size });
+      void savePetConfig({ size }, saveFailed);
     },
     [savePetConfig],
   );
 
   const handlePetOpacityChange = useCallback(
-    (value: number) => {
+    (value: number, saveFailed: string) => {
       const opacity = clampPetOpacity(value);
       setPetOpacity(opacity);
-      petConfigRef.current = { ...petConfigRef.current, opacity };
-      void savePetConfig({ opacity });
+      void savePetConfig({ opacity }, saveFailed);
     },
     [savePetConfig],
   );
 
   const handlePetMotionToggle = useCallback(
-    async (motion: boolean) => {
+    async (motion: boolean, saveFailed: string) => {
       setPetMotion(motion);
-      await savePetConfig({ motion });
+      await savePetConfig({ motion }, saveFailed);
     },
     [savePetConfig],
   );
@@ -533,11 +641,14 @@ export function useSettingsState() {
         return;
       }
       try {
-        await chrome.runtime.sendMessage({ type: 'SAVE_SYNC_CONFIG', payload: syncConfig });
+        const saveResult = await chrome.runtime.sendMessage({ type: 'SAVE_SYNC_CONFIG', payload: syncConfig });
+        if (isRuntimeFailure(saveResult)) {
+          throw new Error(getRuntimeActionFailureMessage(saveResult, labels.operationFailed));
+        }
         await action();
       } catch (e) {
         setSyncStatus('error');
-        setSyncMessage((e as Error).message || labels.operationFailed);
+        setSyncMessage(getSettingsActionIssueMessage(e, labels.operationFailed));
       }
     },
     [syncConfig, requestPermission],
@@ -556,7 +667,7 @@ export function useSettingsState() {
           setSyncStatus('success');
           setSyncMessage(labels.success);
         } else {
-          throw new Error(result?.error || labels.failed);
+          throw new Error(getRuntimeActionFailureMessage(result, labels.failed));
         }
       }, labels);
     },
@@ -577,7 +688,7 @@ export function useSettingsState() {
           setSyncStatus('success');
           setSyncMessage(labels.success(result.counts));
         } else {
-          throw new Error(result?.error || labels.failed);
+          throw new Error(getRuntimeActionFailureMessage(result, labels.failed));
         }
       }, labels);
     },
@@ -599,7 +710,7 @@ export function useSettingsState() {
           setSyncMessage(labels.success(result.counts));
           setMemoryCount(result.counts?.memories ?? 0);
         } else {
-          throw new Error(result?.error || labels.failed);
+          throw new Error(getRuntimeActionFailureMessage(result, labels.failed));
         }
       }, labels);
     },
@@ -661,11 +772,14 @@ export function useSettingsState() {
   return {
     // shared
     loading,
+    loadIssues,
+    retryLoad: loadSettingsState,
     memoryCount,
     version,
     expertMode,
     chatEnabled,
     personalConfig,
+    generalMessage,
     handleExpertToggle,
     handleChatToggle,
     handlePersonalConveniencePatch,
@@ -703,6 +817,7 @@ export function useSettingsState() {
     bgImageData,
     bgOpacity,
     bgPreview,
+    appearanceMessage,
     fileInputRef,
     handleBgToggle,
     handleFileSelect,

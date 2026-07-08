@@ -1,0 +1,21 @@
+{
+  "url": "http://127.0.0.1:64979/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/context-state-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real shell navigation opened Context",
+    "ready Context rendered project, memory, saved item, and preset",
+    "empty Context rendered shadcn Empty with two real navigation actions",
+    "source failure rendered shadcn Alert without hiding loaded context",
+    "retry recovered the memory source and removed the failure alert",
+    "ready state Ask action and empty state Memory action were clicked and verified",
+    "badge, alert, empty, and button slots verified",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

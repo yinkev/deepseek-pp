@@ -1,10 +1,16 @@
-import { useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import type {
   LocalSkillImportResult,
   LocalSkillPreview,
   LocalSkillPreviewItem,
 } from '../../../core/types';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { FolderOpenIcon } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { TextField } from './settings/primitives';
 
 type ImportState = 'idle' | 'previewing' | 'ready' | 'importing' | 'success' | 'error';
 
@@ -29,13 +35,13 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
   const allSelected = preview ? preview.skills.length > 0 && selectedCount === preview.skills.length : false;
   const canPreview = rootPath.trim().length > 0 && state !== 'previewing' && state !== 'importing' && !picking;
   const canPick = state !== 'previewing' && state !== 'importing' && !picking;
-  const canImport = Boolean(preview) && selectedCount > 0 && state !== 'importing' && state !== 'previewing' && !picking;
+  const canImport = Boolean(preview) && selectedCount > 0 && state === 'ready' && !picking;
 
   const selectedBytes = useMemo(() => {
     if (!preview) return 0;
     return preview.skills
       .filter((skill) => selectedPaths.has(skill.path))
-      .reduce((sum, skill) => sum + skill.bytes, 0);
+      .reduce((sum, skill) => sum + (skill.bytes ?? skill.bodyBytes ?? 0), 0);
   }, [preview, selectedPaths]);
 
   const runPreviewForPath = async (path: string) => {
@@ -136,86 +142,98 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
   };
 
   return (
-    <section className="ds-form rounded-xl p-4 space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
+    <section className="ds-command-import-panel">
+      <div className="ds-command-import-header">
+        <div className="ds-command-import-copy">
+          <h3>
             {t('sidepanel.localSkillImport.title')}
           </h3>
-          <p className="text-[11px] mt-1 leading-relaxed" style={{ color: 'var(--ds-text-tertiary)' }}>
+          <p>
             {t('sidepanel.localSkillImport.description')}
           </p>
         </div>
-        <button
+        <Button
           type="button"
           onClick={onCancel}
-          className="ds-btn-cancel shrink-0 px-2.5 py-1.5 text-[11px] font-medium rounded-lg"
+          variant="outline"
+          size="sm"
+          className="ds-command-import-button"
         >
           {t('common.close')}
-        </button>
+        </Button>
       </div>
 
-      <div className="space-y-2">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder={t('sidepanel.localSkillImport.pathPlaceholder')}
-            value={rootPath}
-            onChange={(event) => {
-              const nextPath = event.target.value;
-              setRootPath(nextPath);
-              latestPathRef.current = nextPath;
-              previewRequestIdRef.current += 1;
-              setPreview(null);
-              setSelectedPaths(new Set());
-              setResult(null);
-              setMessage('');
-              if (state !== 'importing') setState('idle');
-            }}
-            onKeyDown={(event) => event.key === 'Enter' && canPreview && runPreview()}
-            className="ds-input min-w-0 flex-1 px-3 py-2 text-xs rounded-lg transition-all duration-150"
-          />
-          <button
-            type="button"
-            onClick={pickFolder}
-            disabled={!canPick}
-            className="ds-btn-secondary shrink-0 px-2.5 py-2 text-[11px] font-medium rounded-lg disabled:opacity-40 flex items-center gap-1.5"
-          >
-            {picking ? <Spinner /> : <FolderPickerIcon />}
-            {t('sidepanel.localSkillImport.pickFolder')}
-          </button>
-          <button
-            type="button"
-            onClick={runPreview}
-            disabled={!canPreview}
-            className="ds-btn-secondary shrink-0 px-3 py-2 text-[11px] font-medium rounded-lg disabled:opacity-40 flex items-center gap-1.5"
-          >
-            {state === 'previewing' && <Spinner />}
-            {t('common.preview')}
-          </button>
-        </div>
+      <div className="ds-command-import-controls">
+        <TextField
+          id="local-skill-import-path"
+          label={t('sidepanel.localSkillImport.pathLabel')}
+          placeholder={t('sidepanel.localSkillImport.pathPlaceholder')}
+          value={rootPath}
+          fieldClassName="ds-command-field ds-command-import-field"
+          inputClassName="ds-command-import-input"
+          onChange={(nextPath) => {
+            setRootPath(nextPath);
+            latestPathRef.current = nextPath;
+            previewRequestIdRef.current += 1;
+            setPreview(null);
+            setSelectedPaths(new Set());
+            setResult(null);
+            setMessage('');
+            if (state !== 'importing') setState('idle');
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && canPreview) void runPreview();
+          }}
+          trailing={(
+            <div className="ds-command-import-action-row">
+              <Button
+                type="button"
+                onClick={() => { void pickFolder(); }}
+                disabled={!canPick}
+                variant="outline"
+                size="sm"
+                className="ds-command-import-button"
+              >
+                {picking ? <Spinner /> : <FolderOpenIcon data-icon="inline-start" aria-hidden="true" />}
+                {t('sidepanel.localSkillImport.pickFolder')}
+              </Button>
+              <Button
+                type="button"
+                onClick={() => { void runPreview(); }}
+                disabled={!canPreview}
+                variant="outline"
+                size="sm"
+                className="ds-command-import-button"
+              >
+                {state === 'previewing' && <Spinner />}
+                {t('common.preview')}
+              </Button>
+            </div>
+          )}
+        />
 
-        <div className="flex flex-wrap gap-1.5 text-[10px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-          <span className="ds-tag px-2 py-0.5 rounded-full">SKILL.md</span>
-          <span className="ds-tag px-2 py-0.5 rounded-full">references</span>
-          <span className="ds-tag px-2 py-0.5 rounded-full">templates</span>
-          <span className="ds-tag px-2 py-0.5 rounded-full">Shell MCP</span>
+        <div className="ds-command-import-hints">
+          <span>{t('sidepanel.localSkillImport.hintCommandFile')}</span>
+          <span>{t('sidepanel.localSkillImport.hintSupportingFiles')}</span>
+          <span>{t('sidepanel.localSkillImport.hintTemplates')}</span>
+          <span>{t('sidepanel.localSkillImport.localAccessTag')}</span>
         </div>
       </div>
 
       {preview && (
-        <div className="space-y-3">
+        <div className="ds-command-import-preview">
           <SourceSummary preview={preview} />
 
-          <div className="flex items-center justify-between gap-3">
-            <button
+          <div className="ds-command-selection-row">
+            <Button
               type="button"
               onClick={toggleAll}
-              className="ds-btn-secondary px-2.5 py-1.5 text-[11px] font-medium rounded-lg"
+              variant="outline"
+              size="sm"
             >
               {allSelected ? t('sidepanel.localSkillImport.clearSelection') : t('sidepanel.localSkillImport.selectAll')}
-            </button>
-            <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+            </Button>
+            <span>
               {t('sidepanel.localSkillImport.selectedSummary', {
                 selected: selectedCount,
                 total: preview.skills.length,
@@ -224,7 +242,7 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
             </span>
           </div>
 
-          <div className="space-y-2">
+          <div className="ds-command-preview-list">
             {preview.skills.map((skill) => (
               <PreviewSkillRow
                 key={skill.path}
@@ -235,23 +253,26 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
             ))}
           </div>
 
-          <div className="flex items-center justify-end gap-2">
-            <button
+          <div className="ds-command-form-actions">
+            <Button
               type="button"
               onClick={onCancel}
-              className="ds-btn-cancel px-3.5 py-1.5 text-xs font-medium rounded-lg"
+              variant="outline"
+              size="sm"
             >
               {t('common.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={runImport}
               disabled={!canImport}
-              className="ds-btn-primary px-4 py-1.5 text-xs font-medium rounded-lg disabled:opacity-40 flex items-center gap-1.5"
+              variant="default"
+              size="sm"
+              className="ds-command-import-button"
             >
               {state === 'importing' && <Spinner />}
               {t('sidepanel.localSkillImport.importSelected')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -272,26 +293,28 @@ function SourceSummary({ preview }: { preview: LocalSkillPreview }) {
   ];
 
   return (
-    <div className="ds-surface-panel rounded-xl p-3 space-y-2">
-      <div className="min-w-0">
-        <div className="text-xs font-semibold truncate" style={{ color: 'var(--ds-text)' }}>
+    <div className="ds-command-summary">
+      <div className="ds-command-summary-copy">
+        <div className="ds-command-summary-title">
           {source.displayName}
         </div>
-        <div className="text-[11px] mt-1 truncate" style={{ color: 'var(--ds-text-tertiary)' }}>
+        <div className="ds-command-summary-detail">
           {source.rootPath}
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-2 text-[11px]">
+      <div className="ds-command-meta-grid">
         <Meta label={t('sidepanel.localSkillImport.meta.skill')} value={String(preview.skills.length)} />
         <Meta label={t('sidepanel.localSkillImport.meta.mode')} value={t('sidepanel.localSkillImport.referencedMode')} />
       </div>
       {warnings.length > 0 && (
-        <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed" style={{ color: 'var(--ds-warning)', background: 'var(--ds-warning-bg)' }}>
-          {warnings.slice(0, 4).map((warning) => (
-            <div key={warning}>• {warning}</div>
-          ))}
-          {warnings.length > 4 && <div>• {t('sidepanel.localSkillImport.warningOverflow', { count: warnings.length - 4 })}</div>}
-        </div>
+        <Alert className="ds-command-status-message" data-tone="warning" role="status" aria-live="polite">
+          <AlertDescription>
+            {warnings.slice(0, 4).map((warning) => (
+              <div key={warning}>• {warning}</div>
+            ))}
+            {warnings.length > 4 && <div>• {t('sidepanel.localSkillImport.warningOverflow', { count: warnings.length - 4 })}</div>}
+          </AlertDescription>
+        </Alert>
       )}
     </div>
   );
@@ -303,49 +326,52 @@ function PreviewSkillRow({ skill, checked, onToggle }: {
   onToggle: () => void;
 }) {
   const { t } = useI18n();
+  const checkboxId = useId();
 
   return (
-    <label className="ds-card rounded-xl p-3 block cursor-pointer">
-      <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={onToggle}
-          className="mt-1 w-4 h-4"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 min-w-0">
-            <code className="ds-trigger text-[11px] font-mono font-semibold px-1.5 py-0.5 rounded truncate">
-              /{skill.importName}
-            </code>
-            {skill.nameChanged && (
-              <span className="ds-badge-warning inline-flex text-[10px] px-1.5 py-0.5 rounded-full font-medium">
-                {t('sidepanel.localSkillImport.renamedBadge')}
-              </span>
-            )}
-            {skill.version && (
-              <span className="ds-badge-info inline-flex text-[10px] px-1.5 py-0.5 rounded-full font-medium">
-                v{skill.version}
-              </span>
-            )}
-          </div>
-          <p className="text-xs mt-1.5 leading-relaxed line-clamp-2" style={{ color: 'var(--ds-text-secondary)' }}>
-            {skill.description}
-          </p>
-          <div className="flex flex-wrap gap-1.5 mt-2 text-[10px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-            <span className="ds-tag px-1.5 py-0.5 rounded-full">{skill.path}</span>
-            <span className="ds-tag px-1.5 py-0.5 rounded-full">{formatBytes(skill.bodyBytes)}</span>
-            <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.resourceCount', { count: skill.includedFiles.length })}</span>
-            {skill.scriptFiles.length > 0 && (
-              <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.scriptCount', { count: skill.scriptFiles.length })}</span>
-            )}
-            {skill.omittedFiles.length > 0 && (
-              <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.omittedCount', { count: skill.omittedFiles.length })}</span>
-            )}
-          </div>
+    <div className="ds-command-preview-row">
+      <Checkbox
+        id={checkboxId}
+        checked={checked}
+        onCheckedChange={() => onToggle()}
+        aria-label={skill.importName}
+        className="ds-command-preview-checkbox"
+      />
+      <label
+        className="ds-command-preview-copy"
+        htmlFor={checkboxId}
+        onClick={(event) => {
+          event.preventDefault();
+          onToggle();
+        }}
+      >
+        <div className="ds-command-preview-head">
+          <code className="ds-trigger">/{skill.importName}</code>
+          {skill.nameChanged && (
+            <Badge variant="secondary" className="ds-command-preview-badge">
+              {t('sidepanel.localSkillImport.renamedBadge')}
+            </Badge>
+          )}
+          {skill.version && (
+            <Badge variant="outline" className="ds-command-preview-badge">
+              v{skill.version}
+            </Badge>
+          )}
         </div>
-      </div>
-    </label>
+        <p>{skill.description}</p>
+        <div className="ds-command-preview-meta">
+          <span>{skill.path}</span>
+          <span>{formatBytes(skill.bodyBytes)}</span>
+          <span>{t('sidepanel.localSkillImport.resourceCount', { count: skill.includedFiles.length })}</span>
+          {skill.scriptFiles.length > 0 && (
+            <span>{t('sidepanel.localSkillImport.scriptCount', { count: skill.scriptFiles.length })}</span>
+          )}
+          {skill.omittedFiles.length > 0 && (
+            <span>{t('sidepanel.localSkillImport.omittedCount', { count: skill.omittedFiles.length })}</span>
+          )}
+        </div>
+      </label>
+    </div>
   );
 }
 
@@ -357,50 +383,34 @@ function StatusMessage({ state, message, result }: {
   const { t } = useI18n();
   const success = state === 'success';
   return (
-    <div
-      className="rounded-lg px-3 py-2 text-[11px] leading-relaxed"
-      style={{
-        color: success ? 'var(--ds-success)' : 'var(--ds-danger)',
-        background: success ? 'var(--ds-success-bg)' : 'var(--ds-danger-bg)',
-      }}
+    <Alert
+      className="ds-command-status-message"
+      data-tone={success ? 'neutral' : 'danger'}
+      variant={success ? 'default' : 'destructive'}
+      role={success ? 'status' : 'alert'}
+      aria-live={success ? 'polite' : 'assertive'}
     >
-      <div>{message}</div>
-      {result && result.renamed > 0 && (
-        <div>{t('sidepanel.localSkillImport.renamedNotice', { count: result.renamed })}</div>
-      )}
-    </div>
+      <AlertDescription>
+        <div>{message}</div>
+        {result && result.renamed > 0 && (
+          <div>{t('sidepanel.localSkillImport.renamedNotice', { count: result.renamed })}</div>
+        )}
+      </AlertDescription>
+    </Alert>
   );
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg px-2 py-1.5" style={{ background: 'var(--ds-bg)' }}>
-      <div className="text-[10px]" style={{ color: 'var(--ds-text-tertiary)' }}>{label}</div>
-      <div className="text-[11px] font-medium truncate" style={{ color: 'var(--ds-text)' }}>{value}</div>
+    <div className="ds-command-meta">
+      <div>{label}</div>
+      <strong>{value}</strong>
     </div>
   );
 }
 
 function Spinner() {
   return <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />;
-}
-
-function FolderPickerIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className="w-3.5 h-3.5"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 7.5V17a2.5 2.5 0 0 0 2.5 2.5h13A2.5 2.5 0 0 0 21 17V9.5A2.5 2.5 0 0 0 18.5 7H12l-2-2.5H5.5A2.5 2.5 0 0 0 3 7.5Z" />
-      <path d="M8 13h8" />
-    </svg>
-  );
 }
 
 function formatBytes(bytes: number): string {

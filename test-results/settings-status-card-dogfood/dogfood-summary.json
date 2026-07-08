@@ -1,0 +1,20 @@
+{
+  "url": "http://127.0.0.1:50361/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/settings-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened Settings through shadcn CommandDialog",
+    "Settings status Card/Header/Title/Description/Action/Content slots verified",
+    "Settings status Badge variants verified for ready and source-failure states",
+    "Settings View dropdown opened and changed current view to Data",
+    "source failure rendered sanitized Settings need refresh details with no duplicate warning retry",
+    "status-card Retry recovered through keyboard Enter and reloaded API status",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

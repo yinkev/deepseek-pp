@@ -1,0 +1,159 @@
+{
+  "url": "http://127.0.0.1:60625/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/deepseek-pp/test-results/dogfood-scroll-rail",
+  "filterChecks": {
+    "activeCards": [
+      "Ready daily evidence sweep",
+      "Third visual monitor audit"
+    ],
+    "pausedCards420": [
+      "Paused project memory review"
+    ],
+    "allCards": [
+      "Ready daily evidence sweep",
+      "Paused project memory review",
+      "Third visual monitor audit"
+    ],
+    "pausedCards360": [
+      "Paused project memory review"
+    ],
+    "allCards360": [
+      "Ready daily evidence sweep",
+      "Paused project memory review",
+      "Third visual monitor audit"
+    ]
+  },
+  "checks": {
+    "360": {
+      "rootOverflow": {
+        "viewport": 360,
+        "body": 360,
+        "doc": 360,
+        "overflow": false
+      },
+      "railInfo": {
+        "count": 4,
+        "byLabel": {
+          "Automation filters": {
+            "hasViewport": true,
+            "hasHorizontal": true,
+            "verticalDisplay": "none",
+            "clientWidth": 336,
+            "scrollWidth": 336,
+            "rowScrollWidth": 336,
+            "rowClientWidth": 336,
+            "chipWidths": [],
+            "scrollLeft": 0
+          },
+          "Automation card details": {
+            "hasViewport": true,
+            "hasHorizontal": true,
+            "verticalDisplay": "none",
+            "clientWidth": 310,
+            "scrollWidth": 1082,
+            "rowScrollWidth": 1082,
+            "rowClientWidth": 1082,
+            "chipWidths": [
+              118,
+              118,
+              122,
+              118,
+              123,
+              118,
+              186,
+              137
+            ],
+            "scrollLeft": 0
+          }
+        }
+      },
+      "leaks": [],
+      "visibleCards": [
+        "Ready daily evidence sweep",
+        "Paused project memory review",
+        "Third visual monitor audit"
+      ],
+      "messageTypes": [
+        "GET_DEEPSEEK_THEME",
+        "GET_PERSONAL_CONVENIENCE_CONFIG",
+        "GET_RUNTIME_DOCTOR_REPORT",
+        "GET_PROJECT_CONTEXT_STATE",
+        "GET_CURRENT_DEEPSEEK_CONVERSATION",
+        "GET_PROMPT_INJECTION_SETTINGS",
+        "GET_TOOL_DESCRIPTORS",
+        "GET_AUTH_STATUS",
+        "GET_OFFICIAL_API_CHAT_CONFIG",
+        "GET_VOICE_SETTINGS",
+        "GET_AUTOMATIONS",
+        "GET_AUTOMATION_RUNS_BATCH"
+      ]
+    },
+    "420": {
+      "rootOverflow": {
+        "viewport": 420,
+        "body": 420,
+        "doc": 420,
+        "overflow": false
+      },
+      "railInfo": {
+        "count": 4,
+        "byLabel": {
+          "Automation filters": {
+            "hasViewport": true,
+            "hasHorizontal": true,
+            "verticalDisplay": "none",
+            "clientWidth": 396,
+            "scrollWidth": 396,
+            "rowScrollWidth": 396,
+            "rowClientWidth": 396,
+            "chipWidths": [],
+            "scrollLeft": 0
+          },
+          "Automation card details": {
+            "hasViewport": true,
+            "hasHorizontal": true,
+            "verticalDisplay": "none",
+            "clientWidth": 370,
+            "scrollWidth": 1082,
+            "rowScrollWidth": 1082,
+            "rowClientWidth": 1082,
+            "chipWidths": [
+              118,
+              118,
+              122,
+              118,
+              123,
+              118,
+              186,
+              137
+            ],
+            "scrollLeft": 0
+          }
+        }
+      },
+      "leaks": [],
+      "visibleCards": [
+        "Ready daily evidence sweep",
+        "Paused project memory review",
+        "Third visual monitor audit"
+      ],
+      "messageTypes": [
+        "GET_DEEPSEEK_THEME",
+        "GET_PERSONAL_CONVENIENCE_CONFIG",
+        "GET_RUNTIME_DOCTOR_REPORT",
+        "GET_PROJECT_CONTEXT_STATE",
+        "GET_CURRENT_DEEPSEEK_CONVERSATION",
+        "GET_PROMPT_INJECTION_SETTINGS",
+        "GET_TOOL_DESCRIPTORS",
+        "GET_AUTH_STATUS",
+        "GET_OFFICIAL_API_CHAT_CONFIG",
+        "GET_VOICE_SETTINGS",
+        "GET_AUTOMATIONS",
+        "GET_AUTOMATION_RUNS_BATCH"
+      ]
+    }
+  },
+  "activeElementAfterTabs": "\n  DDeepSeek++Needs setupMenuAskProjectsContextMissionActivityReviewSystem sectionAutomationAutomation3 tasks, 2 activeSave repeatable runs, launch them manually, or schedule them when the stop rule is clear.Prepare allTemplatesChat target: Use current chatNewReady3Attention0Blocked0Running0[data-radix-scroll-area-viewport]{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}[data-radix-scroll-area-viewport]::-webkit-scrollbar{display:none}All3Active2Paused1Blocked0Ready daily evidence sweepActiveCollect the latest evidence, summarize changes, and return a review-ready note.[data-radix-scroll-area-viewport]{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}[data-radix-scroll-area-viewport]::-webkit-scrollbar{display:none}Next07/01, 07:55 PMPrevious07/01, 06:40 PMChatReadyRecentNoneVisualMonitor onChain1 nextChat targetUse current chatReadinessA · ReadyOpen sessionRun nowPaused project memory reviewPausedReview project memories and flag stale or conflicting notes.[data-radix-scroll-area-viewport]{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}[data-radix-scroll-area-viewport]::-webkit-scrollbar{display:none}NextNonePreviousNoneChatNot createdRecentNoneVisualMonitor offChainOffChat targetUse current chatReadinessA · ReadyOpen sessionRun nowThird visual monitor auditActiveCheck whether the visual monitor path still has evidence before next run.[data-radix-scroll-area-viewport]{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}[data-radix-scroll-area-viewport]::-webkit-scrollbar{display:none}NextNonePreviousNoneChatNot createdRecentNoneVisualMonitor onChainOffChat targetUse current chatReadinessA · ReadyOpen sessionRun now\n\n\n",
+  "consoleErrors": [],
+  "pageErrors": []
+}

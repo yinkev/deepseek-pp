@@ -1,0 +1,35 @@
+{
+  "url": "http://127.0.0.1:53550/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/automation-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened Automation through shadcn CommandDialog",
+    "Automation status Card/Header/Title/Description/Action/Content slots verified",
+    "Automation status Badge variants verified for empty, ready, blocked, load-failure, and history-failure states",
+    "command launcher objective used a shadcn Textarea Field, accepted typed text, and opened the repair-and-verify form with preserved long-loop budget values",
+    "workflow template Use buttons opened the real edit-before-save form",
+    "automation list search, template search, form name, visual refs, prompt, schedule expression, timezone, and chain fallback fields rendered as shadcn Field/Input/Textarea slots",
+    "form text controls accepted real typing, and the manual schedule expression field was disabled until Cron was selected",
+    "form Attach image, Cancel, and Create actions rendered as shadcn Button slots",
+    "readiness Prepare run, Apply safe fixes, and Loop contract actions rendered as shadcn Button slots and were clicked",
+    "header Prepare all, Templates, and New actions rendered as shadcn Button slots and Prepare all invoked runtime update",
+    "card Open session, Prepare run, and Run now actions rendered as shadcn Button slots",
+    "model, trigger, and template category dropdowns rendered as shadcn Select slots and were opened/changed",
+    "search and deep-thinking switches rendered as shadcn Switch slots, locked under visual routing, and toggled after unlock",
+    "filter chips and chain targets rendered as shadcn ToggleGroup items and were toggled",
+    "attachment remove rendered as an icon-xs shadcn Button and removed the image chip",
+    "card status/edit/delete controls rendered as shadcn Button composition under tooltip triggers",
+    "empty state opens the real create form from the status card",
+    "blocked status action filters to blocked tasks",
+    "load failure rendered a focused retry action and recovered through keyboard Enter",
+    "run-history failure kept saved automations visible and recovered through keyboard Enter",
+    "stored and action failures rendered sanitized copy",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

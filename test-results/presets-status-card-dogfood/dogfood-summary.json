@@ -1,0 +1,25 @@
+{
+  "url": "http://127.0.0.1:59487/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/presets-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu navigation opened Presets and Escape closed the menu",
+    "Preset status Card/Header/Title/Description/Action/Content/Footer slots verified",
+    "Preset status Badge variants verified for ready, empty, inactive, and source-failure states",
+    "Preset row Badge variants and header Button icon slots verified",
+    "Import action exercised the hidden file input and SAVE_PRESET payload matched imported markdown",
+    "status-card New action opened the real create form",
+    "form typed and submitted through visible Save action",
+    "SAVE_PRESET payload matched typed values",
+    "Use action updated active preset payload and visible ready state",
+    "library-load failure showed one status-card Retry with sanitized visible text",
+    "selection-load failure preserved visible preset rows and recovered through keyboard Enter on Retry",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

@@ -1,5 +1,6 @@
 import { DPP_MANAGED_AGENT_PROMPT_MARKER } from '../constants';
 import { BROWSER_CONTROL_TOOL_NAMES } from '../browser-control/types';
+import { localeResources } from '../i18n';
 import { replaceTaskCompleteBlocks } from '../inline-agent/prompt';
 import { sanitizeInternalPromptText } from '../prompt';
 import type { ToolCall, ToolCallRestoreRecord, ToolDescriptor } from '../types';
@@ -34,6 +35,10 @@ const LEGACY_XML_TOOL_CALLS_MARKER_RE = /<\s*\/?\s*tool_calls\s*>/;
 const LEGACY_XML_TOOL_CALLS_OPEN_RE = /<\s*tool_calls\s*>/g;
 const LEGACY_XML_TOOL_CALLS_CLOSE_RE = /<\s*\/\s*tool_calls\s*>/g;
 const LEGACY_XML_INVOKE_NAME_RE = /<\s*invoke\s+name=(["'])([^"']+)\1/g;
+const ZH_TOOL_RESULTS_CONTINUATION_PREFIX = localeResources['zh-CN'].background.chat.continueWithToolResults
+  .split('[/TOOL_RESULTS]')[1]
+  ?.trim()
+  .split('\u3002')[0] ?? '';
 
 interface LightweightToolBlock {
   start: number;
@@ -786,7 +791,7 @@ function isInternalManagedAgentContent(content: string): boolean {
 function isSystemToolContinuationPrompt(content: string): boolean {
   if (!content.includes('[TOOL_RESULTS]') || !content.includes('[/TOOL_RESULTS]')) return false;
   return content.includes('Continue from the tool results above') ||
-    content.includes('请根据上述工具执行结果继续');
+    (ZH_TOOL_RESULTS_CONTINUATION_PREFIX.length > 0 && content.includes(ZH_TOOL_RESULTS_CONTINUATION_PREFIX));
 }
 
 function isInlineAgentContinuationPrompt(content: string): boolean {

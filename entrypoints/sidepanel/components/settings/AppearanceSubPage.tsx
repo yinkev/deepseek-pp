@@ -1,71 +1,82 @@
 import type { PetPosition } from '../../../../core/types';
 import { SVG_PATHS } from '../../constants';
 import { useI18n } from '../../i18n';
-import { SettingsSection, Slider, ToggleRow } from './primitives';
+import { SettingsSection, SettingsSegmentedGroup, Slider, StatusMessage, TextField, ToggleRow } from './primitives';
 import type { SettingsState } from './useSettingsState';
+
+type SelectablePetPosition = Exclude<PetPosition, 'custom'>;
 
 export default function AppearanceSubPage({ state }: { state: SettingsState }) {
   const { t } = useI18n();
 
-  const petPositionItems: Array<{ key: PetPosition; label: string }> = [
+  const petPositionItems: Array<{ key: SelectablePetPosition; label: string }> = [
     { key: 'bottom-right', label: t('sidepanel.settings.positionBottomRight') },
     { key: 'bottom-left', label: t('sidepanel.settings.positionBottomLeft') },
   ];
-  if (state.petPosition === 'custom') {
-    petPositionItems.push({ key: 'custom', label: t('sidepanel.settings.positionCustom') });
-  }
-  const petPositionGridClass = `grid gap-2 ${state.petPosition === 'custom' ? 'grid-cols-3' : 'grid-cols-2'}`;
+  const isCustomPetPosition = state.petPosition === 'custom';
+  const selectedPetPosition: SelectablePetPosition | null =
+    state.petPosition === 'custom' ? null : state.petPosition;
+  const saveFailed = t('sidepanel.settings.saveFailed');
+  const clearFailed = t('sidepanel.settings.clearFailed');
 
   return (
     <div className="space-y-5">
+      {state.appearanceMessage && (
+        <StatusMessage tone="error">{state.appearanceMessage}</StatusMessage>
+      )}
+
       <SettingsSection
         title={t('sidepanel.settings.backgroundSection')}
         description={t('sidepanel.settings.customBackgroundDescription')}
       >
         <ToggleRow
           title={t('sidepanel.settings.customBackground')}
-          description={t('sidepanel.settings.customBackgroundDescription')}
           enabled={state.bgEnabled}
           disabled={!state.bgPreview}
-          onToggle={state.handleBgToggle}
+          onToggle={(enabled) => void state.handleBgToggle(enabled, saveFailed)}
         />
 
-        <div className="flex gap-2">
+        <div className="ds-settings-control-group">
+          <div className="ds-field-label-row">
+            <span className="ds-field-label-text">
+              {t('sidepanel.settings.backgroundSource')}
+            </span>
+          </div>
           <input
             ref={state.fileInputRef}
             type="file"
             accept="image/*"
             className="hidden"
-            onChange={state.handleFileSelect}
+            onChange={(event) => void state.handleFileSelect(event, saveFailed)}
           />
-          <button
-            onClick={() => state.fileInputRef.current?.click()}
-            className="ds-btn-secondary flex-1 py-2 text-[11px] font-medium rounded-lg transition-all duration-150 flex items-center justify-center gap-1.5"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d={SVG_PATHS.upload} />
-            </svg>
-            {t('sidepanel.settings.uploadImage')}
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          <input
-            type="url"
-            placeholder={t('sidepanel.settings.imageUrlPlaceholder')}
-            value={state.bgUrl}
-            onChange={(e) => state.setBgUrl(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && state.handleUrlConfirm()}
-            className="w-full px-3 py-2 text-xs rounded-lg border outline-none transition-colors focus:border-[var(--ds-blue)]"
-            style={{ background: 'var(--ds-bg)', borderColor: 'var(--ds-border)', color: 'var(--ds-text)' }}
-          />
-          <button
-            onClick={state.handleUrlConfirm}
-            disabled={!state.bgUrl.trim()}
-            className="ds-btn-secondary shrink-0 px-3 py-2 text-[11px] font-medium rounded-lg transition-all duration-150 disabled:opacity-40"
-          >
-            {t('common.confirm')}
-          </button>
+          <div className="ds-background-source-row">
+            <button
+              onClick={() => state.fileInputRef.current?.click()}
+              className="ds-btn-secondary ds-background-upload-button"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d={SVG_PATHS.upload} />
+              </svg>
+              {t('sidepanel.settings.uploadImage')}
+            </button>
+            <TextField
+              label={t('sidepanel.settings.imageUrl')}
+              type="url"
+              placeholder={t('sidepanel.settings.imageUrlPlaceholder')}
+              value={state.bgUrl}
+              onChange={state.setBgUrl}
+              onKeyDown={(e) => e.key === 'Enter' && void state.handleUrlConfirm(saveFailed)}
+              trailing={
+                <button
+                  onClick={() => void state.handleUrlConfirm(saveFailed)}
+                  disabled={!state.bgUrl.trim()}
+                  className="ds-btn-secondary shrink-0 px-3 py-2 text-[11px] font-medium rounded-lg transition-all duration-150 disabled:opacity-40"
+                >
+                  {t('common.confirm')}
+                </button>
+              }
+            />
+          </div>
         </div>
 
         {state.bgPreview && (
@@ -101,12 +112,12 @@ export default function AppearanceSubPage({ state }: { state: SettingsState }) {
           max={1}
           step={0.05}
           format={(v) => v.toFixed(2)}
-          onChange={state.handleOpacityChange}
+          onChange={(value) => state.handleOpacityChange(value, saveFailed)}
         />
 
         {state.bgPreview && (
           <button
-            onClick={state.handleClearBg}
+            onClick={() => void state.handleClearBg(clearFailed)}
             className="ds-btn-danger w-full py-2 text-[11px] font-medium rounded-lg transition-all duration-150"
           >
             {t('sidepanel.settings.clearBackground')}
@@ -120,34 +131,27 @@ export default function AppearanceSubPage({ state }: { state: SettingsState }) {
       >
         <ToggleRow
           title={t('sidepanel.settings.petWhale')}
-          description={t('sidepanel.settings.petWhaleDescription')}
           enabled={state.petEnabled}
-          onToggle={state.handlePetToggle}
+          onToggle={(enabled) => void state.handlePetToggle(enabled, saveFailed)}
         />
 
-        <div className={petPositionGridClass}>
-          {petPositionItems.map((item) => {
-            const active = state.petPosition === item.key;
-            return (
-              <button
-                key={item.key}
-                onClick={() => {
-                  if (item.key !== 'custom') void state.handlePetPositionChange(item.key as Exclude<PetPosition, 'custom'>);
-                }}
-                className={[
-                  'py-2 text-[11px] font-medium rounded-lg border transition-all duration-150',
-                  item.key === 'custom' ? 'cursor-default' : '',
-                ].filter(Boolean).join(' ')}
-                style={{
-                  background: active ? 'var(--ds-blue-light)' : 'var(--ds-bg)',
-                  color: active ? 'var(--ds-blue)' : 'var(--ds-text-secondary)',
-                  borderColor: active ? 'var(--ds-selected-border)' : 'var(--ds-border)',
-                }}
-              >
-                {item.label}
-              </button>
-            );
-          })}
+        <div className="ds-settings-control-group">
+          <div className="ds-field-label-row">
+            <span className="ds-field-label-text">
+              {t('sidepanel.settings.petPosition')}
+            </span>
+            {isCustomPetPosition && (
+              <span className="ds-settings-field-state" data-state="custom">
+                {t('sidepanel.settings.positionCustom')}
+              </span>
+            )}
+          </div>
+          <SettingsSegmentedGroup<SelectablePetPosition>
+            ariaLabel={t('sidepanel.settings.petPosition')}
+            options={petPositionItems.map((item) => ({ value: item.key, label: item.label }))}
+            value={selectedPetPosition}
+            onChange={(position) => void state.handlePetPositionChange(position, saveFailed)}
+          />
         </div>
 
         <Slider
@@ -157,7 +161,7 @@ export default function AppearanceSubPage({ state }: { state: SettingsState }) {
           max={220}
           step={4}
           format={(v) => `${v}px`}
-          onChange={state.handlePetSizeChange}
+          onChange={(value) => state.handlePetSizeChange(value, saveFailed)}
         />
 
         <Slider
@@ -167,14 +171,14 @@ export default function AppearanceSubPage({ state }: { state: SettingsState }) {
           max={1}
           step={0.05}
           format={(v) => v.toFixed(2)}
-          onChange={state.handlePetOpacityChange}
+          onChange={(value) => state.handlePetOpacityChange(value, saveFailed)}
         />
 
         <ToggleRow
           title={t('sidepanel.settings.petMotion')}
           description={t('sidepanel.settings.petMotionDescription')}
           enabled={state.petMotion}
-          onToggle={state.handlePetMotionToggle}
+          onToggle={(motion) => void state.handlePetMotionToggle(motion, saveFailed)}
         />
       </SettingsSection>
     </div>

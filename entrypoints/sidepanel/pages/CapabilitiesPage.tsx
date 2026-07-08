@@ -1,29 +1,23 @@
-import { useState } from 'react';
-import type { LocaleMessageKey } from '../../../core/i18n';
+import { useState, type ReactNode } from 'react';
+import WorkbenchSelect from '../components/WorkbenchSelect';
 import AutomationPage from './AutomationPage';
 import BrowserControlPage from './BrowserControlPage';
 import McpPage from './McpPage';
 import PresetPage from './PresetPage';
 import RuntimeDoctorPage from './RuntimeDoctorPage';
-import SkillPage from './SkillPage';
 import ToolsPage from './ToolsPage';
 import { useI18n } from '../i18n';
 import type { CapabilitiesSubTab } from '../navigation';
-import { useHorizontalScrollHints } from '../use-horizontal-scroll-hints';
+import { SYSTEM_CAPABILITY_ITEMS } from '../sidebar-v2';
 
-const SUB_TABS: { key: CapabilitiesSubTab; labelKey: LocaleMessageKey; titleKey?: LocaleMessageKey }[] = [
-  { key: 'skill', labelKey: 'sidepanel.capabilitiesPage.tabs.skill' },
-  { key: 'mcp', labelKey: 'sidepanel.capabilitiesPage.tabs.mcp' },
-  { key: 'tools', labelKey: 'sidepanel.capabilitiesPage.tabs.tools' },
-  { key: 'browser', labelKey: 'sidepanel.capabilitiesPage.tabs.browser' },
-  { key: 'doctor', labelKey: 'sidepanel.capabilitiesPage.tabs.doctor' },
-  { key: 'preset', labelKey: 'sidepanel.capabilitiesPage.tabs.preset' },
-  {
-    key: 'automation',
-    labelKey: 'sidepanel.capabilitiesPage.tabs.automation',
-    titleKey: 'sidepanel.capabilitiesPage.tabs.automationFull',
-  },
-];
+const CAPABILITY_PAGE_RENDERERS: Record<CapabilitiesSubTab, () => ReactNode> = {
+  automation: () => <AutomationPage />,
+  preset: () => <PresetPage />,
+  browser: () => <BrowserControlPage />,
+  mcp: () => <McpPage />,
+  tools: () => <ToolsPage />,
+  doctor: () => <RuntimeDoctorPage />,
+};
 
 export default function CapabilitiesPage({
   activeSubTab,
@@ -32,9 +26,8 @@ export default function CapabilitiesPage({
   activeSubTab?: CapabilitiesSubTab;
   onSubTabChange?: (tab: CapabilitiesSubTab) => void;
 }) {
-  const [localSub, setLocalSub] = useState<CapabilitiesSubTab>('skill');
+  const [localSub, setLocalSub] = useState<CapabilitiesSubTab>('mcp');
   const { t } = useI18n();
-  const subTabs = useHorizontalScrollHints<HTMLElement>({ compact: false });
   const sub = activeSubTab ?? localSub;
 
   const setSub = (next: CapabilitiesSubTab) => {
@@ -43,34 +36,64 @@ export default function CapabilitiesPage({
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <nav
-        ref={subTabs.ref}
-        className={`sub-tabs${subTabs.className ? ` ${subTabs.className}` : ''}`}
-        aria-label={t('sidepanel.capabilitiesPage.navLabel')}
-      >
-        {SUB_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setSub(tab.key)}
-            className={`sub-tab${sub === tab.key ? ' sub-tab-active' : ''}`}
-            title={t(tab.titleKey ?? tab.labelKey)}
-          >
-            {t(tab.labelKey)}
-          </button>
-        ))}
-      </nav>
+    <div className="ds-capabilities-shell">
+      <div className="ds-capabilities-toolbar">
+        <CapabilitiesSectionPicker
+          value={sub}
+          label={t('sidepanel.capabilitiesPage.navLabel')}
+          onChange={setSub}
+        />
+      </div>
 
-      <div className="flex-1 overflow-y-auto">
-        {sub === 'skill' && <SkillPage />}
-        {sub === 'mcp' && <McpPage />}
-        {sub === 'tools' && <ToolsPage />}
-        {sub === 'browser' && <BrowserControlPage />}
-        {sub === 'doctor' && <RuntimeDoctorPage />}
-        {sub === 'preset' && <PresetPage />}
-        {sub === 'automation' && <AutomationPage />}
+      <div className="ds-capabilities-content">
+        {CAPABILITY_PAGE_RENDERERS[sub]()}
       </div>
     </div>
+  );
+}
+
+function CapabilitiesSectionPicker({
+  value,
+  label,
+  onChange,
+}: {
+  value: CapabilitiesSubTab;
+  label: string;
+  onChange: (tab: CapabilitiesSubTab) => void;
+}) {
+  const { t } = useI18n();
+  const groups = SYSTEM_CAPABILITY_ITEMS.reduce<Array<{
+    key: string;
+    label: string;
+    items: typeof SYSTEM_CAPABILITY_ITEMS[number][];
+  }>>((acc, item) => {
+    const group = acc.find((entry) => entry.key === item.groupKey);
+    if (group) {
+      group.items.push(item);
+    } else {
+      acc.push({
+        key: item.groupKey,
+        label: t(item.groupKey),
+        items: [item],
+      });
+    }
+    return acc;
+  }, []);
+
+  return (
+    <WorkbenchSelect
+      className="ds-capabilities-picker"
+      label={label}
+      value={value}
+      onChange={onChange}
+      groups={groups.map((group) => ({
+        key: group.key,
+        label: group.label,
+        items: group.items.map((item) => ({
+          value: item.capabilitiesSubTab,
+          label: t(item.labelKey),
+        })),
+      }))}
+    />
   );
 }

@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "url": "http://127.0.0.1:60298/sidepanel.html",
+  "widths": [
+    420,
+    360
+  ],
+  "screenshots": [
+    "ask-disabled-420.png",
+    "ask-disabled-api-settings-420.png",
+    "ask-enabled-after-keyboard-420.png",
+    "ask-needs-setup-420.png",
+    "ask-checking-420.png",
+    "ask-menu-open-420.png",
+    "ask-slash-420.png",
+    "ask-context-420.png",
+    "ask-slash-failure-420.png",
+    "ask-slash-recovered-420.png",
+    "ask-context-failure-420.png",
+    "ask-context-recovered-420.png",
+    "ask-disabled-360.png",
+    "ask-disabled-api-settings-360.png",
+    "ask-enabled-after-keyboard-360.png",
+    "ask-needs-setup-360.png",
+    "ask-checking-360.png",
+    "ask-menu-open-360.png",
+    "ask-slash-360.png",
+    "ask-context-360.png",
+    "ask-slash-failure-360.png",
+    "ask-slash-recovered-360.png",
+    "ask-context-failure-360.png",
+    "ask-context-recovered-360.png"
+  ],
+  "checks": [
+    "production bundle served from dist/chrome-mv3/sidepanel.html",
+    "disabled Ask setup shadcn Card/Badge/Button slots",
+    "API Settings navigation from disabled setup",
+    "keyboard Enter enable flow and persisted storage write",
+    "needs-setup Open DeepSeek action",
+    "checking state Skeleton rows",
+    "enabled composer, menu Escape, slash suggestions, context suggestions",
+    "slash and context source-failure Alert/Button states with keyboard retry recovery",
+    "DOM overflow, console/page errors, and visible leak scans"
+  ]
+}

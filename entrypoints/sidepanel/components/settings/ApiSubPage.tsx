@@ -1,10 +1,19 @@
 import { useI18n } from '../../i18n';
-import { SettingsSection, StatusBadge, StatusMessage, TextField, ToggleRow, useConfirm } from './primitives';
+import { SettingsSection, StatusMessage, TextField, useConfirm } from './primitives';
 import type { SettingsState } from './useSettingsState';
 
 export default function ApiSubPage({ state }: { state: SettingsState }) {
   const { t } = useI18n();
   const { confirm, node: confirmNode } = useConfirm();
+  const apiStatusLabel = state.apiKeyConfigured
+    ? t('sidepanel.settings.configured')
+    : t('sidepanel.settings.notConfigured');
+  const openaiStatusLabel = state.multimodalConfigured.openaiConfigured
+    ? t('sidepanel.settings.configured')
+    : t('sidepanel.settings.notConfigured');
+  const geminiStatusLabel = state.multimodalConfigured.geminiConfigured
+    ? t('sidepanel.settings.configured')
+    : t('sidepanel.settings.notConfigured');
 
   const handleClearApiKey = async () => {
     const ok = await confirm({
@@ -27,23 +36,16 @@ export default function ApiSubPage({ state }: { state: SettingsState }) {
         title="DeepSeek API Key"
         description={t('sidepanel.settings.apiKeyDescription')}
       >
-        <div className="flex justify-between items-start gap-3">
-          <div>
-            <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
-              DeepSeek API Key
-            </div>
-            <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
-              {t('sidepanel.settings.apiKeyDescription')}
-            </div>
-          </div>
-          <StatusBadge
-            configured={state.apiKeyConfigured}
-            configuredLabel={t('sidepanel.settings.configured')}
-            notConfiguredLabel={t('sidepanel.settings.notConfigured')}
-          />
-        </div>
-
         <TextField
+          label="DeepSeek API Key"
+          meta={
+            <span
+              className="ds-settings-field-state"
+              data-state={state.apiKeyConfigured ? 'configured' : 'not-configured'}
+            >
+              {apiStatusLabel}
+            </span>
+          }
           type="password"
           value={state.apiKeyInput}
           placeholder={state.apiKeyConfigured ? t('sidepanel.settings.apiKeyReplacePlaceholder') : 'sk-...'}
@@ -89,30 +91,17 @@ export default function ApiSubPage({ state }: { state: SettingsState }) {
         title={t('sidepanel.settings.multimodalApi')}
         description={t('sidepanel.settings.multimodalApiDescription')}
       >
-        <div className="flex justify-between items-start gap-3">
-          <div className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-            {t('sidepanel.settings.multimodalApiDescription')}
-          </div>
-          <div className="flex flex-col gap-1 shrink-0">
-            <StatusBadge
-              configured={state.multimodalConfigured.openaiConfigured}
-              configuredLabel={`OpenAI ${t('sidepanel.settings.configured')}`}
-              notConfiguredLabel={`OpenAI ${t('sidepanel.settings.notConfigured')}`}
-            />
-            <StatusBadge
-              configured={state.multimodalConfigured.geminiConfigured}
-              configuredLabel={`Gemini ${t('sidepanel.settings.configured')}`}
-              notConfiguredLabel={`Gemini ${t('sidepanel.settings.notConfigured')}`}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 pt-2 border-t" style={{ borderColor: 'var(--ds-border)' }}>
-          <div className="text-[10px] font-medium uppercase tracking-wide" style={{ color: 'var(--ds-text-tertiary)' }}>
-            API Keys
-          </div>
+        <div className="grid grid-cols-1 gap-2">
           <TextField
             label="OpenAI API Key"
+            meta={
+              <span
+                className="ds-settings-field-state"
+                data-state={state.multimodalConfigured.openaiConfigured ? 'configured' : 'not-configured'}
+              >
+                {openaiStatusLabel}
+              </span>
+            }
             type="password"
             value={state.openaiApiKeyInput}
             placeholder={state.multimodalConfigured.openaiConfigured ? t('sidepanel.settings.openaiKeyReplacePlaceholder') : 'sk-...'}
@@ -120,6 +109,14 @@ export default function ApiSubPage({ state }: { state: SettingsState }) {
           />
           <TextField
             label="Gemini API Key"
+            meta={
+              <span
+                className="ds-settings-field-state"
+                data-state={state.multimodalConfigured.geminiConfigured ? 'configured' : 'not-configured'}
+              >
+                {geminiStatusLabel}
+              </span>
+            }
             type="password"
             value={state.geminiApiKeyInput}
             placeholder={state.multimodalConfigured.geminiConfigured ? t('sidepanel.settings.geminiKeyReplacePlaceholder') : 'AIza...'}

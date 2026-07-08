@@ -1,0 +1,16 @@
+# Automation Status Card Dogfood
+
+Evidence source: production bundle `dist/chrome-mv3/sidepanel.html` served locally with a contract-shaped Chrome runtime/storage stub.
+
+1. Command launcher - healthy. The real command menu opened Automation, the objective field was a shadcn Textarea inside a Field and accepted typed text, the launcher `准备运行` button opened the repair-and-verify form, and the long-loop timeout/tool-budget values stayed visible.
+2. Empty Automation and templates - healthy. The shadcn status Card rendered `无任务`, the shadcn Empty state rendered, template search was a shadcn Input inside a Field and accepted typed filtering, template `使用` opened the real edit-before-save form, and Attach image / Cancel / Create were shadcn Button slots.
+3. Readiness actions - healthy. A text workflow produced visible readiness issues, then `准备运行`, `应用安全修正`, and `补强循环` rendered as shadcn Button slots and responded to clicks.
+4. Blocked header and card actions - healthy. Header `全部准备`, `模板`, and `新建` rendered as shadcn Button slots, card Open session / Prepare run / Run now controls rendered as shadcn Button slots, templates opened, the template category Select opened and changed, and Prepare all invoked a runtime update.
+5. Remaining form controls - healthy. Name, visual refs, prompt, schedule expression, timezone, and chain fallback controls were shadcn Field/Input/Textarea slots; typed values landed in the controls; the manual expression field stayed disabled until Cron was selected; model and trigger Select controls opened and changed; search/deep-thinking Switch controls were locked under visual routing, unlocked after visual capture was disabled, and toggled on. Attachment remove used an icon shadcn Button, chain targets used shadcn ToggleGroup multi-select, and both responded to real clicks.
+6. Filter and icon controls - healthy. Automation filters used shadcn ToggleGroup single-select, and card status/edit/delete actions used shadcn Button composition under tooltip triggers.
+7. Blocked task routing - healthy. The status card showed `已阻塞`, routed to the blocked filter, and kept only the blocked task visible.
+8. Load failure and recovery - healthy. The status card showed `需要刷新`, the Alert used sanitized fallback copy, and keyboard Enter recovered the task list.
+9. Run-history failure and recovery - healthy. Saved tasks stayed visible while recent runs failed, and keyboard Enter refreshed history without leaking raw runtime text.
+10. Stored/action failure redaction - healthy. Stored last-error and Run now failure both showed sanitized copy while preserving the task row.
+
+Checked: 420px and 360px, command menu, command launcher, Automation search, template search, name/visual refs/prompt/expression/timezone/chain fields, disabled/enabled expression state, template picker, model Select, trigger Select, category Select, search/deep-thinking Switch controls, form actions, attachment removal, chain target toggles, filter toggles, icon tooltips, readiness actions, header actions, card actions, status Card slots, Badge variants, Empty/Alert slots, create form opening, blocked filtering, keyboard Enter retries, run action failure, DOM overflow, console/page errors, and visible leak patterns.

@@ -1,4 +1,40 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentProps } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import {
+  Field,
+  FieldContent,
+  FieldLabel,
+} from '@/components/ui/field';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { PauseIcon, PencilIcon, PlayIcon, PlusIcon, Trash2Icon, XIcon, type LucideIcon } from 'lucide-react';
 import type {
   Automation,
   AutomationCreateInput,
@@ -42,9 +78,13 @@ import {
 } from '../../../core/deepseek/web-vision';
 import type { LocaleMessageKey, SupportedLocale } from '../../../core/i18n';
 import PageIntro from '../components/PageIntro';
-import { SkeletonList, ToggleRow, useBanner, useConfirm } from '../components/settings/primitives';
-import ToggleSwitch from '../components/ToggleSwitch';
+import { SkeletonList, TextAreaField, TextField, ToggleRow, useBanner, useConfirm } from '../components/settings/primitives';
+import WorkbenchScrollRail from '../components/WorkbenchScrollRail';
+import WorkbenchTooltip from '../components/WorkbenchTooltip';
 import { useI18n } from '../i18n';
+import { getRuntimeErrorMessage, isRuntimeFailure, unwrapRuntimeResponse } from '../runtime-response';
+
+type Translate = ReturnType<typeof useI18n>['t'];
 
 const DEFAULT_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
 
@@ -84,6 +124,22 @@ type AutomationCommandCenterCounts = {
   needsAttention: number;
   blocked: number;
   running: number;
+};
+
+type AutomationStatusTone = 'ready' | 'attention' | 'blocked';
+type AutomationStatusAction = 'retry' | 'create' | 'prepareAll' | 'showBlocked';
+
+type AutomationStatusModel = {
+  statusKey: LocaleMessageKey;
+  descriptionKey: LocaleMessageKey;
+  nextKey: LocaleMessageKey;
+  actionLabelKey: LocaleMessageKey;
+  tone: AutomationStatusTone;
+  tasksValue: string;
+  readinessValue: string;
+  runningValue: string;
+  action: AutomationStatusAction | null;
+  actionDisabled: boolean;
 };
 
 type FormState = {
@@ -139,10 +195,12 @@ export default function AutomationPage() {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [personalConfig, setPersonalConfig] = useState<PersonalConvenienceConfig>(DEFAULT_PERSONAL_CONVENIENCE_CONFIG);
   const [imageAttachments, setImageAttachments] = useState<AutomationImageAttachment[]>([]);
+  const [showStarters, setShowStarters] = useState(false);
   const [automationQuery, setAutomationQuery] = useState('');
   const [automationListFilter, setAutomationListFilter] = useState<AutomationListFilter>('all');
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const loadSeqRef = useRef(0);
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadAtRef = useRef(0);
@@ -186,6 +244,13 @@ export default function AutomationPage() {
     }
     return counts;
   }, [automations, readinessById, runningIds]);
+  const automationStatus = useMemo(() => createAutomationStatusModel({
+    automations,
+    counts: commandCenterCounts,
+    loading,
+    loadError,
+    t,
+  }), [automations, commandCenterCounts, loadError, loading, t]);
   const filteredAutomations = useMemo(() => {
     const query = automationQuery.trim().toLowerCase();
     return automations.filter((automation) => {
@@ -205,15 +270,35 @@ export default function AutomationPage() {
       loadTimerRef.current = null;
     }
     const seq = ++loadSeqRef.current;
-    const list: Automation[] = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATIONS' });
-    if (seq !== loadSeqRef.current) return;
-    const items = list ?? [];
-    setAutomations(items);
-    const runEntries = await loadRecentRunsForAutomations(items);
-    if (seq !== loadSeqRef.current) return;
-    setRuns(Object.fromEntries(runEntries));
-    lastLoadAtRef.current = Date.now();
-    setLoading(false);
+    setLoading(true);
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'GET_AUTOMATIONS' });
+      const items = Array.isArray(response)
+        ? response
+        : unwrapRuntimeResponse<Automation[]>(response, t('sidepanel.automationPage.backendUnavailable'));
+      if (seq !== loadSeqRef.current) return;
+      setAutomations(items);
+      try {
+        const runEntries = await loadRecentRunsForAutomations(items);
+        if (seq !== loadSeqRef.current) return;
+        setRuns(Object.fromEntries(runEntries));
+        setLoadError(null);
+      } catch (error) {
+        if (seq !== loadSeqRef.current) return;
+        setRuns({});
+        setLoadError(t('sidepanel.automationPage.runHistoryLoadFailed', {
+          error: formatAutomationError(error, t('sidepanel.automationPage.runHistoryUnavailable')),
+        }));
+      }
+      lastLoadAtRef.current = Date.now();
+    } catch (error) {
+      if (seq !== loadSeqRef.current) return;
+      setLoadError(t('sidepanel.automationPage.loadFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.backendUnavailable')),
+      }));
+    } finally {
+      if (seq === loadSeqRef.current) setLoading(false);
+    }
   };
 
   const scheduleLoad = (delayMs = AUTOMATION_RELOAD_DEBOUNCE_MS) => {
@@ -234,6 +319,7 @@ export default function AutomationPage() {
     const handleUpdate = (msg: { type?: string; automations?: Automation[] }) => {
       if (msg.type === 'AUTOMATIONS_UPDATED' && Array.isArray(msg.automations)) {
         setAutomations(msg.automations);
+        setLoadError(null);
       }
       if (msg.type === 'AUTOMATIONS_UPDATED' || msg.type === 'AUTOMATION_RUNS_UPDATED') {
         scheduleLoad();
@@ -261,6 +347,7 @@ export default function AutomationPage() {
     setEditing(null);
     setForm(createEmptyForm(personalConfig));
     setImageAttachments([]);
+    setShowStarters(false);
     banner.clear();
     setShowForm((prev) => !prev);
   };
@@ -269,6 +356,7 @@ export default function AutomationPage() {
     setEditing(automation);
     setForm(fromAutomation(automation));
     setImageAttachments([]);
+    setShowStarters(false);
     banner.clear();
     setShowForm(true);
   };
@@ -279,6 +367,7 @@ export default function AutomationPage() {
     setEditing(null);
     setForm(fromAutomationInput({ ...input, prompt }));
     setImageAttachments([]);
+    setShowStarters(false);
     banner.clear();
     setShowForm(true);
   };
@@ -331,23 +420,39 @@ export default function AutomationPage() {
       return;
     }
 
-    const response = editing
-      ? await chrome.runtime.sendMessage({
-        type: 'UPDATE_AUTOMATION',
-        payload: { id: editing.id, patch: payload, ...(images.length > 0 ? { images } : {}) },
-      })
-      : await chrome.runtime.sendMessage({
-        type: 'CREATE_AUTOMATION',
-        payload: { ...payload, ...(images.length > 0 ? { images } : {}) },
-      });
-
-    if (response?.ok === false && response.error) {
-      banner.show('error', typeof response.error === 'string' ? response.error : response.error.message);
+    let response: unknown;
+    try {
+      response = editing
+        ? await chrome.runtime.sendMessage({
+          type: 'UPDATE_AUTOMATION',
+          payload: { id: editing.id, patch: payload, ...(images.length > 0 ? { images } : {}) },
+        })
+        : await chrome.runtime.sendMessage({
+          type: 'CREATE_AUTOMATION',
+          payload: { ...payload, ...(images.length > 0 ? { images } : {}) },
+        });
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
       return;
     }
 
-    if (response?.lastError) {
-      banner.show('error', response.lastError.message);
+    if (response && typeof response === 'object' && 'lastError' in response) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(
+          (response as { lastError?: { message?: string } }).lastError?.message ?? 'last_error',
+          t('sidepanel.automationPage.operationUnavailable'),
+        ),
+      }));
+      return;
+    }
+    try {
+      unwrapRuntimeResponse<unknown>(response, t('sidepanel.automationPage.backendUnavailable'));
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
       return;
     }
     banner.show('success', editing ? t('common.saveChanges') : t('sidepanel.automationPage.created'));
@@ -394,15 +499,23 @@ export default function AutomationPage() {
     setRunningIds((prev) => new Set(prev).add(id));
     banner.clear();
     try {
-      const run: AutomationRun | { ok: false; error: string } | null = await chrome.runtime.sendMessage({
+      const run: AutomationRun | { ok: false; error?: unknown } | null = await chrome.runtime.sendMessage({
         type: 'RUN_AUTOMATION_NOW',
         payload: { id },
       });
-      if (run && 'error' in run && typeof run.error === 'string') {
-        banner.show('error', run.error);
+      if (isRuntimeFailure(run)) {
+        banner.show('error', t('sidepanel.automationPage.operationFailed', {
+          error: formatAutomationError(run.error, t('sidepanel.automationPage.operationUnavailable')),
+        }));
       } else if (run && 'status' in run && (run.status === 'failed' || run.status === 'timeout')) {
-        banner.show('error', run.error?.message ?? t('sidepanel.automationPage.runFailed'));
+        banner.show('error', t('sidepanel.automationPage.operationFailed', {
+          error: formatAutomationError(run.error?.message, t('sidepanel.automationPage.runFailed')),
+        }));
       }
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
     } finally {
       setRunningIds((prev) => {
         const next = new Set(prev);
@@ -414,23 +527,37 @@ export default function AutomationPage() {
   };
 
   const toggleStatus = async (automation: Automation) => {
-    await chrome.runtime.sendMessage({
-      type: 'SET_AUTOMATION_STATUS',
-      payload: { id: automation.id, status: automation.status === 'active' ? 'paused' : 'active' },
-    });
-    scheduleLoad(0);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'SET_AUTOMATION_STATUS',
+        payload: { id: automation.id, status: automation.status === 'active' ? 'paused' : 'active' },
+      });
+      if (isRuntimeFailure(response)) throw new Error(getRuntimeErrorMessage(response.error));
+      scheduleLoad(0);
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
+    }
   };
 
   const remove = async (automation: Automation) => {
     const ok = await confirm({
-      title: t('sidepanel.automationPage.deleteConfirm', { name: automation.name }),
+      title: t('sidepanel.automationPage.deleteConfirmTitle'),
       message: t('sidepanel.automationPage.deleteConfirm', { name: automation.name }),
       confirmLabel: t('common.delete'),
       cancelLabel: t('common.cancel'),
     });
     if (!ok) return;
-    await chrome.runtime.sendMessage({ type: 'DELETE_AUTOMATION', payload: { id: automation.id } });
-    scheduleLoad(0);
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'DELETE_AUTOMATION', payload: { id: automation.id } });
+      if (isRuntimeFailure(response)) throw new Error(getRuntimeErrorMessage(response.error));
+      scheduleLoad(0);
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
+    }
   };
 
   const cycleSessionStrategy = async () => {
@@ -443,9 +570,13 @@ export default function AutomationPage() {
         type: 'SAVE_PERSONAL_CONVENIENCE_CONFIG',
         payload: { sameSessionStrategy },
       });
+      if (isRuntimeFailure(result)) throw new Error(getRuntimeErrorMessage(result.error));
       setPersonalConfig(normalizePersonalConvenienceConfig(result?.config ?? optimistic));
-    } catch {
+    } catch (error) {
       setPersonalConfig(personalConfig);
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
     }
   };
 
@@ -464,12 +595,16 @@ export default function AutomationPage() {
       patch.prompt = applyPromptAutomationReadinessFixes(automation.prompt, promptFixCodes);
     }
 
-    const response = await chrome.runtime.sendMessage({
-      type: 'UPDATE_AUTOMATION',
-      payload: { id: automation.id, patch },
-    });
-    if (response?.ok === false && response.error) {
-      banner.show('error', typeof response.error === 'string' ? response.error : response.error.message);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'UPDATE_AUTOMATION',
+        payload: { id: automation.id, patch },
+      });
+      if (isRuntimeFailure(response)) throw new Error(getRuntimeErrorMessage(response.error));
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
       return;
     }
     banner.show('success', t('sidepanel.automationPage.readiness.noIssues'));
@@ -493,12 +628,16 @@ export default function AutomationPage() {
         patch.prompt = applyPromptAutomationReadinessFixes(automation.prompt, promptFixCodes);
       }
 
-      const response = await chrome.runtime.sendMessage({
-        type: 'UPDATE_AUTOMATION',
-        payload: { id: automation.id, patch },
-      });
-      if (response?.ok === false && response.error) {
-        banner.show('error', typeof response.error === 'string' ? response.error : response.error.message);
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'UPDATE_AUTOMATION',
+          payload: { id: automation.id, patch },
+        });
+        if (isRuntimeFailure(response)) throw new Error(getRuntimeErrorMessage(response.error));
+      } catch (error) {
+        banner.show('error', t('sidepanel.automationPage.operationFailed', {
+          error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+        }));
         return;
       }
       prepared += 1;
@@ -512,7 +651,33 @@ export default function AutomationPage() {
 
   const openSession = async (url: string | null) => {
     if (!url) return;
-    await chrome.tabs.create({ url, active: true });
+    try {
+      await chrome.tabs.create({ url, active: true });
+    } catch (error) {
+      banner.show('error', t('sidepanel.automationPage.operationFailed', {
+        error: formatAutomationError(error, t('sidepanel.automationPage.operationUnavailable')),
+      }));
+    }
+  };
+
+  const handleAutomationStatusAction = () => {
+    if (automationStatus.action === 'retry') {
+      void load();
+      return;
+    }
+    if (automationStatus.action === 'create') {
+      startCreate();
+      return;
+    }
+    if (automationStatus.action === 'prepareAll') {
+      void prepareAllAutomations();
+      return;
+    }
+    if (automationStatus.action === 'showBlocked') {
+      setAutomationQuery('');
+      setAutomationListFilter('blocked');
+      setShowStarters(false);
+    }
   };
 
   return (
@@ -524,32 +689,50 @@ export default function AutomationPage() {
         actions={(
         <div className="flex flex-wrap items-center justify-end gap-2">
           {automations.length > 0 && (
-            <button
+            <Button
               type="button"
               onClick={() => void prepareAllAutomations()}
+              variant="outline"
+              size="sm"
               className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg"
             >
               {t('sidepanel.automationPage.readiness.prepareAll')}
-            </button>
+            </Button>
           )}
-          <button
+          {automations.length > 0 && !showForm && (
+            <Button
+              type="button"
+              onClick={() => setShowStarters((prev) => !prev)}
+              variant="outline"
+              size="sm"
+              className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg"
+              aria-pressed={showStarters}
+            >
+              {showStarters
+                ? t('sidepanel.automationPage.templates.hide')
+                : t('sidepanel.automationPage.templates.show')}
+            </Button>
+          )}
+          <Button
             type="button"
             onClick={() => void cycleSessionStrategy()}
+            variant="outline"
+            size="sm"
             className="ds-btn-secondary px-2.5 py-1.5 text-[11px] rounded-lg"
             title={t('sidepanel.automationPage.changeSessionStrategy')}
             aria-label={t('sidepanel.automationPage.changeSessionStrategy')}
           >
             {t('sidepanel.automationPage.meta.strategy')}: {formatSessionStrategy(personalConfig.sameSessionStrategy, t)}
-          </button>
-          <button
+          </Button>
+          <Button
+            type="button"
             onClick={startCreate}
+            size="sm"
             className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
           >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
+            <PlusIcon data-icon="inline-start" aria-hidden="true" />
             {t('sidepanel.automationPage.create')}
-          </button>
+          </Button>
         </div>
         )}
       />
@@ -557,15 +740,38 @@ export default function AutomationPage() {
       {banner.node}
       {confirmNode}
 
-      {!showForm && automations.length > 0 && (
-        <AutomationCommandCenterSummary counts={commandCenterCounts} />
+      <AutomationStatusCard
+        status={automationStatus}
+        busy={loading}
+        onAction={handleAutomationStatusAction}
+      />
+
+      {loadError && !showForm && (
+        <Alert variant="destructive" className="ds-automation-alert">
+          <AlertTitle>{t('sidepanel.automationPage.loadFailedTitle')}</AlertTitle>
+          <AlertDescription>
+            <div>{loadError}</div>
+            <div>{t('sidepanel.automationPage.loadFailedHint')}</div>
+          </AlertDescription>
+          <AlertAction>
+            <Button
+              type="button"
+              size="xs"
+              variant="destructive"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              {loading ? t('sidepanel.automationPage.loading') : t('common.retry')}
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
-      {!editing && !showForm && (
-        <>
+      {!loadError && !editing && !showForm && (automations.length === 0 || showStarters) && (
+        <div className="ds-automation-starter-stack">
           <AutomationRunLauncher onStart={startRepairVerifyLoop} />
           <AutomationTemplatePicker onUse={applyWorkflowTemplate} />
-        </>
+        </div>
       )}
 
       {showForm && (
@@ -586,40 +792,57 @@ export default function AutomationPage() {
 
       {!showForm && automations.length > 0 && (
         <div className="space-y-2">
-          <input
+          <TextField
+            ariaLabel={t('sidepanel.automationPage.filterPlaceholder')}
             value={automationQuery}
-            onChange={(event) => setAutomationQuery(event.target.value)}
-            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+            onChange={setAutomationQuery}
+            fieldClassName="ds-automation-search-field"
+            inputClassName="px-3 py-2 text-xs rounded-lg"
             placeholder={t('sidepanel.automationPage.filterPlaceholder')}
           />
-          <div className="flex flex-wrap gap-1.5">
-            {AUTOMATION_LIST_FILTERS.map((filter) => {
-              const selected = automationListFilter === filter;
-              const label = t(`sidepanel.automationPage.filters.${filter}` as LocaleMessageKey);
-              return (
-                <button
-                  key={filter}
-                  type="button"
-                  onClick={() => setAutomationListFilter(filter)}
-                  aria-label={label}
-                  aria-pressed={selected}
-                  className={`px-2 py-1 text-[11px] rounded-md inline-flex items-center gap-1.5 ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
-                >
-                  <span>{label}</span>
-                  <span className="font-mono text-[10px] opacity-80">{automationListCounts[filter]}</span>
-                </button>
-              );
-            })}
+          <WorkbenchScrollRail
+            label={t('sidepanel.automationPage.filterRailLabel')}
+            rowClassName="ds-automation-filter-rail"
+          >
+            <ToggleGroup
+              type="single"
+              value={automationListFilter}
+              onValueChange={(value) => {
+                if (value) setAutomationListFilter(value as AutomationListFilter);
+              }}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              aria-label={t('sidepanel.automationPage.filterRailLabel')}
+              className="flex-wrap"
+            >
+              {AUTOMATION_LIST_FILTERS.map((filter) => {
+                const label = t(`sidepanel.automationPage.filters.${filter}` as LocaleMessageKey);
+                return (
+                  <ToggleGroupItem
+                    key={filter}
+                    value={filter}
+                    aria-label={label}
+                    className="text-[11px] data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                  >
+                    <span>{label}</span>
+                    <span className="font-mono text-[10px] opacity-80">{automationListCounts[filter]}</span>
+                  </ToggleGroupItem>
+                );
+              })}
+            </ToggleGroup>
             {automationFiltersActive && (
-              <button
+              <Button
                 type="button"
                 onClick={() => { setAutomationQuery(''); setAutomationListFilter('all'); }}
-                className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md"
+                variant="outline"
+                size="xs"
+                className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md shrink-0"
               >
                 {t('sidepanel.automationPage.clearFilters')}
-              </button>
+              </Button>
             )}
-          </div>
+          </WorkbenchScrollRail>
           {automationFiltersActive && (
             <div className="text-[11px] text-[var(--ds-text-muted)]">
               {t('sidepanel.automationPage.filterResultCount', {
@@ -631,24 +854,28 @@ export default function AutomationPage() {
         </div>
       )}
 
-      {loading ? (
+      {loading && automations.length === 0 && !loadError ? (
         <SkeletonList rows={3} />
-      ) : automations.length === 0 && !showForm ? (
-        <div className="ds-empty-state">
-          <div className="ds-empty-state-icon">
-            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <div className="ds-empty-state-title">{t('sidepanel.automationPage.empty')}</div>
-          <div className="ds-empty-state-description">{t('sidepanel.automationPage.emptyHelp')}</div>
-        </div>
+      ) : loadError && automations.length === 0 && !showForm ? null : automations.length === 0 && !showForm ? (
+        <Empty className="ds-automation-empty">
+          <EmptyHeader>
+            <EmptyTitle>{t('sidepanel.automationPage.empty')}</EmptyTitle>
+            <EmptyDescription>{t('sidepanel.automationPage.emptyHelp')}</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button type="button" size="sm" onClick={startCreate}>
+              {t('sidepanel.automationPage.create')}
+            </Button>
+          </EmptyContent>
+        </Empty>
       ) : (
         <div className="space-y-2">
           {filteredAutomations.length === 0 ? (
-            <div className="ds-empty-state">
-              <div className="ds-empty-state-title">{t('sidepanel.automationPage.filterNoResults')}</div>
-            </div>
+            <Empty className="ds-automation-empty ds-automation-empty-compact">
+              <EmptyHeader>
+                <EmptyTitle>{t('sidepanel.automationPage.filterNoResults')}</EmptyTitle>
+              </EmptyHeader>
+            </Empty>
           ) : filteredAutomations.map((automation) => (
             <AutomationCard
               key={automation.id}
@@ -671,16 +898,238 @@ export default function AutomationPage() {
   );
 }
 
-function AutomationCommandCenterSummary({ counts }: { counts: AutomationCommandCenterCounts }) {
+function AutomationStatusCard({
+  status,
+  busy,
+  onAction,
+}: {
+  status: AutomationStatusModel;
+  busy: boolean;
+  onAction: () => void;
+}) {
   const { t } = useI18n();
   return (
-    <div className="ds-metric-strip">
-      <MetaChip label={t('sidepanel.automationPage.commandCenter.ready')} value={String(counts.ready)} />
-      <MetaChip label={t('sidepanel.automationPage.commandCenter.needsAttention')} value={String(counts.needsAttention)} />
-      <MetaChip label={t('sidepanel.automationPage.commandCenter.blocked')} value={String(counts.blocked)} />
-      <MetaChip label={t('sidepanel.automationPage.commandCenter.running')} value={String(counts.running)} />
+    <Card
+      size="sm"
+      className={`ds-automation-status ds-automation-status-${status.tone}`}
+      aria-label={t('sidepanel.automationPage.statusCard.label')}
+    >
+      <CardHeader className="ds-automation-status-head">
+        <CardTitle>{t('sidepanel.automationPage.statusCard.title')}</CardTitle>
+        <CardDescription>{t(status.descriptionKey)}</CardDescription>
+        <CardAction>
+          <Badge
+            variant={getAutomationStatusBadgeVariant(status.tone)}
+            className={`ds-automation-status-badge ds-automation-status-badge-${status.tone}`}
+          >
+            {t(status.statusKey)}
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="ds-automation-status-body">
+        <div className="ds-automation-status-list">
+          <AutomationStatusRow
+            label={t('sidepanel.automationPage.statusCard.tasks')}
+            value={status.tasksValue}
+          />
+          <AutomationStatusRow
+            label={t('sidepanel.automationPage.statusCard.readiness')}
+            value={status.readinessValue}
+            tone={status.tone}
+          />
+          <AutomationStatusRow
+            label={t('sidepanel.automationPage.statusCard.running')}
+            value={status.runningValue}
+          />
+          <AutomationStatusRow
+            label={t('sidepanel.automationPage.statusCard.next')}
+            value={t(status.nextKey)}
+            tone={status.tone}
+          />
+        </div>
+      </CardContent>
+      {status.action && (
+        <CardFooter className="ds-automation-status-actions">
+          <Button
+            type="button"
+            size="sm"
+            variant={status.tone === 'blocked' ? 'default' : 'outline'}
+            onClick={onAction}
+            disabled={busy || status.actionDisabled}
+            className="ds-automation-status-button"
+          >
+            {t(status.actionLabelKey)}
+          </Button>
+        </CardFooter>
+      )}
+    </Card>
+  );
+}
+
+function AutomationStatusRow({
+  label,
+  value,
+  tone = 'ready',
+}: {
+  label: string;
+  value: string;
+  tone?: AutomationStatusTone;
+}) {
+  return (
+    <div className={`ds-automation-status-row ds-automation-status-row-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
+}
+
+function getAutomationStatusBadgeVariant(tone: AutomationStatusTone): ComponentProps<typeof Badge>['variant'] {
+  if (tone === 'blocked') return 'destructive';
+  if (tone === 'attention') return 'secondary';
+  return 'outline';
+}
+
+function createAutomationStatusModel({
+  automations,
+  counts,
+  loading,
+  loadError,
+  t,
+}: {
+  automations: Automation[];
+  counts: AutomationCommandCenterCounts;
+  loading: boolean;
+  loadError: string | null;
+  t: Translate;
+}): AutomationStatusModel {
+  const activeCount = automations.filter((automation) => automation.status === 'active').length;
+  const tasksValue = automations.length > 0
+    ? t('sidepanel.automationPage.statusCard.tasksValue', { total: automations.length, active: activeCount })
+    : t('sidepanel.automationPage.statusCard.tasksEmpty');
+  const readinessValue = t('sidepanel.automationPage.statusCard.readinessValue', {
+    ready: counts.ready,
+    attention: counts.needsAttention,
+    blocked: counts.blocked,
+  });
+  const runningValue = t('sidepanel.automationPage.statusCard.runningValue', { count: counts.running });
+
+  if (loadError && automations.length === 0) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusLoadFailed',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionLoadFailed',
+      nextKey: 'sidepanel.automationPage.statusCard.nextRetry',
+      actionLabelKey: 'common.retry',
+      tone: 'blocked',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: 'retry',
+      actionDisabled: false,
+    };
+  }
+
+  if (loadError) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusNeedsRefresh',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionPartial',
+      nextKey: 'sidepanel.automationPage.statusCard.nextRetryHistory',
+      actionLabelKey: 'common.retry',
+      tone: 'attention',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: 'retry',
+      actionDisabled: false,
+    };
+  }
+
+  if (loading && automations.length === 0) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusChecking',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionChecking',
+      nextKey: 'sidepanel.automationPage.statusCard.nextChecking',
+      actionLabelKey: 'common.retry',
+      tone: 'attention',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: null,
+      actionDisabled: false,
+    };
+  }
+
+  if (automations.length === 0) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusEmpty',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionEmpty',
+      nextKey: 'sidepanel.automationPage.statusCard.nextCreate',
+      actionLabelKey: 'sidepanel.automationPage.create',
+      tone: 'attention',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: 'create',
+      actionDisabled: false,
+    };
+  }
+
+  if (counts.blocked > 0) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusBlocked',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionBlocked',
+      nextKey: 'sidepanel.automationPage.statusCard.nextShowBlocked',
+      actionLabelKey: 'sidepanel.automationPage.statusCard.actionShowBlocked',
+      tone: 'blocked',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: 'showBlocked',
+      actionDisabled: false,
+    };
+  }
+
+  if (counts.running > 0) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusRunning',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionRunning',
+      nextKey: 'sidepanel.automationPage.statusCard.nextWatch',
+      actionLabelKey: 'sidepanel.automationPage.readiness.prepareAll',
+      tone: 'attention',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: null,
+      actionDisabled: false,
+    };
+  }
+
+  if (counts.needsAttention > 0) {
+    return {
+      statusKey: 'sidepanel.automationPage.statusCard.statusNeedsAttention',
+      descriptionKey: 'sidepanel.automationPage.statusCard.descriptionNeedsAttention',
+      nextKey: 'sidepanel.automationPage.statusCard.nextPrepareAll',
+      actionLabelKey: 'sidepanel.automationPage.readiness.prepareAll',
+      tone: 'attention',
+      tasksValue,
+      readinessValue,
+      runningValue,
+      action: 'prepareAll',
+      actionDisabled: false,
+    };
+  }
+
+  return {
+    statusKey: 'sidepanel.automationPage.statusCard.statusReady',
+    descriptionKey: 'sidepanel.automationPage.statusCard.descriptionReady',
+    nextKey: 'sidepanel.automationPage.statusCard.nextContinue',
+    actionLabelKey: 'sidepanel.automationPage.readiness.prepareAll',
+    tone: 'ready',
+    tasksValue,
+    readinessValue,
+    runningValue,
+    action: null,
+    actionDisabled: false,
+  };
 }
 
 function AutomationRunLauncher({ onStart }: { onStart: (objective: string) => void }) {
@@ -698,24 +1147,19 @@ function AutomationRunLauncher({ onStart }: { onStart: (objective: string) => vo
             {t('sidepanel.automationPage.commandCenter.launcherDescription')}
           </div>
         </div>
-        <span className="rounded-full px-2 py-1 text-[10px] font-medium shrink-0" style={{ color: 'var(--ds-blue)', background: 'var(--ds-surface)' }}>
-          {t('sidepanel.automationPage.commandCenter.primary')}
-        </span>
       </div>
 
-      <label className="space-y-1 block">
-        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {t('sidepanel.automationPage.commandCenter.objectiveLabel')}
-        </span>
-        <textarea
-          value={objective}
-          onChange={(event) => setObjective(event.target.value)}
-          className="ds-input w-full px-3 py-2 text-xs rounded-lg min-h-20 resize-y"
-          placeholder={t('sidepanel.automationPage.commandCenter.objectivePlaceholder')}
-        />
-      </label>
+      <TextAreaField
+        label={t('sidepanel.automationPage.commandCenter.objectiveLabel')}
+        value={objective}
+        onChange={setObjective}
+        rows={3}
+        fieldClassName="ds-automation-textarea-field"
+        textareaClassName="ds-input text-xs rounded-lg min-h-20 resize-y"
+        placeholder={t('sidepanel.automationPage.commandCenter.objectivePlaceholder')}
+      />
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="ds-automation-guardrails">
         <MetaChip label={t('sidepanel.automationPage.commandCenter.timeout')} value={t('sidepanel.automationPage.commandCenter.timeoutValue')} />
         <MetaChip label={t('sidepanel.automationPage.commandCenter.toolBudget')} value={t('sidepanel.automationPage.commandCenter.toolBudgetValue')} />
       </div>
@@ -723,13 +1167,14 @@ function AutomationRunLauncher({ onStart }: { onStart: (objective: string) => vo
         {t('sidepanel.automationPage.commandCenter.proofSummary')}
       </div>
 
-      <button
+      <Button
         type="button"
         onClick={() => onStart(objective)}
+        size="sm"
         className="ds-btn-primary w-full px-3 py-2 text-xs font-medium text-white rounded-lg"
       >
         {t('sidepanel.automationPage.commandCenter.startLongLoop')}
-      </button>
+      </Button>
     </section>
   );
 }
@@ -744,6 +1189,7 @@ async function loadRecentRunsForAutomations(
       type: 'GET_AUTOMATION_RUNS_BATCH',
       payload: { automationIds: ids, limit: 5 },
     }) as Record<string, AutomationRun[]> | null;
+    if (isRuntimeFailure(batch)) throw new Error(getRuntimeErrorMessage(batch.error));
     if (batch && typeof batch === 'object') {
       return ids.map((id) => [id, Array.isArray(batch[id]) ? batch[id] : []] as const);
     }
@@ -753,12 +1199,105 @@ async function loadRecentRunsForAutomations(
 
   return Promise.all(
     automations.map(async (automation) => {
-      const recent: AutomationRun[] = await chrome.runtime.sendMessage({
+      const response = await chrome.runtime.sendMessage({
         type: 'GET_AUTOMATION_RUNS',
         payload: { automationId: automation.id, limit: 5 },
       });
+      const recent = Array.isArray(response)
+        ? response
+        : unwrapRuntimeResponse<AutomationRun[]>(response, 'automation_runs_unavailable');
       return [automation.id, recent ?? []] as const;
     }),
+  );
+}
+
+type AutomationSelectOption<T extends string> = {
+  value: T;
+  label: string;
+};
+
+const AUTOMATION_DEFAULT_MODEL_SELECT_VALUE = 'default';
+type AutomationModelSelectValue = typeof AUTOMATION_DEFAULT_MODEL_SELECT_VALUE | 'expert' | 'vision';
+
+function AutomationSelectField<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  label: string;
+  value: T;
+  options: Array<AutomationSelectOption<T>>;
+  onChange: (value: T) => void;
+  className?: string;
+}) {
+  const labelId = useId();
+  const triggerId = useId();
+
+  return (
+    <Field className={['ds-automation-select-field', className].filter(Boolean).join(' ')}>
+      <FieldLabel id={labelId} htmlFor={triggerId} className="ds-field-label-text">
+        {label}
+      </FieldLabel>
+      <Select value={value} onValueChange={(next) => onChange(next as T)}>
+        <SelectTrigger
+          id={triggerId}
+          aria-labelledby={labelId}
+          className="ds-settings-select-trigger ds-automation-select-trigger w-full"
+          size="sm"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent className="ds-settings-select-content">
+          <SelectGroup>
+            {options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
+function AutomationSwitchField({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const switchId = useId();
+
+  return (
+    <Field
+      orientation="horizontal"
+      data-disabled={disabled ? true : undefined}
+      className="ds-automation-inline-switch"
+    >
+      <Switch
+        id={switchId}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(next) => {
+          if (!disabled) onChange(next);
+        }}
+        aria-label={label}
+        size="sm"
+      />
+      <FieldContent className="ds-automation-inline-switch-copy">
+        <FieldLabel htmlFor={switchId} className="ds-automation-inline-switch-label">
+          {label}
+        </FieldLabel>
+      </FieldContent>
+    </Field>
   );
 }
 
@@ -790,29 +1329,26 @@ function AutomationTemplatePicker({
           </div>
         </div>
       </div>
-      <input
+      <TextField
+        ariaLabel={t('sidepanel.automationPage.templates.searchPlaceholder')}
         value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+        onChange={setQuery}
+        fieldClassName="ds-automation-search-field"
+        inputClassName="px-3 py-2 text-xs rounded-lg"
         placeholder={t('sidepanel.automationPage.templates.searchPlaceholder')}
       />
-      <div className="flex flex-wrap gap-1.5">
-        {TEMPLATE_CATEGORY_FILTERS.map((item) => {
-          const selected = item === category;
-          return (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setCategory(item)}
-              className={`px-2 py-1 text-[11px] rounded-md ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
-            >
-              {item === 'all'
-                ? t('sidepanel.automationPage.templates.all')
-                : t(`sidepanel.automationPage.templates.categories.${item}` as LocaleMessageKey)}
-            </button>
-          );
-        })}
-      </div>
+      <AutomationSelectField
+        label={t('sidepanel.automationPage.templates.categoryLabel')}
+        value={category}
+        onChange={(next) => setCategory(next)}
+        className="ds-automation-template-filter"
+        options={TEMPLATE_CATEGORY_FILTERS.map((item) => ({
+          value: item,
+          label: item === 'all'
+            ? t('sidepanel.automationPage.templates.all')
+            : t(`sidepanel.automationPage.templates.categories.${item}` as LocaleMessageKey),
+        }))}
+      />
       <div className="grid gap-2 sm:grid-cols-2">
         {visibleTemplates.length === 0 ? (
           <div className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
@@ -825,17 +1361,19 @@ function AutomationTemplatePicker({
                 <div className="text-xs font-medium truncate" style={{ color: 'var(--ds-text)' }}>
                   {workflowTemplateCopy(template, 'title', t)}
                 </div>
-                <div className="text-[10px] uppercase mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
+                <div className="text-[10px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
                   {workflowTemplateCategory(template, t)} · {workflowTemplateCopy(template, 'cadence', t)}
                 </div>
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={() => onUse(template)}
+                variant="outline"
+                size="xs"
                 className="ds-btn-secondary px-2 py-1 text-[11px] rounded-md shrink-0"
               >
                 {t('sidepanel.automationPage.templates.use')}
-              </button>
+              </Button>
             </div>
             <div className="flex flex-wrap gap-1">
               {workflowTemplateChips(template, t).map((label) => (
@@ -898,6 +1436,9 @@ function AutomationForm({
   const isScheduled = form.scheduleKind !== 'manual';
   const selectedChainIds = useMemo(() => parseAutomationChainIds(form.chainSuccessIdsText), [form.chainSuccessIdsText]);
   const chainTargets = availableAutomations.filter((automation) => automation.id !== editing?.id);
+  const modelSelectValue: AutomationModelSelectValue = form.modelType === 'expert' || form.modelType === 'vision'
+    ? form.modelType
+    : AUTOMATION_DEFAULT_MODEL_SELECT_VALUE;
   const handleFiles = (files: FileList | null) => {
     onAddImages(files);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -934,52 +1475,46 @@ function AutomationForm({
       visualMonitorEnabled: promptOptions.visualMonitor?.enabled === true,
     });
   };
-  const toggleChainTarget = (automationId: string) => {
-    const next = selectedChainIds.includes(automationId)
-      ? selectedChainIds.filter((id) => id !== automationId)
-      : [...selectedChainIds, automationId];
-    onChange({
-      ...form,
-      chainEnabled: next.length > 0 ? true : form.chainEnabled,
-      chainSuccessIdsText: next.join(', '),
-    });
-  };
-
   return (
     <div className="ds-form rounded-xl p-4 space-y-3">
       <div className="grid grid-cols-1 gap-2">
-        <label className="space-y-1">
-          <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.name')}</span>
-          <input
-            value={form.name}
-            onChange={(e) => update('name', e.target.value)}
-            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
-            placeholder={t('sidepanel.automationPage.form.namePlaceholder')}
-          />
-        </label>
-        <label className="space-y-1">
-          <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.model')}</span>
-          <select
-            value={form.modelType}
-            onChange={(e) => update('modelType', e.target.value)}
-            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
-          >
-            <option value="">{t('sidepanel.automationPage.form.defaultModel')}</option>
-            <option value="expert">Expert</option>
-            <option value="vision">Vision</option>
-          </select>
-        </label>
+        <TextField
+          label={t('sidepanel.automationPage.form.name')}
+          value={form.name}
+          onChange={(value) => update('name', value)}
+          inputClassName="px-3 py-2 text-xs rounded-lg"
+          placeholder={t('sidepanel.automationPage.form.namePlaceholder')}
+        />
+        <AutomationSelectField
+          label={t('sidepanel.automationPage.form.model')}
+          value={modelSelectValue}
+          onChange={(next) => {
+            update('modelType', next === AUTOMATION_DEFAULT_MODEL_SELECT_VALUE ? '' : next);
+          }}
+          options={[
+            {
+              value: AUTOMATION_DEFAULT_MODEL_SELECT_VALUE,
+              label: t('sidepanel.automationPage.form.defaultModel'),
+            },
+            {
+              value: 'expert',
+              label: t('sidepanel.automationPage.form.expertModel'),
+            },
+            {
+              value: 'vision',
+              label: t('sidepanel.automationPage.form.visionModel'),
+            },
+          ]}
+        />
       </div>
 
-      <label className="space-y-1 block">
-        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>Vision file refs</span>
-        <input
-          value={form.refFileIdsText}
-          onChange={(e) => update('refFileIdsText', e.target.value)}
-          className="ds-input w-full px-3 py-2 text-xs rounded-lg"
-          placeholder="file-..."
-        />
-      </label>
+      <TextField
+        label={t('sidepanel.automationPage.form.visualRefs')}
+        value={form.refFileIdsText}
+        onChange={(value) => update('refFileIdsText', value)}
+        inputClassName="px-3 py-2 text-xs rounded-lg"
+        placeholder={t('sidepanel.automationPage.form.visualRefsPlaceholder')}
+      />
 
       <input
         ref={fileInputRef}
@@ -990,40 +1525,43 @@ function AutomationForm({
         onChange={(event) => handleFiles(event.currentTarget.files)}
       />
       <div className="flex items-center justify-between gap-2">
-        <button
+        <Button
           type="button"
           onClick={() => fileInputRef.current?.click()}
+          variant="outline"
+          size="sm"
           className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
         >
-          Attach image
-        </button>
+          {t('sidepanel.automationPage.form.attachImage')}
+        </Button>
         {imageAttachments.length > 0 && (
           <div className="ds-chat-attachment-tray flex-1 justify-end">
             {imageAttachments.map((attachment) => (
               <span key={attachment.id} className="ds-chat-attachment-chip">
                 {attachment.name}
-                <button
+                <Button
                   type="button"
                   onClick={() => onRemoveImage(attachment.id)}
-                  aria-label={`Remove ${attachment.name}`}
+                  aria-label={t('sidepanel.automationPage.form.removeImage', { name: attachment.name })}
+                  variant="ghost"
+                  size="icon-xs"
                 >
-                  ×
-                </button>
+                  <XIcon aria-hidden="true" />
+                </Button>
               </span>
             ))}
           </div>
         )}
       </div>
 
-      <label className="space-y-1 block">
-        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.prompt')}</span>
-        <textarea
-          value={form.prompt}
-          onChange={(e) => update('prompt', e.target.value)}
-          className="ds-input w-full px-3 py-2 text-xs rounded-lg min-h-28 resize-y"
-          placeholder={t('sidepanel.automationPage.form.promptPlaceholder')}
-        />
-      </label>
+      <TextAreaField
+        label={t('sidepanel.automationPage.form.prompt')}
+        value={form.prompt}
+        onChange={(value) => update('prompt', value)}
+        fieldClassName="ds-automation-textarea-field"
+        textareaClassName="ds-input text-xs rounded-lg min-h-28 resize-y"
+        placeholder={t('sidepanel.automationPage.form.promptPlaceholder')}
+      />
 
       {(form.timeoutMs !== null || form.maxToolContinuationTurns !== null) && (
         <div className="grid grid-cols-2 gap-2">
@@ -1043,48 +1581,52 @@ function AutomationForm({
       )}
 
       <div className="grid grid-cols-3 gap-2">
-        <label className="space-y-1">
-          <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.trigger')}</span>
-          <select
-            value={form.scheduleKind}
-            onChange={(e) => update('scheduleKind', e.target.value as AutomationScheduleKind)}
-            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
-          >
-            <option value="manual">{t('sidepanel.automationPage.form.manual')}</option>
-            <option value="cron">Cron</option>
-            <option value="rrule">RRULE</option>
-          </select>
-        </label>
-        <label className="space-y-1 col-span-2">
-          <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.expression')}</span>
-          <input
-            value={isScheduled ? form.expression : ''}
-            onChange={(e) => update('expression', e.target.value)}
-            disabled={!isScheduled}
-            className="ds-input w-full px-3 py-2 text-xs rounded-lg disabled:opacity-50"
-            placeholder={form.scheduleKind === 'rrule' ? 'FREQ=HOURLY;INTERVAL=1' : '0 9 * * *'}
-          />
-        </label>
+        <AutomationSelectField
+          label={t('sidepanel.automationPage.form.trigger')}
+          value={form.scheduleKind}
+          onChange={(next) => update('scheduleKind', next as AutomationScheduleKind)}
+          options={[
+            {
+              value: 'manual',
+              label: t('sidepanel.automationPage.form.manual'),
+            },
+            {
+              value: 'cron',
+              label: t('sidepanel.automationPage.form.cron'),
+            },
+            {
+              value: 'rrule',
+              label: t('sidepanel.automationPage.form.repeatRule'),
+            },
+          ]}
+        />
+        <TextField
+          label={t('sidepanel.automationPage.form.expression')}
+          value={isScheduled ? form.expression : ''}
+          onChange={(value) => update('expression', value)}
+          disabled={!isScheduled}
+          fieldClassName="col-span-2"
+          inputClassName="px-3 py-2 text-xs rounded-lg"
+          placeholder={form.scheduleKind === 'rrule' ? 'FREQ=HOURLY;INTERVAL=1' : '0 9 * * *'}
+        />
       </div>
 
-      <label className="space-y-1 block">
-        <span className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>{t('sidepanel.automationPage.form.timezone')}</span>
-        <input
-          value={form.timezone}
-          onChange={(e) => update('timezone', e.target.value)}
-          className="ds-input w-full px-3 py-2 text-xs rounded-lg"
-          placeholder="Asia/Shanghai"
-        />
-      </label>
+      <TextField
+        label={t('sidepanel.automationPage.form.timezone')}
+        value={form.timezone}
+        onChange={(value) => update('timezone', value)}
+        inputClassName="px-3 py-2 text-xs rounded-lg"
+        placeholder="Asia/Shanghai"
+      />
 
-      <div className="flex flex-wrap items-center gap-3">
-        <ToggleSwitch
+      <div className="ds-automation-inline-switches">
+        <AutomationSwitchField
           checked={visionRouteLocksFlags ? false : form.searchEnabled}
           onChange={(searchEnabled) => update('searchEnabled', searchEnabled)}
           disabled={visionRouteLocksFlags}
           label={t('sidepanel.automationPage.form.search')}
         />
-        <ToggleSwitch
+        <AutomationSwitchField
           checked={visionRouteLocksFlags ? false : form.thinkingEnabled}
           onChange={(thinkingEnabled) => update('thinkingEnabled', thinkingEnabled)}
           disabled={visionRouteLocksFlags}
@@ -1113,26 +1655,40 @@ function AutomationForm({
       {form.chainEnabled && (
         <div className="space-y-2">
           {chainTargets.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <ToggleGroup
+              type="multiple"
+              value={selectedChainIds}
+              onValueChange={(next) => {
+                onChange({
+                  ...form,
+                  chainEnabled: next.length > 0 ? true : form.chainEnabled,
+                  chainSuccessIdsText: next.join(', '),
+                });
+              }}
+              variant="outline"
+              size="sm"
+              spacing={1}
+              className="flex-wrap"
+            >
               {chainTargets.map((automation) => {
-                const selected = selectedChainIds.includes(automation.id);
                 return (
-                  <button
+                  <ToggleGroupItem
                     key={automation.id}
-                    type="button"
-                    onClick={() => toggleChainTarget(automation.id)}
-                    className={`px-2 py-1 text-[11px] rounded-md ${selected ? 'ds-btn-primary text-white' : 'ds-btn-secondary'}`}
+                    value={automation.id}
+                    aria-label={automation.name}
+                    className="text-[11px] data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
                   >
                     {automation.name}
-                  </button>
+                  </ToggleGroupItem>
                 );
               })}
-            </div>
+            </ToggleGroup>
           )}
-          <input
+          <TextField
+            ariaLabel={t('sidepanel.automationPage.form.chainPlaceholder')}
             value={form.chainSuccessIdsText}
-            onChange={(event) => update('chainSuccessIdsText', event.target.value)}
-            className="ds-input w-full px-3 py-2 text-xs rounded-lg"
+            onChange={(value) => update('chainSuccessIdsText', value)}
+            inputClassName="px-3 py-2 text-xs rounded-lg"
             placeholder={t('sidepanel.automationPage.form.chainPlaceholder')}
           />
         </div>
@@ -1157,12 +1713,12 @@ function AutomationForm({
       )}
 
       <div className="flex justify-end gap-2 pt-1">
-        <button onClick={onCancel} className="ds-btn-cancel px-3 py-1.5 text-xs rounded-lg">
+        <Button type="button" onClick={onCancel} variant="outline" size="sm" className="ds-btn-cancel px-3 py-1.5 text-xs rounded-lg">
           {t('common.cancel')}
-        </button>
-        <button onClick={onSave} className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg">
+        </Button>
+        <Button type="button" onClick={onSave} size="sm" className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg">
           {editing ? t('common.save') : t('sidepanel.automationPage.form.create')}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -1200,8 +1756,8 @@ function AutomationCard({
     getPromptAutomationReadinessFixes(readiness).length > 0
   );
   const runBlocked = readiness.status === 'blocked';
-  const statusColor = automation.status === 'active' ? 'var(--ds-success)' : 'var(--ds-text-tertiary)';
-  const statusBg = automation.status === 'active' ? 'var(--ds-success-bg)' : 'var(--ds-surface)';
+  const statusColor = automation.status === 'active' ? 'var(--ds-text-secondary)' : 'var(--ds-text-tertiary)';
+  const statusBg = 'var(--ds-surface)';
 
   return (
     <div className="ds-card rounded-xl p-3 space-y-2 animate-fade-in">
@@ -1220,22 +1776,29 @@ function AutomationCard({
           </p>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <IconButton title={automation.status === 'active' ? t('sidepanel.automationPage.status.paused') : t('sidepanel.automationPage.status.active')} path={automation.status === 'active' ? 'M10 9v6m4-6v6' : 'M5 3l14 9-14 9V3z'} onClick={onToggleStatus} />
-          <IconButton title={t('common.edit')} path="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7 M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" onClick={onEdit} />
-          <IconButton title={t('common.delete')} path="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3m-9 0h12" onClick={onDelete} danger />
+          <IconButton
+            title={automation.status === 'active' ? t('sidepanel.automationPage.status.paused') : t('sidepanel.automationPage.status.active')}
+            icon={automation.status === 'active' ? PauseIcon : PlayIcon}
+            onClick={onToggleStatus}
+          />
+          <IconButton title={t('common.edit')} icon={PencilIcon} onClick={onEdit} />
+          <IconButton title={t('common.delete')} icon={Trash2Icon} onClick={onDelete} danger />
         </div>
       </div>
 
-      <div className="ds-metric-strip">
+      <WorkbenchScrollRail
+        label={t('sidepanel.automationPage.cardMetaRailLabel')}
+        rowClassName="ds-metric-strip ds-automation-card-meta-strip"
+      >
         <MetaChip label={t('sidepanel.automationPage.meta.next')} value={formatTime(automation.nextRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
         <MetaChip label={t('sidepanel.automationPage.meta.previous')} value={formatTime(automation.lastRunAt, locale, t('sidepanel.automationPage.meta.none'))} />
-        <MetaChip label={t('sidepanel.automationPage.meta.session')} value={automation.deepseek.chatSessionId ? shortId(automation.deepseek.chatSessionId) : t('sidepanel.automationPage.meta.notCreated')} />
+        <MetaChip label={t('sidepanel.automationPage.meta.session')} value={automation.deepseek.chatSessionId ? t('sidepanel.automationPage.meta.chatReady') : t('sidepanel.automationPage.meta.notCreated')} />
         <MetaChip label={t('sidepanel.automationPage.meta.recent')} value={latestRun ? formatRun(latestRun, t) : t('sidepanel.automationPage.meta.none')} />
         <MetaChip label={t('sidepanel.automationPage.meta.visual')} value={automation.promptOptions.visualMonitor?.enabled ? t('sidepanel.automationPage.meta.monitorOn') : t('sidepanel.automationPage.meta.monitorOff')} />
         <MetaChip label={t('sidepanel.automationPage.meta.chain')} value={automation.chain.enabled ? t('sidepanel.automationPage.meta.chainOn', { count: automation.chain.onSuccessAutomationIds.length }) : t('sidepanel.automationPage.meta.chainOff')} />
         <MetaChip label={t('sidepanel.automationPage.meta.strategy')} value={formatSessionStrategy(sessionStrategy, t)} />
         <MetaChip label={t('sidepanel.automationPage.readiness.title')} value={`${readiness.grade} · ${t(`sidepanel.automationPage.readiness.status.${readiness.status}` as LocaleMessageKey)}`} />
-      </div>
+      </WorkbenchScrollRail>
 
       {readiness.issues.length > 0 && (
         <AutomationReadinessPanel report={readiness} compact />
@@ -1251,30 +1814,38 @@ function AutomationCard({
 
       {automation.lastError && (
         <div className="rounded-lg px-2.5 py-2 text-[11px]" style={{ color: 'var(--ds-danger)', background: 'var(--ds-danger-bg)' }}>
-          {automation.lastError.message}
+          {formatAutomationError(automation.lastError.message, t('sidepanel.automationPage.operationUnavailable'))}
         </div>
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <button
+        <Button
+          type="button"
           onClick={onOpenSession}
           disabled={!automation.deepseek.sessionUrl}
+          variant="outline"
+          size="sm"
           className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg disabled:opacity-50"
         >
           {t('sidepanel.automationPage.actions.openSession')}
-        </button>
+        </Button>
         <div className="flex items-center gap-2">
           {canPrepare && (
-            <button
+            <Button
+              type="button"
               onClick={onPrepare}
+              variant="outline"
+              size="sm"
               className="ds-btn-secondary px-3 py-1.5 text-xs rounded-lg"
             >
               {t('sidepanel.automationPage.readiness.prepareRun')}
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            type="button"
             onClick={onRun}
             disabled={running || runBlocked}
+            size="sm"
             className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg disabled:opacity-60"
           >
             {runBlocked
@@ -1282,7 +1853,7 @@ function AutomationCard({
               : running
                 ? t('sidepanel.automationPage.status.running')
                 : t('sidepanel.automationPage.actions.runNow')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -1298,7 +1869,7 @@ function RunPreflightSummary({ run }: { run: AutomationRun }) {
   if (fixedCodes.length === 0 && blockingCodes.length === 0) return null;
 
   const blocked = blockingCodes.length > 0 || run.status === 'skipped';
-  const toneColor = blocked ? 'var(--ds-danger)' : 'var(--ds-warning, var(--ds-text-secondary))';
+  const toneColor = blocked ? 'var(--ds-danger)' : 'var(--ds-text-secondary)';
   const visibleFixedCodes = fixedCodes.slice(0, 3);
   const visibleBlockingCodes = blockingCodes.slice(0, 3);
 
@@ -1410,31 +1981,36 @@ function AutomationReadinessPanel({
       {(canPrepareRun || canApplySafeFixes || canApplyPromptFixes) && (
         <div className="flex flex-wrap gap-1.5">
           {canPrepareRun && (
-            <button
+            <Button
               type="button"
               onClick={onPrepareRun}
+              size="xs"
               className="ds-btn-primary px-2.5 py-1 text-[11px] rounded-md text-white"
             >
               {t('sidepanel.automationPage.readiness.prepareRun')}
-            </button>
+            </Button>
           )}
           {canApplySafeFixes && (
-            <button
+            <Button
               type="button"
               onClick={onApplySafeFixes}
+              variant="outline"
+              size="xs"
               className="ds-btn-secondary px-2.5 py-1 text-[11px] rounded-md"
             >
               {t('sidepanel.automationPage.readiness.applySafeFixes')}
-            </button>
+            </Button>
           )}
           {canApplyPromptFixes && (
-            <button
+            <Button
               type="button"
               onClick={onApplyPromptFixes}
+              variant="outline"
+              size="xs"
               className="ds-btn-secondary px-2.5 py-1 text-[11px] rounded-md"
             >
               {t('sidepanel.automationPage.readiness.addLoopContract')}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -1518,25 +2094,28 @@ function RunReplayBrief({ brief }: { brief: string }) {
 
 function IconButton({
   title,
-  path,
+  icon: Icon,
   onClick,
   danger,
 }: {
   title: string;
-  path: string;
+  icon: LucideIcon;
   onClick: () => void;
   danger?: boolean;
 }) {
   return (
-    <button
-      title={title}
-      onClick={onClick}
-      className={`ds-action-btn w-7 h-7 rounded-lg flex items-center justify-center ${danger ? 'ds-action-btn-delete' : 'ds-action-btn-edit'}`}
-    >
-      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d={path} />
-      </svg>
-    </button>
+    <WorkbenchTooltip label={title}>
+      <Button
+        type="button"
+        aria-label={title}
+        onClick={onClick}
+        variant={danger ? 'destructive' : 'ghost'}
+        size="icon-sm"
+        className={`ds-action-btn ${danger ? 'ds-action-btn-delete' : 'ds-action-btn-edit'}`}
+      >
+        <Icon aria-hidden="true" />
+      </Button>
+    </WorkbenchTooltip>
   );
 }
 
@@ -1720,6 +2299,15 @@ function materializeWorkflowObjective(prompt: string, objective: string | undefi
     .replace('[\u66ff\u6362\u4e3a\u76ee\u6807]', trimmed);
 }
 
+const AUTOMATION_ERROR_LEAK_PATTERN = /\b(?:GET|RUN|CREATE|UPDATE|DELETE|SET|SAVE)_[A-Z0-9_]+\b|\b(?:Authorization|Bearer|Cookie|secret|token|api[_-]?key)\b|data:image|blob:|base64|schemaVersion|chrome\.runtime|chrome\.storage|IndexedDB|localStorage|sessionStorage|\[object Object\]|https?:\/\/|chrome-extension:\/\//i;
+
+function formatAutomationError(error: unknown, fallback: string): string {
+  const message = getRuntimeErrorMessage(error).trim();
+  if (!message) return fallback;
+  if (AUTOMATION_ERROR_LEAK_PATTERN.test(message)) return fallback;
+  return message;
+}
+
 function formatTime(value: number | null, locale: SupportedLocale, emptyText: string): string {
   if (!value) return emptyText;
   return new Date(value).toLocaleString(locale, {
@@ -1772,14 +2360,14 @@ function formatRecorderSession(
 }
 
 function flightStatusColor(status: AutomationFlightEventStatus): string {
-  if (status === 'success') return 'var(--ds-success)';
+  if (status === 'success') return 'var(--ds-text-tertiary)';
   if (status === 'error') return 'var(--ds-danger)';
   if (status === 'warning') return 'var(--ds-warning, var(--ds-text-secondary))';
   return 'var(--ds-text-tertiary)';
 }
 
 function readinessToneColor(status: AutomationReadinessReport['status']): string {
-  if (status === 'ready') return 'var(--ds-success)';
+  if (status === 'ready') return 'var(--ds-text-secondary)';
   if (status === 'blocked') return 'var(--ds-danger)';
   return 'var(--ds-warning, var(--ds-text-secondary))';
 }
@@ -1820,10 +2408,6 @@ function formatReadinessIssue(code: string, t: ReturnType<typeof useI18n>['t']):
 
 function formatPreflightAutoFix(code: string, t: ReturnType<typeof useI18n>['t']): string {
   return PREFLIGHT_AUTO_FIX_CODES.has(code) ? t(preflightAutoFixKey(code)) : code;
-}
-
-function shortId(id: string): string {
-  return id.slice(0, 8);
 }
 
 function normalizeFormModelType(modelType: string | null): string {

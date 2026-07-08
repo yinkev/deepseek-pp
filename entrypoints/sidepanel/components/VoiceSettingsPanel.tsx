@@ -7,77 +7,131 @@ import {
   type VoiceSettings,
 } from '../../../core/voice/settings';
 import { useI18n } from '../i18n';
+import { getRuntimeErrorMessage, unwrapRuntimeResponse } from '../runtime-response';
+import { SettingsSection, Slider, StatusMessage, ToggleRow } from './settings/primitives';
 
 export default function VoiceSettingsPanel() {
   const { t } = useI18n();
   const [settings, setSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const [capabilities, setCapabilities] = useState<VoiceCapabilityState>(detectVoiceCapabilities());
+  const [statusMessage, setStatusMessage] = useState('');
 
   useEffect(() => {
     const localCapabilities = detectVoiceCapabilities();
-    Promise.all([
+    Promise.allSettled([
       chrome.runtime.sendMessage({ type: 'GET_VOICE_SETTINGS' }),
       chrome.runtime.sendMessage({ type: 'GET_VOICE_CAPABILITIES' }),
-    ]).then(([voiceSettings, voiceCapabilities]) => {
-      setSettings(normalizeVoiceSettings(voiceSettings));
+    ]).then(([voiceSettingsResult, voiceCapabilitiesResult]) => {
+      if (voiceSettingsResult.status === 'rejected') {
+        throw voiceSettingsResult.reason;
+      }
+      const loaded = unwrapRuntimeResponse<VoiceSettings>(
+        voiceSettingsResult.value,
+        t('sidepanel.voice.backendUnavailable'),
+      );
+      const remoteCapabilities = normalizeRemoteCapabilities(
+        voiceCapabilitiesResult.status === 'fulfilled' ? voiceCapabilitiesResult.value : null,
+      );
+      setSettings(normalizeVoiceSettings(loaded));
       setCapabilities({
-        speechRecognition: localCapabilities.speechRecognition || voiceCapabilities?.speechRecognition === true,
-        speechSynthesis: localCapabilities.speechSynthesis || voiceCapabilities?.speechSynthesis === true,
+        speechRecognition: localCapabilities.speechRecognition || remoteCapabilities.speechRecognition,
+        speechSynthesis: localCapabilities.speechSynthesis || remoteCapabilities.speechSynthesis,
       });
-    }).catch(() => undefined);
-  }, []);
+    }).catch((error) => {
+      setSettings(DEFAULT_VOICE_SETTINGS);
+      setStatusMessage(t('sidepanel.voice.loadFailed', {
+        error: getVoiceIssueMessage(error, t('sidepanel.voice.backendUnavailable')),
+      }));
+    });
+  }, [t]);
 
   const save = async (patch: Partial<VoiceSettings>) => {
+    const previous = settings;
     const next = normalizeVoiceSettings({ ...settings, ...patch });
     setSettings(next);
-    const saved = await chrome.runtime.sendMessage({ type: 'SAVE_VOICE_SETTINGS', payload: next });
-    setSettings(normalizeVoiceSettings(saved));
+    setStatusMessage('');
+    try {
+      const saved = unwrapRuntimeResponse<VoiceSettings>(
+        await chrome.runtime.sendMessage({ type: 'SAVE_VOICE_SETTINGS', payload: next }),
+        t('sidepanel.voice.backendUnavailable'),
+      );
+      setSettings(normalizeVoiceSettings(saved));
+    } catch (error) {
+      setSettings(previous);
+      setStatusMessage(t('sidepanel.voice.saveFailed', {
+        error: getVoiceIssueMessage(error, t('sidepanel.voice.backendUnavailable')),
+      }));
+    }
   };
 
   return (
-    <section className="space-y-3">
-      <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
-        {t('sidepanel.voice.title')}
-      </h2>
-      <div className="ds-surface-panel rounded-xl p-4 space-y-3">
-        <VoiceToggle
-          title={t('sidepanel.voice.input')}
-          description={capabilities.speechRecognition
-            ? t('sidepanel.voice.inputDescription')
-            : t('sidepanel.voice.inputUnsupported')}
-          enabled={settings.inputEnabled}
-          supported={capabilities.speechRecognition}
-          onToggle={(enabled) => save({ inputEnabled: enabled })}
-        />
-        <VoiceToggle
-          title={t('sidepanel.voice.readAloud')}
-          description={capabilities.speechSynthesis
-            ? t('sidepanel.voice.readAloudDescription')
-            : t('sidepanel.voice.readAloudUnsupported')}
-          enabled={settings.readAloudEnabled}
-          supported={capabilities.speechSynthesis}
-          onToggle={(enabled) => save({ readAloudEnabled: enabled })}
-        />
-
-        <Slider
-          label={t('sidepanel.voice.rate')}
-          value={settings.rate}
-          min={0.5}
-          max={2}
-          step={0.1}
-          onChange={(rate) => save({ rate })}
-        />
-        <Slider
-          label={t('sidepanel.voice.pitch')}
-          value={settings.pitch}
-          min={0.5}
-          max={2}
-          step={0.1}
-          onChange={(pitch) => save({ pitch })}
-        />
-      </div>
-    </section>
+    <SettingsSection title={t('sidepanel.voice.title')}>
+      <VoiceToggle
+        title={t('sidepanel.voice.input')}
+        description={capabilities.speechRecognition
+          ? t('sidepanel.voice.inputDescription')
+          : t('sidepanel.voice.inputUnsupported')}
+        enabled={settings.inputEnabled}
+        supported={capabilities.speechRecognition}
+        disabledLabel={capabilities.speechRecognition ? undefined : t('common.unavailable')}
+        onToggle={(enabled) => save({ inputEnabled: enabled })}
+      />
+      <VoiceToggle
+        title={t('sidepanel.voice.readAloud')}
+        description={capabilities.speechSynthesis
+          ? t('sidepanel.voice.readAloudDescription')
+          : t('sidepanel.voice.readAloudUnsupported')}
+        enabled={settings.readAloudEnabled}
+        supported={capabilities.speechSynthesis}
+        disabledLabel={capabilities.speechSynthesis ? undefined : t('common.unavailable')}
+        onToggle={(enabled) => save({ readAloudEnabled: enabled })}
+      />
+      <Slider
+        label={t('sidepanel.voice.rate')}
+        value={settings.rate}
+        min={0.5}
+        max={2}
+        step={0.1}
+        format={(value) => value.toFixed(1)}
+        onChange={(rate) => save({ rate })}
+      />
+      <Slider
+        label={t('sidepanel.voice.pitch')}
+        value={settings.pitch}
+        min={0.5}
+        max={2}
+        step={0.1}
+        format={(value) => value.toFixed(1)}
+        onChange={(pitch) => save({ pitch })}
+      />
+      {statusMessage && (
+        <StatusMessage tone="error">
+          {statusMessage}
+        </StatusMessage>
+      )}
+    </SettingsSection>
   );
+}
+
+function normalizeRemoteCapabilities(value: unknown): VoiceCapabilityState {
+  const object = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<VoiceCapabilityState>
+    : {};
+  return {
+    speechRecognition: object.speechRecognition === true,
+    speechSynthesis: object.speechSynthesis === true,
+  };
+}
+
+function getVoiceIssueMessage(error: unknown, fallback: string): string {
+  const message = getRuntimeErrorMessage(error).trim();
+  if (!message || message === 'undefined' || message === 'null') return fallback;
+  if (
+    /\b(GET|SAVE|CLEAR|SET|DELETE|WEBDAV)_[A-Z0-9_]+\b|schemaVersion|chrome\.runtime|chrome\.storage|IndexedDB|deepseek_pp_[a-z0-9_]+|Authorization|Bearer|Cookie|data:image|\[object Object\]|apiKey|openaiApiKey|geminiApiKey|OPENAI_API_KEY|GEMINI_API_KEY|DEEPSEEK_API_KEY|password|secret|token|sk-[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]+/i.test(message)
+  ) {
+    return fallback;
+  }
+  return message;
 }
 
 function VoiceToggle({
@@ -85,78 +139,24 @@ function VoiceToggle({
   description,
   enabled,
   supported,
+  disabledLabel,
   onToggle,
 }: {
   title: string;
   description: string;
   enabled: boolean;
   supported: boolean;
+  disabledLabel?: string;
   onToggle: (enabled: boolean) => void;
 }) {
   return (
-    <div className="flex justify-between items-center gap-3">
-      <div>
-        <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>{title}</div>
-        <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {description}
-        </div>
-      </div>
-      <button
-        onClick={() => onToggle(!enabled)}
-        disabled={!supported}
-        className="relative shrink-0 w-10 h-8 rounded-lg transition-colors duration-200 disabled:opacity-40"
-      >
-        <span
-          className="absolute left-1 top-1/2 h-[18px] w-8 -translate-y-1/2 rounded-full transition-colors duration-200"
-          style={{ background: enabled && supported ? 'var(--ds-blue)' : 'var(--ds-border)' }}
-        >
-          <span
-            className="ds-switch-thumb absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full transition-transform duration-200"
-            style={{ transform: enabled && supported ? 'translateX(14px)' : 'translateX(0)' }}
-          />
-        </span>
-      </button>
-    </div>
-  );
-}
-
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div>
-      <div className="flex justify-between items-center mb-1.5">
-        <label className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
-          {label}
-        </label>
-        <span className="text-[11px] font-mono" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {value.toFixed(1)}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(parseFloat(event.target.value))}
-        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
-        style={{
-          background: `linear-gradient(to right, var(--ds-blue) ${((value - min) / (max - min)) * 100}%, var(--ds-border) ${((value - min) / (max - min)) * 100}%)`,
-        }}
-      />
-    </div>
+    <ToggleRow
+      title={title}
+      description={description}
+      enabled={enabled}
+      disabled={!supported}
+      disabledLabel={disabledLabel}
+      onToggle={onToggle}
+    />
   );
 }

@@ -213,7 +213,7 @@ export class BrowserControlService {
     this.clearSnapshotUidCache();
   }
 
-  async lockCurrentTarget(label = 'Dev++'): Promise<BrowserControlTarget> {
+  async lockCurrentTarget(label = 'Browser target'): Promise<BrowserControlTarget> {
     const settings = await getBrowserControlSettings();
     const tabId = await this.requireSelectedTargetTabId(settings);
     const target = await this.getTargetOrThrow(tabId);
@@ -1793,7 +1793,7 @@ function createTargetLock(
   const safeLabel = label.trim().slice(0, 40);
   return {
     enabled: true,
-    label: safeLabel || 'Dev++',
+    label: safeLabel || 'Browser target',
     targetTabId: target.id,
     windowId: target.windowId,
     windowHint: target.windowHint,

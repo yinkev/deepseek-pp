@@ -1,0 +1,177 @@
+{
+  "url": "http://127.0.0.1:62511/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/command-menu-dogfood",
+  "checks": {
+    "open420": {
+      "overflow": {
+        "viewport": 420,
+        "body": 420,
+        "doc": 420,
+        "overflow": false
+      },
+      "slots": {
+        "command": true,
+        "input": true,
+        "list": true,
+        "visibleItems": [
+          "UX rebuild notes",
+          "提问",
+          "项目",
+          "上下文",
+          "工作集",
+          "活动",
+          "复核",
+          "命令",
+          "资料库",
+          "自动化",
+          "预设",
+          "浏览器",
+          "连接器",
+          "页面工具",
+          "健康",
+          "设置"
+        ],
+        "allItems": 16,
+        "dialogTitle": true,
+        "dialogDescription": true
+      },
+      "leaks": [],
+      "mode": "open"
+    },
+    "searchHealth420": {
+      "overflow": {
+        "viewport": 420,
+        "body": 420,
+        "doc": 420,
+        "overflow": false
+      },
+      "slots": {
+        "command": true,
+        "input": true,
+        "list": true,
+        "visibleItems": [
+          "健康"
+        ],
+        "allItems": 1,
+        "dialogTitle": true,
+        "dialogDescription": true
+      },
+      "leaks": [],
+      "mode": "search"
+    },
+    "open360": {
+      "overflow": {
+        "viewport": 360,
+        "body": 360,
+        "doc": 360,
+        "overflow": false
+      },
+      "slots": {
+        "command": true,
+        "input": true,
+        "list": true,
+        "visibleItems": [
+          "UX rebuild notes",
+          "提问",
+          "项目",
+          "上下文",
+          "工作集",
+          "活动",
+          "复核",
+          "命令",
+          "资料库",
+          "自动化",
+          "预设",
+          "浏览器",
+          "连接器",
+          "页面工具",
+          "健康",
+          "设置"
+        ],
+        "allItems": 16,
+        "dialogTitle": true,
+        "dialogDescription": true
+      },
+      "leaks": [],
+      "mode": "open"
+    },
+    "searchAutomation360": {
+      "overflow": {
+        "viewport": 360,
+        "body": 360,
+        "doc": 360,
+        "overflow": false
+      },
+      "slots": {
+        "command": true,
+        "input": true,
+        "list": true,
+        "visibleItems": [
+          "自动化"
+        ],
+        "allItems": 1,
+        "dialogTitle": true,
+        "dialogDescription": true
+      },
+      "leaks": [],
+      "mode": "search"
+    },
+    "searchSettings360": {
+      "overflow": {
+        "viewport": 360,
+        "body": 360,
+        "doc": 360,
+        "overflow": false
+      },
+      "slots": {
+        "command": true,
+        "input": true,
+        "list": true,
+        "visibleItems": [
+          "设置"
+        ],
+        "allItems": 1,
+        "dialogTitle": true,
+        "dialogDescription": true
+      },
+      "leaks": [],
+      "mode": "search"
+    },
+    "finalOverflow": {
+      "viewport": 360,
+      "body": 360,
+      "doc": 360,
+      "overflow": false
+    }
+  },
+  "selectedText": {
+    "healthContains": true,
+    "settingsContains": true
+  },
+  "focus": {
+    "activeAfterEnter": "打开导航菜单",
+    "activeAfterEscape": "打开导航菜单"
+  },
+  "consoleErrors": [],
+  "pageErrors": [],
+  "calls": [
+    "GET_DEEPSEEK_THEME",
+    "GET_PERSONAL_CONVENIENCE_CONFIG",
+    "GET_RUNTIME_DOCTOR_REPORT",
+    "GET_PROJECT_CONTEXT_STATE",
+    "GET_CURRENT_DEEPSEEK_CONVERSATION",
+    "GET_PROMPT_INJECTION_SETTINGS",
+    "GET_TOOL_DESCRIPTORS",
+    "GET_AUTH_STATUS",
+    "GET_OFFICIAL_API_CHAT_CONFIG",
+    "GET_VOICE_SETTINGS",
+    "GET_DEEPSEEK_API_KEY_STATUS",
+    "GET_MULTIMODAL_SETTINGS_STATUS",
+    "GET_MEMORIES",
+    "GET_CONFIG",
+    "GET_SYNC_CONFIG",
+    "GET_MODEL_TYPE",
+    "GET_BACKGROUND",
+    "GET_PET"
+  ]
+}

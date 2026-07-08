@@ -1,0 +1,85 @@
+{
+  "url": "http://127.0.0.1:58727/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/deepseek-pp/test-results/dogfood-tooltip-actions",
+  "widths": {
+    "360": {
+      "overflow": {
+        "body": 360,
+        "doc": 360,
+        "viewport": 360,
+        "overflow": false
+      },
+      "leaks": [],
+      "projectPin": {
+        "label": "Pin",
+        "titleAttr": null,
+        "hoverText": "Pin",
+        "focusText": "Pin",
+        "tabCount": 15
+      },
+      "projectEdit": {
+        "label": "Edit",
+        "titleAttr": null,
+        "hoverText": "Edit",
+        "focusText": "Edit",
+        "tabCount": 1
+      },
+      "automationPause": {
+        "label": "Paused",
+        "titleAttr": null,
+        "hoverText": "Paused",
+        "focusText": "Paused",
+        "tabCount": 17
+      },
+      "automationDelete": {
+        "label": "Delete",
+        "titleAttr": null,
+        "hoverText": "Delete",
+        "focusText": "Delete",
+        "tabCount": 2
+      },
+      "tooltipSlots": 0,
+      "triggerSlots": 3
+    },
+    "420": {
+      "overflow": {
+        "body": 420,
+        "doc": 420,
+        "viewport": 420,
+        "overflow": false
+      },
+      "leaks": [],
+      "projectPin": {
+        "label": "Pin",
+        "titleAttr": null,
+        "hoverText": "Pin",
+        "focusText": "Pin",
+        "tabCount": 15
+      },
+      "projectEdit": {
+        "label": "Edit",
+        "titleAttr": null,
+        "hoverText": "Edit",
+        "focusText": "Edit",
+        "tabCount": 1
+      },
+      "automationPause": {
+        "label": "Paused",
+        "titleAttr": null,
+        "hoverText": "Paused",
+        "focusText": "Paused",
+        "tabCount": 17
+      },
+      "automationDelete": {
+        "label": "Delete",
+        "titleAttr": null,
+        "hoverText": "Delete",
+        "focusText": "Delete",
+        "tabCount": 2
+      },
+      "tooltipSlots": 1,
+      "triggerSlots": 3
+    }
+  },
+  "consoleErrors": []
+}

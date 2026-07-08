@@ -20,15 +20,15 @@ export function createAutomationRunReplayBrief(
   const chain = run.request?.chain;
   const lines = [
     'Automation run replay brief',
-    `Run: ${safeText(run.id, textLimit)}`,
-    `Automation: ${safeText(run.automationId, textLimit)}`,
+    'Run: Current run',
+    'Automation: Current automation',
     `Trigger: ${run.trigger}`,
     `Status: ${run.status}`,
     `Attempt: ${run.attempt}`,
   ];
 
   if (chain) {
-    lines.push(`Chain: depth ${chain.depth}, parent ${chain.parentAutomationId ?? 'none'}, parent run ${chain.parentRunId ?? 'none'}`);
+    lines.push(`Chain: depth ${chain.depth}, parent automation ${chain.parentAutomationId ? 'yes' : 'none'}, parent run ${chain.parentRunId ? 'yes' : 'none'}`);
   }
 
   if (preflight) {

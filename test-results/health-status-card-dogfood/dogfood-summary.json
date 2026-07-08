@@ -1,0 +1,23 @@
+{
+  "url": "http://127.0.0.1:63881/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/health-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened Health through shadcn CommandDialog",
+    "Health status Card/Header/Title/Description/Action/Content slots verified",
+    "Health status Badge variants verified for ready, load-failure, and attention states",
+    "Health action row and ready-check actions verified as shadcn Button slots and clicked through runtime stubs",
+    "diagnostic details disclosure was opened",
+    "load failure rendered a focused retry action and recovered through keyboard Enter",
+    "page bridge action failure rendered sanitized copy and recovered through keyboard Enter",
+    "repair-and-retry action refreshed auth, retried automation, and recovered",
+    "recovery suggestion Save memory action persisted a sanitized memory",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

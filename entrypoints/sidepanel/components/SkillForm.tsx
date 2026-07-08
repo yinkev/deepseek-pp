@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import type { Skill } from '../../../core/types';
 import { useI18n } from '../i18n';
-import ToggleSwitch from './ToggleSwitch';
+import { TextAreaField, TextField, ToggleRow } from './settings/primitives';
 
 interface Props {
   initialSkill?: Skill | null;
@@ -40,63 +41,64 @@ export default function SkillForm({ initialSkill, onSave, onCancel }: Props) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="ds-form rounded-xl p-4 space-y-3">
-      <div>
-        <input
-          type="text"
+    <form onSubmit={handleSubmit} className="ds-command-form">
+      <div className="ds-command-field">
+        <TextField
+          label={t('sidepanel.skill.form.nameLabel')}
           placeholder={t('sidepanel.skill.form.namePlaceholder')}
           value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="ds-input w-full px-3 py-2 text-sm rounded-lg transition-all duration-150"
+          onChange={setName}
         />
         {normalizedName && (
-          <p className="text-[11px] mt-1" style={{ color: 'var(--ds-text-tertiary)' }}>
-            {t('sidepanel.skill.form.triggerCommand')} <code className="font-mono" style={{ color: 'var(--ds-blue)' }}>/{normalizedName}</code>
-          </p>
+          <div className="ds-command-trigger-preview">
+            <span>{t('sidepanel.skill.form.triggerCommand')}</span>
+            <code>/{normalizedName}</code>
+          </div>
         )}
       </div>
 
-      <input
-        type="text"
+      <TextField
+        label={t('sidepanel.skill.form.descriptionLabel')}
         placeholder={t('sidepanel.skill.form.descriptionPlaceholder')}
         value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        className="ds-input w-full px-3 py-2 text-sm rounded-lg transition-all duration-150"
+        onChange={setDescription}
       />
 
-      <div>
-        <label className="text-[11px] mb-1.5 block font-medium" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {t('sidepanel.skill.form.instructionsLabel')}
-        </label>
-        <textarea
-          rows={6}
-          placeholder={t('sidepanel.skill.form.instructionsPlaceholder')}
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-          className="ds-input w-full px-3 py-2 text-sm font-mono rounded-lg resize-none transition-all duration-150"
-        />
-      </div>
-
-      <ToggleSwitch
-        checked={memoryEnabled}
-        onChange={setMemoryEnabled}
-        label={t('sidepanel.skill.form.memoryInjectionLabel')}
+      <TextAreaField
+        label={t('sidepanel.skill.form.instructionsLabel')}
+        placeholder={t('sidepanel.skill.form.instructionsPlaceholder')}
+        value={instructions}
+        rows={6}
+        fieldClassName="ds-command-field"
+        textareaClassName="ds-command-textarea"
+        onChange={setInstructions}
       />
 
-      <div className="flex gap-2 justify-end pt-1">
-        <button
+      <ToggleRow
+        title={t('sidepanel.skill.form.memoryInjectionLabel')}
+        enabled={memoryEnabled}
+        onToggle={setMemoryEnabled}
+      />
+
+      <div className="ds-command-form-actions">
+        <Button
           type="button"
           onClick={onCancel}
-          className="ds-btn-cancel px-3.5 py-1.5 text-xs font-medium rounded-lg transition-all duration-150"
+          variant="outline"
+          size="sm"
+          className="ds-command-form-button"
         >
           {t('common.cancel')}
-        </button>
-        <button
+        </Button>
+        <Button
           type="submit"
-          className="ds-btn-primary px-4 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150"
+          disabled={!normalizedName || !instructions.trim()}
+          variant="default"
+          size="sm"
+          className="ds-command-form-button"
         >
           {isEditing ? t('common.saveChanges') : t('common.save')}
-        </button>
+        </Button>
       </div>
     </form>
   );

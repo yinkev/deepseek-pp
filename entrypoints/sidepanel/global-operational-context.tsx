@@ -18,6 +18,8 @@ import type { ToolRegistrySnapshot } from '../../core/tool/types';
 
 interface GlobalOperationalContextValue {
   context: GlobalOperationalContext;
+  projectState: ProjectContextState | null;
+  currentConversation: CurrentDeepSeekConversation | null;
   loading: boolean;
   refresh: () => Promise<void>;
 }
@@ -29,6 +31,8 @@ const DEFAULT_CONTEXT = createGlobalOperationalContext({
 
 const GlobalOperationalContextContext = createContext<GlobalOperationalContextValue>({
   context: DEFAULT_CONTEXT,
+  projectState: null,
+  currentConversation: null,
   loading: false,
   async refresh() {},
 });
@@ -46,6 +50,7 @@ const STORAGE_REFRESH_KEYS = new Set([
 const MESSAGE_REFRESH_TYPES = new Set([
   'STATE_UPDATED',
   'PROJECT_CONTEXT_UPDATED',
+  'AUTH_STATUS_CHANGED',
   'BROWSER_CONTROL_UPDATED',
   'TOOL_DESCRIPTORS_UPDATED',
   'MCP_SERVERS_UPDATED',
@@ -53,6 +58,8 @@ const MESSAGE_REFRESH_TYPES = new Set([
 
 export function GlobalOperationalContextProvider({ children }: { children: ReactNode }) {
   const [context, setContext] = useState<GlobalOperationalContext>(DEFAULT_CONTEXT);
+  const [projectState, setProjectState] = useState<ProjectContextState | null>(null);
+  const [currentConversation, setCurrentConversation] = useState<CurrentDeepSeekConversation | null>(null);
   const [loading, setLoading] = useState(true);
   const mounted = useRef(true);
   const refreshId = useRef(0);
@@ -63,7 +70,9 @@ export function GlobalOperationalContextProvider({ children }: { children: React
     setLoading(true);
     const next = await loadGlobalOperationalContext();
     if (mounted.current && refreshId.current === currentRefresh) {
-      setContext(next);
+      setContext(next.context);
+      setProjectState(next.projectState);
+      setCurrentConversation(next.currentConversation);
       setLoading(false);
     }
   }, []);
@@ -97,7 +106,13 @@ export function GlobalOperationalContextProvider({ children }: { children: React
   }, [refresh]);
 
   return (
-    <GlobalOperationalContextContext.Provider value={{ context, loading, refresh }}>
+    <GlobalOperationalContextContext.Provider value={{
+      context,
+      projectState,
+      currentConversation,
+      loading,
+      refresh,
+    }}>
       {children}
     </GlobalOperationalContextContext.Provider>
   );
@@ -107,12 +122,22 @@ export function useGlobalOperationalContext(): GlobalOperationalContextValue {
   return useContext(GlobalOperationalContextContext);
 }
 
-async function loadGlobalOperationalContext(): Promise<GlobalOperationalContext> {
+interface LoadedGlobalOperationalContext {
+  context: GlobalOperationalContext;
+  projectState: ProjectContextState | null;
+  currentConversation: CurrentDeepSeekConversation | null;
+}
+
+async function loadGlobalOperationalContext(): Promise<LoadedGlobalOperationalContext> {
   const runtime = getChromeRuntime();
   if (!runtime?.sendMessage) {
-    return createGlobalOperationalContext({
-      chromeAvailable: false,
-    });
+    return {
+      context: createGlobalOperationalContext({
+        chromeAvailable: false,
+      }),
+      projectState: null,
+      currentConversation: null,
+    };
   }
 
   const [
@@ -138,14 +163,18 @@ async function loadGlobalOperationalContext(): Promise<GlobalOperationalContext>
     ),
   ]);
 
-  return createGlobalOperationalContext({
-    chromeAvailable: true,
-    runtimeDoctorReport,
+  return {
+    context: createGlobalOperationalContext({
+      chromeAvailable: true,
+      runtimeDoctorReport,
+      projectState,
+      currentConversation,
+      promptSettings,
+      toolRegistry,
+    }),
     projectState,
     currentConversation,
-    promptSettings,
-    toolRegistry,
-  });
+  };
 }
 
 async function sendChromeMessage<T>(message: Record<string, unknown>): Promise<T | null> {

@@ -1,0 +1,22 @@
+{
+  "url": "http://127.0.0.1:63841/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/ask-command-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "slash suggestions opened from real GET_SKILL_LIBRARY response",
+    "slash keyboard Enter inserted /review",
+    "at-context suggestions loaded project, memory, saved, current chat, and browser rows",
+    "at-context keyboard ArrowDown+Enter inserted @Project: Run1",
+    "slash source failure showed retryable issue without raw runtime leak",
+    "retry recovered the slash suggestions",
+    "command, command-list, and command-item slots verified",
+    "aria-activedescendant targets existed",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

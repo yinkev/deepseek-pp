@@ -80,8 +80,11 @@ describe('automation run replay brief', () => {
     expect(brief).toContain('Trigger: chain');
     expect(brief).toContain('Preflight: B (88) needs_attention');
     expect(brief).toContain('Visual evidence: 1 ref(s), 1 pack(s), raw images stored: false');
-    expect(brief).toContain('Chain: depth 1, parent automation-parent, parent run run-parent');
+    expect(brief).toContain('Run: Current run');
+    expect(brief).toContain('Automation: Current automation');
+    expect(brief).toContain('Chain: depth 1, parent automation yes, parent run yes');
     expect(brief).not.toMatch(/secret-token|Authorization|Bearer|Cookie|sid=secret|data:image|AAAA|BBBB|file-sensitive/);
+    expect(brief).not.toMatch(/automation-1|automation-parent|run-1|run-parent/);
     expect(brief).toContain('[redacted:secret]');
     expect(brief).toContain('[redacted:media]');
     expect(brief).toContain('[redacted:vision-ref]');

@@ -1,0 +1,25 @@
+{
+  "url": "http://127.0.0.1:59686/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/preset-form-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu navigation opened Presets",
+    "header, form, row, active, edit, and retry actions rendered through shadcn Button slots",
+    "empty state rendered through shadcn Empty slots",
+    "New preset form opened from visible New action",
+    "Preset name and instruction fields rendered through shadcn Input/Textarea and Field slots",
+    "form typed and submitted through visible Save action",
+    "SAVE_PRESET payload matched typed values",
+    "Use action updated active preset payload and visible active state",
+    "Edit action reopened the shadcn-backed form",
+    "load failure showed retryable error instead of false empty state",
+    "Retry recovered to the seeded preset",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

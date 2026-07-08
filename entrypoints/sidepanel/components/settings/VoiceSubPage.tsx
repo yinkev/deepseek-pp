@@ -1,8 +1,8 @@
 import VoiceSettingsPanel from '../VoiceSettingsPanel';
 
 /**
- * Voice sub-page. VoiceSettingsPanel is self-contained (own <section><h2> and
- * chrome.runtime state), so render it directly.
+ * Voice sub-page. VoiceSettingsPanel owns its chrome.runtime state and renders
+ * through shared settings primitives.
  */
 export default function VoiceSubPage() {
   return (

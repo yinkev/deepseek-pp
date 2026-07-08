@@ -1,68 +1,81 @@
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import type { SystemPromptPreset } from '../../../core/types';
 import { useI18n } from '../i18n';
 
 interface Props {
   preset: SystemPromptPreset;
   isActive: boolean;
+  activeKnown?: boolean;
   onActivate: () => void;
   onDeactivate: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }
 
-export default function PresetCard({ preset, isActive, onActivate, onDeactivate, onEdit, onDelete }: Props) {
+export default function PresetCard({
+  preset,
+  isActive,
+  activeKnown = true,
+  onActivate,
+  onDeactivate,
+  onEdit,
+  onDelete,
+}: Props) {
   const { t } = useI18n();
+  const preview = preset.content.replace(/\s+/g, ' ').trim();
+  const state = !activeKnown ? 'unknown' : isActive ? 'active' : 'available';
+  const stateLabel = !activeKnown
+    ? t('sidepanel.preset.selectionUnknown')
+    : isActive ? t('sidepanel.preset.inUse') : t('sidepanel.preset.available');
+  const badgeVariant = !activeKnown ? 'destructive' : isActive ? 'secondary' : 'outline';
 
   return (
-    <div
-      className="ds-card rounded-xl p-3.5 group transition-all duration-150"
-      style={isActive ? { borderColor: 'var(--ds-blue)', borderWidth: '1.5px' } : undefined}
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
-            {preset.name}
-          </span>
-          {isActive && (
-            <span className="ds-badge-success inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-full font-medium">
-              {t('sidepanel.preset.activeBadge')}
-            </span>
-          )}
+    <article className={`ds-preset-row${isActive ? ' ds-preset-row-active' : ''}`} aria-current={isActive ? 'true' : undefined}>
+      <div className="ds-preset-row-head">
+        <div className="ds-preset-row-main">
+          <div className="ds-preset-titleline">
+            <span className="ds-preset-title">{preset.name}</span>
+            <Badge variant={badgeVariant} className="ds-preset-status" data-state={state}>
+              {stateLabel}
+            </Badge>
+          </div>
+          <p className="ds-preset-preview">
+            {preview || t('sidepanel.preset.emptyPreview')}
+          </p>
         </div>
-        <div className="flex items-center gap-1">
-          <button
+        <div className="ds-preset-actions">
+          <Button
+            type="button"
+            variant={isActive ? 'outline' : 'default'}
+            size="sm"
             onClick={isActive ? onDeactivate : onActivate}
-            className="text-[11px] px-2 py-1 rounded-md transition-all duration-150"
-            style={{
-              color: isActive ? 'var(--ds-text-secondary)' : 'var(--ds-blue)',
-              background: isActive ? 'var(--ds-surface)' : 'transparent',
-            }}
+            className="ds-preset-action"
           >
-            {isActive ? t('common.deactivate') : t('common.enable')}
-          </button>
-          <button
+            {isActive ? t('sidepanel.preset.stopUsing') : t('sidepanel.preset.use')}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
             onClick={onEdit}
             aria-label={t('common.edit')}
-            className="text-[11px] px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-150"
-            style={{ color: 'var(--ds-text-secondary)' }}
+            className="ds-preset-action"
           >
             {t('common.edit')}
-          </button>
-          <button
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
             onClick={onDelete}
             aria-label={t('common.delete')}
-            className="ds-text-btn-delete text-[11px] px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-150"
+            className="ds-preset-action"
           >
             {t('common.delete')}
-          </button>
+          </Button>
         </div>
       </div>
-      <p
-        className="text-xs mt-1.5 leading-relaxed line-clamp-2"
-        style={{ color: 'var(--ds-text-secondary)' }}
-      >
-        {preset.content.slice(0, 120)}{preset.content.length > 120 ? '...' : ''}
-      </p>
-    </div>
+    </article>
   );
 }

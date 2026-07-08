@@ -1,10 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import MemoryPage from './MemoryPage';
 import SavedPage from './SavedPage';
+import { SubTabs } from '../components/settings/primitives';
 import { useI18n } from '../i18n';
-import { useHorizontalScrollHints } from '../use-horizontal-scroll-hints';
-
-type LibrarySubTab = 'memory' | 'saved';
+import type { LibrarySubTab } from '../navigation';
 
 const SUB_TABS: { key: LibrarySubTab; labelKey: 'sidepanel.libraryPage.tabs.memory' | 'sidepanel.libraryPage.tabs.saved' }[] = [
   { key: 'memory', labelKey: 'sidepanel.libraryPage.tabs.memory' },
@@ -12,32 +11,32 @@ const SUB_TABS: { key: LibrarySubTab; labelKey: 'sidepanel.libraryPage.tabs.memo
 ];
 
 interface LibraryPageProps {
+  activeSubTab?: LibrarySubTab;
+  onSubTabChange?: (subTab: LibrarySubTab) => void;
   onInsertPrompt: (text: string) => void;
 }
 
-export default function LibraryPage({ onInsertPrompt }: LibraryPageProps) {
-  const [sub, setSub] = useState<LibrarySubTab>('memory');
+export default function LibraryPage({ activeSubTab, onSubTabChange, onInsertPrompt }: LibraryPageProps) {
+  const [sub, setSub] = useState<LibrarySubTab>(activeSubTab ?? 'memory');
   const { t } = useI18n();
-  const subTabs = useHorizontalScrollHints<HTMLElement>({ compact: false });
+
+  useEffect(() => {
+    if (activeSubTab) setSub(activeSubTab);
+  }, [activeSubTab]);
+
+  const changeSubTab = (next: LibrarySubTab) => {
+    setSub(next);
+    onSubTabChange?.(next);
+  };
 
   return (
     <div className="flex flex-col h-full">
-      <nav
-        ref={subTabs.ref}
-        className={`sub-tabs${subTabs.className ? ` ${subTabs.className}` : ''}`}
-        aria-label={t('sidepanel.libraryPage.navLabel')}
-      >
-        {SUB_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => setSub(tab.key)}
-            className={`sub-tab${sub === tab.key ? ' sub-tab-active' : ''}`}
-          >
-            {t(tab.labelKey)}
-          </button>
-        ))}
-      </nav>
+      <SubTabs
+        tabs={SUB_TABS.map((tab) => ({ key: tab.key, label: t(tab.labelKey) }))}
+        value={sub}
+        onChange={changeSubTab}
+        ariaLabel={t('sidepanel.libraryPage.navLabel')}
+      />
 
       <div className="flex-1 overflow-y-auto">
         {sub === 'memory' && <MemoryPage />}

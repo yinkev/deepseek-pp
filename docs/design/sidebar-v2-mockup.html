@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepSeek++ Sidebar v2 Mockup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #eef1f6;
+      --panel: #fbfcff;
+      --paper: #ffffff;
+      --paper-soft: #f5f7fb;
+      --paper-strong: #edf2ff;
+      --line: #d9dee8;
+      --line-strong: #c8cfdd;
+      --ink: #1e2430;
+      --muted: #657083;
+      --quiet: #98a1b1;
+      --accent: #4d6bfe;
+      --accent-ink: #ffffff;
+      --danger: #d14b4b;
+      --radius: 8px;
+      --chip: 999px;
+      --shadow: 0 18px 50px rgba(26, 34, 52, 0.12);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(140deg, rgba(77, 107, 254, 0.08), transparent 42%),
+        var(--page);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      padding: 28px;
+    }
+
+    .board {
+      width: min(1180px, 100%);
+      display: grid;
+      grid-template-columns: 260px minmax(380px, 420px) minmax(360px, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .brief,
+    .notes {
+      background: rgba(255, 255, 255, 0.74);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px;
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    .brief h1 {
+      font-size: 20px;
+      letter-spacing: 0;
+      line-height: 1.18;
+      margin-bottom: 12px;
+    }
+
+    .brief p,
+    .notes p,
+    .notes li {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .notes h2 {
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    .notes ul {
+      margin: 0;
+      padding-left: 18px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .toggle-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .toggle-row label {
+      cursor: pointer;
+    }
+
+    input[name="view"] {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .view-tab {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    #home:checked ~ .board label[for="home"],
+    #recents:checked ~ .board label[for="recents"],
+    #projects:checked ~ .board label[for="projects"],
+    #settings:checked ~ .board label[for="settings"] {
+      border-color: rgba(77, 107, 254, 0.35);
+      background: var(--paper-strong);
+      color: var(--accent);
+    }
+
+    .phone {
+      width: 400px;
+      height: 860px;
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .mock {
+      height: 100%;
+      display: none;
+      grid-template-rows: auto 1fr auto;
+      background: var(--panel);
+    }
+
+    #home:checked ~ .board .home-view,
+    #recents:checked ~ .board .recents-view,
+    #projects:checked ~ .board .projects-view,
+    #settings:checked ~ .board .settings-view {
+      display: grid;
+    }
+
+    .topbar {
+      height: 58px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.86);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+    }
+
+    .brand-mark {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: linear-gradient(135deg, #4d6bfe, #8aa0ff);
+      color: white;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+      flex: 0 0 auto;
+    }
+
+    .brand-text {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .brand-text strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.1;
+    }
+
+    .brand-text span {
+      display: block;
+      margin-top: 3px;
+      color: var(--quiet);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .icon-button,
+    .text-button,
+    .primary-button {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      color: var(--ink);
+      min-height: 34px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .icon-button {
+      width: 34px;
+      padding: 0;
+      color: var(--muted);
+    }
+
+    .primary-button {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    .content {
+      overflow: auto;
+      padding: 12px;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+    }
+
+    .hero {
+      display: grid;
+      gap: 8px;
+      padding-top: 4px;
+    }
+
+    .hero h2 {
+      font-size: 22px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.42;
+    }
+
+    .context-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+    }
+
+    .context-row strong,
+    .section-title strong,
+    .recent-main strong,
+    .project-title strong {
+      font-size: 13px;
+      line-height: 1.2;
+    }
+
+    .context-row span,
+    .section-title span,
+    .recent-main span,
+    .project-title span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 3px;
+    }
+
+    .chip-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .suggestion {
+      border: 1px solid var(--line);
+      border-radius: var(--chip);
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 13px;
+      text-align: left;
+      padding: 10px 13px;
+      line-height: 1.25;
+    }
+
+    .section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .section-title {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .row-list {
+      display: grid;
+    }
+
+    .row {
+      min-height: 48px;
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .row:last-child {
+      border-bottom: 0;
+    }
+
+    .row-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius);
+      background: var(--paper-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .row-main {
+      min-width: 0;
+    }
+
+    .row-main strong {
+      display: block;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-main span {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-action {
+      color: var(--quiet);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .composer-wrap {
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: rgba(251, 252, 255, 0.92);
+    }
+
+    .composer {
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .composer textarea {
+      border: 0;
+      outline: 0;
+      resize: none;
+      min-height: 48px;
+      width: 100%;
+      font: inherit;
+      font-size: 14px;
+      color: var(--ink);
+      background: transparent;
+    }
+
+    .composer textarea::placeholder {
+      color: #7c8594;
+    }
+
+    .composer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .model-select {
+      margin-left: auto;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper-soft);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 0 9px;
+    }
+
+    .send {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius);
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: white;
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .menu-sheet {
+      position: absolute;
+      top: 178px;
+      right: 12px;
+      left: 42px;
+      background: var(--paper);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      box-shadow: 0 16px 40px rgba(26, 34, 52, 0.16);
+      overflow: hidden;
+      z-index: 3;
+    }
+
+    .menu-heading {
+      padding: 13px 14px;
+      font-size: 13px;
+      font-weight: 750;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .menu-row {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 44px;
+      padding: 8px 14px;
+    }
+
+    .menu-row.disabled {
+      color: var(--quiet);
+    }
+
+    .menu-row + .menu-row {
+      border-top: 1px solid var(--line);
+    }
+
+    .menu-row strong {
+      font-size: 13px;
+    }
+
+    .menu-row span {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .sheet-footer {
+      padding: 10px 14px;
+      background: var(--paper-soft);
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .project-layout {
+      display: grid;
+      gap: 12px;
+    }
+
+    .project-card {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .project-card.selected {
+      border-color: rgba(77, 107, 254, 0.35);
+      background: #f6f8ff;
+    }
+
+    .project-title {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .project-title .row-icon {
+      flex: 0 0 auto;
+    }
+
+    .project-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .detail-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      overflow: hidden;
+    }
+
+    .detail-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .plain-field {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 10px;
+      background: var(--paper-soft);
+      display: grid;
+      gap: 4px;
+    }
+
+    .plain-field label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .plain-field div {
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .settings-list {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .settings-profile {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 38px 1fr;
+      gap: 12px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: var(--radius);
+      background: var(--paper-strong);
+      color: var(--accent);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+
+    .settings-profile strong {
+      font-size: 14px;
+    }
+
+    .settings-profile span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 3px;
+    }
+
+    .note-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--chip);
+      background: var(--paper-soft);
+      padding: 0 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 980px) {
+      body {
+        padding: 14px;
+        place-items: start center;
+      }
+
+      .board {
+        grid-template-columns: 1fr;
+      }
+
+      .phone {
+        width: min(400px, 100%);
+      }
+    }
+  </style>
+</head>
+<body>
+  <input id="home" name="view" type="radio" checked>
+  <input id="recents" name="view" type="radio">
+  <input id="projects" name="view" type="radio">
+  <input id="settings" name="view" type="radio">
+
+  <main class="board">
+    <section class="brief">
+      <h1>DeepSeek++ Sidebar v2</h1>
+      <p>Reading this as a power-user Chrome side panel. The target is clean, uniform, composer-first, and capable without exposing raw admin forms by default.</p>
+      <div class="toggle-row" aria-label="Mockup views">
+        <label class="view-tab" for="home">Home</label>
+        <label class="view-tab" for="recents">Recents menu</label>
+        <label class="view-tab" for="projects">Projects</label>
+        <label class="view-tab" for="settings">Settings</label>
+      </div>
+    </section>
+
+    <section class="phone" aria-label="Sidebar mockup">
+      <article class="mock home-view">
+        <header class="topbar">
+          <div class="brand-mark">D</div>
+          <div class="brand-text">
+            <strong>DeepSeek++</strong>
+            <span>Current tab ready</span>
+          </div>
+          <button class="text-button">New</button>
+          <button class="icon-button">...</button>
+        </header>
+
+        <div class="content">
+          <section class="hero">
+            <h2>Kevin, what should run next?</h2>
+            <p>Start a chat, attach the tab, or turn the current page into a longer agent task.</p>
+          </section>
+
+          <section class="context-row">
+            <div>
+              <strong>Working with this tab</strong>
+              <span>chat.deepseek.com</span>
+            </div>
+            <button class="text-button">Change</button>
+          </section>
+
+          <section class="chip-grid" aria-label="Suggested actions">
+            <button class="suggestion">Summarize the current DeepSeek conversation</button>
+            <button class="suggestion">Create a work plan from the open tabs</button>
+            <button class="suggestion">Use browser view and answer with evidence</button>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <div>
+                <strong>Recent</strong>
+                <span>Continue where you left off</span>
+              </div>
+              <button class="text-button">All</button>
+            </div>
+            <div class="row-list">
+              <div class="row">
+                <div class="row-icon">C</div>
+                <div class="row-main">
+                  <strong>DeepSeek extension redesign</strong>
+                  <span>Project, browser control, settings</span>
+                </div>
+                <span class="row-action">Open</span>
+              </div>
+              <div class="row">
+                <div class="row-icon">P</div>
+                <div class="row-main">
+                  <strong>DataAnnotation work plan</strong>
+                  <span>Tabs and saved prompts attached</span>
+                </div>
+                <span class="row-action">Open</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <div class="section-title">
+              <div>
+                <strong>Skills</strong>
+                <span>Slash commands and saved workflows</span>
+              </div>
+              <button class="text-button">Add</button>
+            </div>
+            <div class="row-list">
+              <div class="row">
+                <div class="row-icon">/</div>
+                <div class="row-main">
+                  <strong>Deep research</strong>
+                  <span>Browse, cite, and compare sources</span>
+                </div>
+                <span class="row-action">Run</span>
+              </div>
+              <div class="row">
+                <div class="row-icon">M</div>
+                <div class="row-main">
+                  <strong>Memory</strong>
+                  <span>Personal intelligence and project context</span>
+                </div>
+                <span class="row-action">Open</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="composer-wrap">
+          <div class="composer">
+            <textarea placeholder="Ask or start a mission"></textarea>
+            <div class="composer-actions">
+              <button class="icon-button">+</button>
+              <button class="icon-button">/</button>
+              <button class="icon-button">mic</button>
+              <select class="model-select" aria-label="Model">
+                <option>Expert Vision</option>
+                <option>Default</option>
+                <option>Pro Agent</option>
+              </select>
+              <button class="send">^</button>
+            </div>
+          </div>
+        </footer>
+      </article>
+
+      <article class="mock recents-view">
+        <header class="topbar">
+          <div class="brand-mark">D</div>
+          <div class="brand-text">
+            <strong>DeepSeek++</strong>
+            <span>Home</span>
+          </div>
+          <button class="text-button">New</button>
+          <button class="icon-button">...</button>
+        </header>
+
+        <div class="content">
+          <section class="hero">
+            <h2>One menu for navigation.</h2>
+            <p>The top menu opens recents, projects, skills, personal intelligence, settings, and system tools.</p>
+          </section>
+        </div>
+
+        <div class="menu-sheet" aria-label="Recent menu mock">
+          <div class="menu-heading">Recent chats</div>
+          <div class="menu-row">
+            <div class="row-icon">C</div>
+            <div>
+              <strong>DeepSeek extension redesign</strong>
+              <span>Opened today</span>
+            </div>
+            <span class="row-action">></span>
+          </div>
+          <div class="menu-row">
+            <div class="row-icon">P</div>
+            <div>
+              <strong>Project memory audit</strong>
+              <span>Browser tabs attached</span>
+            </div>
+            <span class="row-action">></span>
+          </div>
+          <div class="menu-row">
+            <div class="row-icon">S</div>
+            <div>
+              <strong>Saved prompt cleanup</strong>
+              <span>Library item</span>
+            </div>
+            <span class="row-action">></span>
+          </div>
+          <div class="menu-row">
+            <div class="row-icon">+</div>
+            <div>
+              <strong>Add skill</strong>
+              <span>Import local or GitHub skill</span>
+            </div>
+            <span class="row-action">></span>
+          </div>
+          <div class="menu-row">
+            <div class="row-icon">G</div>
+            <div>
+              <strong>Personal intelligence</strong>
+              <span>Memory, privacy, approved sites</span>
+            </div>
+            <span class="row-action">></span>
+          </div>
+          <div class="menu-row">
+            <div class="row-icon">S</div>
+            <div>
+              <strong>Settings and system</strong>
+              <span>Library, projects, capabilities, settings</span>
+            </div>
+            <span class="row-action">></span>
+          </div>
+          <div class="sheet-footer">Mock content only. Real lists come from extension stores.</div>
+        </div>
+
+        <footer class="composer-wrap">
+          <div class="composer">
+            <textarea placeholder="Ask or start a mission"></textarea>
+            <div class="composer-actions">
+              <button class="icon-button">+</button>
+              <button class="icon-button">/</button>
+              <button class="icon-button">mic</button>
+              <select class="model-select">
+                <option>Expert Vision</option>
+              </select>
+              <button class="send">^</button>
+            </div>
+          </div>
+        </footer>
+      </article>
+
+      <article class="mock projects-view">
+        <header class="topbar">
+          <div class="brand-mark">D</div>
+          <div class="brand-text">
+            <strong>Projects</strong>
+            <span>Context, memories, and conversations</span>
+          </div>
+          <button class="text-button">New</button>
+          <button class="icon-button">...</button>
+        </header>
+
+        <div class="content project-layout">
+          <section class="hero">
+            <h2>Projects are lists first.</h2>
+            <p>Create and edit details after selection. The sidebar should not open on a form dump.</p>
+          </section>
+
+          <section class="project-card selected">
+            <div class="project-title">
+              <div class="row-icon">F</div>
+              <div>
+                <strong>DeepSeek++ redesign</strong>
+                <span>Context ready for next conversation</span>
+              </div>
+            </div>
+            <div class="project-actions">
+              <button class="primary-button">Use for next chat</button>
+              <button class="text-button">Open details</button>
+            </div>
+          </section>
+
+          <section class="project-card">
+            <div class="project-title">
+              <div class="row-icon">D</div>
+              <div>
+                <strong>DataAnnotation</strong>
+                <span>Conversations and saved prompts</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="project-card">
+            <div class="project-title">
+              <div class="row-icon">S</div>
+              <div>
+                <strong>Skill system</strong>
+                <span>Local, GitHub, and enabled skills</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="detail-panel">
+            <div class="section-title">
+              <div>
+                <strong>Selected project</strong>
+                <span>Readable summary first, editing behind Manage</span>
+              </div>
+              <button class="text-button">Manage</button>
+            </div>
+            <div class="detail-body">
+              <div class="plain-field">
+                <label>Instructions</label>
+                <div>Use this context for DeepSeek++ UI work and extension verification.</div>
+              </div>
+              <div class="plain-field">
+                <label>Attached context</label>
+                <div>Recent chats, project memories, current tab when enabled.</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="composer-wrap">
+          <div class="composer">
+            <textarea placeholder="Ask within this project"></textarea>
+            <div class="composer-actions">
+              <button class="icon-button">+</button>
+              <button class="icon-button">/</button>
+              <button class="icon-button">mic</button>
+              <select class="model-select">
+                <option>Expert Vision</option>
+              </select>
+              <button class="send">^</button>
+            </div>
+          </div>
+        </footer>
+      </article>
+
+      <article class="mock settings-view">
+        <header class="topbar">
+          <div class="brand-mark">D</div>
+          <div class="brand-text">
+            <strong>Settings</strong>
+            <span>Personal intelligence and system access</span>
+          </div>
+          <button class="icon-button">?</button>
+          <button class="icon-button">x</button>
+        </header>
+
+        <div class="content">
+          <section class="settings-list">
+            <div class="settings-profile">
+              <div class="avatar">K</div>
+              <div>
+                <strong>Kevin</strong>
+                <span>Personal intelligence on this device</span>
+              </div>
+            </div>
+            <div class="row">
+              <div class="row-icon">G</div>
+              <div class="row-main">
+                <strong>Personal intelligence</strong>
+                <span>Memory, projects, suggestions</span>
+              </div>
+              <span class="row-action">></span>
+            </div>
+            <div class="row">
+              <div class="row-icon">P</div>
+              <div class="row-main">
+                <strong>Permissions</strong>
+                <span>Browser control and approved sites</span>
+              </div>
+              <span class="row-action">></span>
+            </div>
+            <div class="row">
+              <div class="row-icon">V</div>
+              <div class="row-main">
+                <strong>Voice</strong>
+                <span>Speech input and read aloud</span>
+              </div>
+              <span class="row-action">></span>
+            </div>
+            <div class="row">
+              <div class="row-icon">A</div>
+              <div class="row-main">
+                <strong>Appearance</strong>
+                <span>Theme, density, extension surface</span>
+              </div>
+              <span class="row-action">></span>
+            </div>
+            <div class="row">
+              <div class="row-icon">L</div>
+              <div class="row-main">
+                <strong>Library</strong>
+                <span>Saved prompts and reusable context</span>
+              </div>
+              <span class="row-action">></span>
+            </div>
+            <div class="row">
+              <div class="row-icon">C</div>
+              <div class="row-main">
+                <strong>Capabilities</strong>
+                <span>Skills, MCP, browser tools, runtime doctor</span>
+              </div>
+              <span class="row-action">></span>
+            </div>
+          </section>
+
+          <span class="note-pill">No separate consent prompts in this mockup</span>
+        </div>
+
+        <footer class="composer-wrap">
+          <div class="composer">
+            <textarea placeholder="Search settings"></textarea>
+            <div class="composer-actions">
+              <button class="icon-button">/</button>
+              <button class="text-button">Open options page</button>
+            </div>
+          </div>
+        </footer>
+      </article>
+    </section>
+
+    <aside class="notes">
+      <h2>Design rules for approval</h2>
+      <ul>
+        <li>No top horizontal tab strip as the main IA. It clips and makes the surface feel like an admin panel.</li>
+        <li>One composer pattern everywhere: plus, slash, mic, model dropdown, send.</li>
+        <li>Projects become list-first. Forms move behind New or Manage.</li>
+        <li>Settings becomes a clean option page pattern like Claude, with System access preserved.</li>
+        <li>Suggestions are allowed as chips. Everything else uses rows, menus, or simple panels.</li>
+        <li>Personalization must come from local stores or current tab context. No fake claims.</li>
+      </ul>
+    </aside>
+  </main>
+  <script>
+    const allowedViews = new Set(["home", "recents", "projects", "settings"]);
+    const requestedView = new URLSearchParams(window.location.search).get("view");
+    if (requestedView && allowedViews.has(requestedView)) {
+      document.getElementById(requestedView).checked = true;
+    }
+    document.querySelectorAll("label[for]").forEach((label) => {
+      label.addEventListener("click", () => {
+        const view = label.getAttribute("for");
+        if (!view || !allowedViews.has(view)) return;
+        const url = new URL(window.location.href);
+        url.searchParams.set("view", view);
+        window.history.replaceState(null, "", url);
+      });
+    });
+  </script>
+</body>
+</html>

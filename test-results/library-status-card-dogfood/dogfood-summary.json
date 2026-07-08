@@ -1,0 +1,26 @@
+{
+  "url": "http://127.0.0.1:57179/sidepanel.html",
+  "screenshots": "/Users/kyin/Projects/Deepseek-pp/test-results/library-status-card-dogfood",
+  "widths": [
+    420,
+    360
+  ],
+  "checks": [
+    "production sidepanel loaded with Chrome runtime/storage stub",
+    "real command menu opened Library and Escape closed the menu",
+    "Library Memory/Saved subtabs switched through real tab controls",
+    "Memory status Card/Header/Title/Description/Action/Content/Footer slots verified",
+    "Saved status Card/Header/Title/Description/Action/Content/Footer slots verified",
+    "Badge variants verified for ready, empty, and failure states",
+    "Memory ready row actions remained visible",
+    "Saved search produced a truthful filtered-empty state and recovered",
+    "Saved insert action sent real insert runtime payload",
+    "Memory empty status-card New opened the real form, typed values saved, and payload was checked",
+    "Saved empty status-card New opened the real form, typed values saved, and payload was checked",
+    "Memory and Saved load failures showed one status-card Retry with sanitized visible text",
+    "Memory and Saved failures recovered through keyboard Enter on Retry",
+    "no horizontal overflow at 420px or 360px",
+    "no console/page errors",
+    "visible leak pattern scan passed"
+  ]
+}

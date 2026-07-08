@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import {
   DEFAULT_PROMPT_INJECTION_SETTINGS,
   normalizePromptInjectionSettings,
@@ -8,6 +8,7 @@ import {
 } from '../../../core/prompt/settings';
 import { useI18n } from '../i18n';
 import { getRuntimeErrorMessage, unwrapRuntimeResponse } from '../runtime-response';
+import { SelectField, SettingsSection, StatusMessage, ToggleRow } from './settings/primitives';
 
 export default function PromptControlPanel() {
   const { t } = useI18n();
@@ -25,7 +26,9 @@ export default function PromptControlPanel() {
       })
       .catch((error) => {
         setSettings(DEFAULT_PROMPT_INJECTION_SETTINGS);
-        setStatusMessage(t('sidepanel.promptControls.loadFailed', { error: getRuntimeErrorMessage(error) }));
+        setStatusMessage(t('sidepanel.promptControls.loadFailed', {
+          error: getPromptControlIssueMessage(error, t('sidepanel.promptControls.backendUnavailable')),
+        }));
       });
   }, [t]);
 
@@ -45,107 +48,66 @@ export default function PromptControlPanel() {
       setSettings(normalizePromptInjectionSettings(saved));
     } catch (error) {
       setSettings(previous);
-      setStatusMessage(t('sidepanel.promptControls.saveFailed', { error: getRuntimeErrorMessage(error) }));
+      setStatusMessage(t('sidepanel.promptControls.saveFailed', {
+        error: getPromptControlIssueMessage(error, t('sidepanel.promptControls.backendUnavailable')),
+      }));
     }
   };
 
+  const cadenceOptions: Array<{ value: PromptPresetCadence; label: string }> = [
+    { value: 'default', label: t('sidepanel.promptControls.cadenceDefault') },
+    { value: 'first_message', label: t('sidepanel.promptControls.cadenceFirst') },
+    { value: 'every_message', label: t('sidepanel.promptControls.cadenceEvery') },
+    { value: 'off', label: t('sidepanel.promptControls.cadenceOff') },
+  ];
+  const languageOptions: Array<{ value: ForcedResponseLanguage; label: string }> = [
+    { value: 'auto', label: t('sidepanel.promptControls.languageAuto') },
+    { value: 'zh-CN', label: t('sidepanel.promptControls.languageZh') },
+    { value: 'en', label: t('sidepanel.promptControls.languageEn') },
+  ];
+
   return (
-    <section className="space-y-3">
-      <h2 className="text-[13px] font-medium" style={{ color: 'var(--ds-text)' }}>
-        {t('sidepanel.promptControls.title')}
-      </h2>
-      <div className="ds-surface-panel rounded-xl p-4 space-y-3">
-        <ToggleRow
-          title={t('sidepanel.promptControls.memory')}
-          description={t('sidepanel.promptControls.memoryDescription')}
-          enabled={settings.memoryEnabled}
-          onToggle={(enabled) => save({ memoryEnabled: enabled })}
-        />
-        <ToggleRow
-          title={t('sidepanel.promptControls.systemPrompt')}
-          description={t('sidepanel.promptControls.systemPromptDescription')}
-          enabled={settings.systemPromptEnabled}
-          onToggle={(enabled) => save({ systemPromptEnabled: enabled })}
-        />
-
-        <label className="block space-y-1">
-          <span className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
-            {t('sidepanel.promptControls.presetCadence')}
-          </span>
-          <select
-            value={settings.presetCadence}
-            onChange={(event) => save({ presetCadence: event.target.value as PromptPresetCadence })}
-            className="w-full px-3 py-2 text-xs rounded-lg border outline-none"
-            style={{ background: 'var(--ds-bg)', borderColor: 'var(--ds-border)', color: 'var(--ds-text)' }}
-          >
-            <option value="default">{t('sidepanel.promptControls.cadenceDefault')}</option>
-            <option value="first_message">{t('sidepanel.promptControls.cadenceFirst')}</option>
-            <option value="every_message">{t('sidepanel.promptControls.cadenceEvery')}</option>
-            <option value="off">{t('sidepanel.promptControls.cadenceOff')}</option>
-          </select>
-        </label>
-
-        <label className="block space-y-1">
-          <span className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
-            {t('sidepanel.promptControls.forceLanguage')}
-          </span>
-          <select
-            value={settings.forceResponseLanguage}
-            onChange={(event) => save({ forceResponseLanguage: event.target.value as ForcedResponseLanguage })}
-            className="w-full px-3 py-2 text-xs rounded-lg border outline-none"
-            style={{ background: 'var(--ds-bg)', borderColor: 'var(--ds-border)', color: 'var(--ds-text)' }}
-          >
-            <option value="auto">{t('sidepanel.promptControls.languageAuto')}</option>
-            <option value="zh-CN">{t('sidepanel.promptControls.languageZh')}</option>
-            <option value="en">{t('sidepanel.promptControls.languageEn')}</option>
-          </select>
-        </label>
-
-        {statusMessage && (
-          <div className="text-[11px] rounded-lg px-2 py-1.5" style={{ color: 'var(--ds-text-secondary)', background: 'var(--ds-surface)' }}>
-            {statusMessage}
-          </div>
-        )}
-      </div>
-    </section>
+    <SettingsSection title={t('sidepanel.promptControls.title')}>
+      <ToggleRow
+        title={t('sidepanel.promptControls.memory')}
+        description={t('sidepanel.promptControls.memoryDescription')}
+        enabled={settings.memoryEnabled}
+        onToggle={(enabled) => save({ memoryEnabled: enabled })}
+      />
+      <ToggleRow
+        title={t('sidepanel.promptControls.systemPrompt')}
+        description={t('sidepanel.promptControls.systemPromptDescription')}
+        enabled={settings.systemPromptEnabled}
+        onToggle={(enabled) => save({ systemPromptEnabled: enabled })}
+      />
+      <SelectField
+        label={t('sidepanel.promptControls.presetCadence')}
+        value={settings.presetCadence}
+        options={cadenceOptions}
+        onChange={(presetCadence) => save({ presetCadence })}
+      />
+      <SelectField
+        label={t('sidepanel.promptControls.forceLanguage')}
+        value={settings.forceResponseLanguage}
+        options={languageOptions}
+        onChange={(forceResponseLanguage) => save({ forceResponseLanguage })}
+      />
+      {statusMessage && (
+        <StatusMessage tone="error">
+          {statusMessage}
+        </StatusMessage>
+      )}
+    </SettingsSection>
   );
 }
 
-function ToggleRow({
-  title,
-  description,
-  enabled,
-  onToggle,
-}: {
-  title: string;
-  description: string;
-  enabled: boolean;
-  onToggle: (enabled: boolean) => void;
-}) {
-  return (
-    <div className="flex justify-between items-center gap-3">
-      <div>
-        <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>{title}</div>
-        <div className="text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {description}
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={() => onToggle(!enabled)}
-        className="relative shrink-0 w-10 h-8 rounded-lg transition-colors duration-200"
-        style={{ '--ds-switch-track-bg': enabled ? 'var(--ds-blue)' : 'var(--ds-border)' } as CSSProperties}
-      >
-        <span
-          className="absolute left-1 top-1/2 h-[18px] w-8 -translate-y-1/2 rounded-full transition-colors duration-200"
-          style={{ background: 'var(--ds-switch-track-bg)' }}
-        >
-          <span
-            className="ds-switch-thumb absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full transition-transform duration-200"
-            style={{ transform: enabled ? 'translateX(14px)' : 'translateX(0)' }}
-          />
-        </span>
-      </button>
-    </div>
-  );
+function getPromptControlIssueMessage(error: unknown, fallback: string): string {
+  const message = getRuntimeErrorMessage(error).trim();
+  if (!message || message === 'undefined' || message === 'null') return fallback;
+  if (
+    /\b(GET|SAVE|CLEAR|SET|DELETE|WEBDAV)_[A-Z0-9_]+\b|schemaVersion|chrome\.runtime|chrome\.storage|IndexedDB|deepseek_pp_[a-z0-9_]+|Authorization|Bearer|Cookie|data:image|\[object Object\]|apiKey|openaiApiKey|geminiApiKey|OPENAI_API_KEY|GEMINI_API_KEY|DEEPSEEK_API_KEY|password|secret|token|sk-[A-Za-z0-9_-]+|AIza[A-Za-z0-9_-]+/i.test(message)
+  ) {
+    return fallback;
+  }
+  return message;
 }

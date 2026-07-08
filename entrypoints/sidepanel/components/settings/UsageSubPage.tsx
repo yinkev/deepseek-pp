@@ -1,25 +1,18 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
-import type { UsageModelSummary, UsageRangeDays, UsageSummary } from '../../../../core/types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { UsageRangeDays, UsageSummary } from '../../../../core/types';
 import { useI18n } from '../../i18n';
 import {
   EmptyState,
   SegmentedControl,
+  SettingsSection,
   SkeletonList,
   StatusMessage,
   useBanner,
   useConfirm,
 } from './primitives';
+import { getRuntimeErrorMessage, isRuntimeFailure } from '../../runtime-response';
 
 type RangeKey = '7' | '30';
-
-const MODEL_COLORS = [
-  'var(--ds-blue)',
-  'var(--ds-success)',
-  'var(--ds-warning)',
-  'var(--ds-purple)',
-  'var(--ds-danger)',
-  'var(--ds-info)',
-];
 
 export default function UsageSubPage() {
   const { t, locale } = useI18n();
@@ -44,10 +37,13 @@ export default function UsageSubPage() {
         type: 'GET_USAGE_SUMMARY',
         payload: { rangeDays },
       }) as UsageSummary | undefined;
+      if (isRuntimeFailure(result)) {
+        throw new Error(getUsageIssueMessage(result.error, t('sidepanel.settings.usage.loadFailed')));
+      }
       if (!result) throw new Error(t('sidepanel.settings.usage.loadFailed'));
       setSummary(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('sidepanel.settings.usage.loadFailed'));
+      setError(getUsageIssueMessage(err, t('sidepanel.settings.usage.loadFailed')));
     } finally {
       setLoading(false);
     }
@@ -67,18 +63,21 @@ export default function UsageSubPage() {
     if (!ok) return;
 
     try {
-      await chrome.runtime.sendMessage({ type: 'CLEAR_USAGE_STATS' });
+      const result = await chrome.runtime.sendMessage({ type: 'CLEAR_USAGE_STATS' });
+      if (isRuntimeFailure(result)) {
+        throw new Error(getUsageIssueMessage(result.error, t('sidepanel.settings.usage.clearFailed')));
+      }
       banner.show('success', t('sidepanel.settings.usage.clearSuccess'));
       await load();
     } catch (err) {
-      banner.show('error', err instanceof Error ? err.message : t('sidepanel.settings.usage.clearFailed'));
+      banner.show('error', getUsageIssueMessage(err, t('sidepanel.settings.usage.clearFailed')));
     }
   };
 
   const hasUsage = Boolean(summary && summary.turnCount > 0);
 
   return (
-    <div className="usage-dashboard space-y-4">
+    <div className="usage-settings space-y-4">
       {confirmNode}
       {banner.node}
 
@@ -96,7 +95,7 @@ export default function UsageSubPage() {
         {hasUsage && (
           <button
             type="button"
-            className="ds-btn-cancel usage-clear-button"
+            className="ds-btn-danger usage-clear-button"
             onClick={clearStats}
           >
             {t('sidepanel.settings.usage.clearStats')}
@@ -107,7 +106,16 @@ export default function UsageSubPage() {
       {loading ? (
         <SkeletonList rows={4} />
       ) : error ? (
-        <StatusMessage tone="error">{error}</StatusMessage>
+        <div className="usage-recovery">
+          <StatusMessage tone="error">{error}</StatusMessage>
+          <button
+            type="button"
+            className="ds-btn-secondary usage-retry-button"
+            onClick={load}
+          >
+            {t('common.retry')}
+          </button>
+        </div>
       ) : !summary || !hasUsage ? (
         <EmptyState
           title={t('sidepanel.settings.usage.emptyTitle')}
@@ -115,22 +123,32 @@ export default function UsageSubPage() {
         />
       ) : (
         <>
-          <UsageMetricGrid summary={summary} locale={locale} />
-          <UsageHeatmap summary={summary} locale={locale} />
-          <UsageDailyTrend summary={summary} locale={locale} />
-          <UsageModelSplit summary={summary} locale={locale} />
+          <UsageOverview summary={summary} locale={locale} />
+          <UsageActivity summary={summary} locale={locale} />
+          <UsageModels summary={summary} locale={locale} />
         </>
       )}
     </div>
   );
 }
 
-function UsageMetricGrid({ summary, locale }: { summary: UsageSummary; locale: string }) {
+function getUsageIssueMessage(error: unknown, fallback: string): string {
+  if (error === null || error === undefined) return fallback;
+  const raw = getRuntimeErrorMessage(error).trim();
+  if (!raw || raw === 'undefined' || raw === 'null') return fallback;
+  if (/\b(GET|CLEAR)_USAGE[A-Z0-9_]*\b|schemaVersion|chrome\.runtime|chrome\.storage|IndexedDB|Bearer|Cookie|data:image/i.test(raw)) {
+    return fallback;
+  }
+  return raw;
+}
+
+function UsageOverview({ summary, locale }: { summary: UsageSummary; locale: string }) {
   const { t } = useI18n();
   const mostUsedModel = summary.mostUsedModel;
   return (
-    <div className="usage-metric-grid">
-      <MetricCell
+    <SettingsSection title={t('sidepanel.settings.usage.overviewTitle')}>
+      <div className="usage-summary-list">
+        <UsageFactRow
         label={t('sidepanel.settings.usage.totalTokens')}
         value={formatCompactTokens(summary.totalTokens, locale)}
         detail={t('sidepanel.settings.usage.serverSamples', {
@@ -138,174 +156,107 @@ function UsageMetricGrid({ summary, locale }: { summary: UsageSummary; locale: s
           total: summary.turnCount,
         })}
       />
-      <MetricCell
+        <UsageFactRow
         label={t('sidepanel.settings.usage.sessions')}
         value={formatInteger(summary.sessionCount, locale)}
         detail={t('sidepanel.settings.usage.turns', { count: summary.turnCount })}
       />
-      <MetricCell
+        <UsageFactRow
         label={t('sidepanel.settings.usage.messages')}
         value={formatInteger(summary.messageCount, locale)}
         detail={t('sidepanel.settings.usage.activeDays', { count: summary.activeDays })}
       />
-      <MetricCell
+        <UsageFactRow
         label={t('sidepanel.settings.usage.currentStreak')}
         value={formatInteger(summary.currentStreak, locale)}
         detail={t('sidepanel.settings.usage.daysUnit')}
       />
-      <MetricCell
+        <UsageFactRow
         label={t('sidepanel.settings.usage.mostUsedModel')}
         value={mostUsedModel?.modelLabel ?? t('sidepanel.settings.usage.noModel')}
         detail={mostUsedModel
           ? t('sidepanel.settings.usage.share', { percent: formatPercent(mostUsedModel.share, locale) })
           : t('sidepanel.settings.usage.noModel')}
       />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function UsageFactRow({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="usage-fact-row">
+      <div className="usage-fact-copy">
+        <div className="usage-fact-label">{label}</div>
+        <div className="usage-fact-detail">{detail}</div>
+      </div>
+      <div className="usage-fact-value">{value}</div>
     </div>
   );
 }
 
-function MetricCell({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="usage-metric-cell">
-      <div className="usage-metric-label">{label}</div>
-      <div className="usage-metric-value">{value}</div>
-      <div className="usage-metric-detail">{detail}</div>
-    </div>
-  );
-}
-
-function UsageHeatmap({ summary, locale }: { summary: UsageSummary; locale: string }) {
+function UsageActivity({ summary, locale }: { summary: UsageSummary; locale: string }) {
   const { t } = useI18n();
-  return (
-    <section className="usage-panel">
-      <div className="usage-panel-heading">
-        <h2>{t('sidepanel.settings.usage.heatmapTitle')}</h2>
-        <div className="usage-legend" aria-hidden="true">
-          <span>{t('sidepanel.settings.usage.less')}</span>
-          {[0, 1, 2, 3, 4, 5].map((level) => (
-            <span key={level} className="usage-heat-cell usage-legend-cell" data-level={level} />
-          ))}
-          <span>{t('sidepanel.settings.usage.more')}</span>
-        </div>
-      </div>
-      <div className="usage-heatmap-grid" role="list" aria-label={t('sidepanel.settings.usage.heatmapTitle')}>
-        {summary.heatmap.map((cell) => (
-          <span
-            key={cell.day}
-            role="listitem"
-            className="usage-heat-cell"
-            data-level={cell.level}
-            title={`${formatDate(cell.timestamp, locale)} · ${formatInteger(cell.tokens, locale)} tokens`}
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function UsageDailyTrend({ summary, locale }: { summary: UsageSummary; locale: string }) {
-  const { t } = useI18n();
-  const maxTokens = Math.max(1, ...summary.days.map((day) => day.tokens));
-  const labelStep = summary.rangeDays === 30 ? 6 : 1;
+  const activeDays = summary.days
+    .filter((day) => day.turnCount > 0 || day.messageCount > 0 || day.tokens > 0)
+    .slice(-7)
+    .reverse();
 
   return (
-    <section className="usage-panel">
-      <div className="usage-panel-heading">
-        <h2>{t('sidepanel.settings.usage.dailyTrendTitle')}</h2>
-      </div>
-      <div
-        className="usage-bars"
-        aria-label={t('sidepanel.settings.usage.dailyTrendTitle')}
-        style={{ '--usage-day-count': summary.rangeDays } as CSSProperties}
-      >
-        {summary.days.map((day, dayIndex) => {
-          const height = day.tokens > 0 ? Math.max(5, (day.tokens / maxTokens) * 100) : 0;
-          return (
-            <div
+    <SettingsSection title={t('sidepanel.settings.usage.activityTitle')}>
+      {activeDays.length === 0 ? (
+        <div className="usage-empty-row">{t('sidepanel.settings.usage.noActiveDays')}</div>
+      ) : (
+        <div className="usage-row-list">
+          {activeDays.map((day) => (
+            <UsageFactRow
               key={day.day}
-              className="usage-bar-column"
-              title={`${formatDate(day.timestamp, locale)} · ${formatInteger(day.tokens, locale)} tokens`}
-            >
-              <div className="usage-bar-track">
-                <div className="usage-bar-stack" style={{ height: `${height}%` }}>
-                  {day.models.map((model) => (
-                    <span
-                      key={model.modelKey}
-                      className="usage-bar-segment"
-                      style={{
-                        '--usage-model-color': getModelColor(model.modelKey, summary.modelUsage),
-                        flexGrow: Math.max(model.tokens, 1),
-                      } as CSSProperties}
-                    />
-                  ))}
-                </div>
-              </div>
-              <span className="usage-bar-label">
-                {dayIndex % labelStep === 0 || dayIndex === summary.days.length - 1
-                  ? formatShortDate(day.timestamp, locale)
-                  : ''}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </section>
+              label={formatDate(day.timestamp, locale)}
+              value={formatCompactTokens(day.tokens, locale)}
+              detail={t('sidepanel.settings.usage.daySummary', {
+                turns: day.turnCount,
+                messages: day.messageCount,
+                sessions: day.sessionCount,
+              })}
+            />
+          ))}
+        </div>
+      )}
+    </SettingsSection>
   );
 }
 
-function UsageModelSplit({ summary, locale }: { summary: UsageSummary; locale: string }) {
+function UsageModels({ summary, locale }: { summary: UsageSummary; locale: string }) {
   const { t } = useI18n();
-  const donutStyle = {
-    background: buildDonutGradient(summary.modelUsage),
-  };
 
   return (
-    <section className="usage-panel">
-      <div className="usage-panel-heading">
-        <h2>{t('sidepanel.settings.usage.modelUsageTitle')}</h2>
-      </div>
-      <div className="usage-model-layout">
-        <div className="usage-donut" style={donutStyle}>
-          <div className="usage-donut-hole">
-            <strong>{formatCompactTokens(summary.totalTokens, locale)}</strong>
-            <span>tokens</span>
-          </div>
-        </div>
+    <SettingsSection title={t('sidepanel.settings.usage.modelUsageTitle')}>
+      {summary.modelUsage.length === 0 ? (
+        <div className="usage-empty-row">{t('sidepanel.settings.usage.noModel')}</div>
+      ) : (
         <div className="usage-model-list">
           {summary.modelUsage.map((model) => (
             <div key={model.modelKey} className="usage-model-row">
-              <span
-                className="usage-model-dot"
-                style={{ background: getModelColor(model.modelKey, summary.modelUsage) }}
-              />
               <div className="min-w-0 flex-1">
                 <div className="usage-model-name">{model.modelLabel}</div>
-                <div className="usage-model-tokens">{formatCompactTokens(model.totalTokens, locale)} tokens</div>
+                <div className="usage-model-tokens">
+                  {t('sidepanel.settings.usage.modelDetail', {
+                    turns: model.turnCount,
+                    messages: model.messageCount,
+                    sessions: model.sessionCount,
+                  })}
+                </div>
               </div>
-              <div className="usage-model-share">{formatPercent(model.share, locale)}</div>
+              <div className="usage-model-value">
+                <span>{formatCompactTokens(model.totalTokens, locale)}</span>
+                <span>{formatPercent(model.share, locale)}</span>
+              </div>
             </div>
           ))}
         </div>
-      </div>
-    </section>
+      )}
+    </SettingsSection>
   );
-}
-
-function getModelColor(modelKey: string, models: readonly UsageModelSummary[]): string {
-  const index = Math.max(0, models.findIndex((model) => model.modelKey === modelKey));
-  return MODEL_COLORS[index % MODEL_COLORS.length];
-}
-
-function buildDonutGradient(models: readonly UsageModelSummary[]): string {
-  if (models.length === 0) return 'var(--ds-border)';
-  let cursor = 0;
-  const stops = models.map((model, index) => {
-    const start = cursor;
-    cursor += model.share * 100;
-    const end = Math.max(cursor, start + 0.6);
-    return `${MODEL_COLORS[index % MODEL_COLORS.length]} ${start.toFixed(2)}% ${end.toFixed(2)}%`;
-  });
-  return `conic-gradient(${stops.join(', ')})`;
 }
 
 function formatInteger(value: number, locale: string): string {
@@ -330,13 +281,6 @@ function formatPercent(value: number, locale: string): string {
 function formatDate(timestamp: number, locale: string): string {
   return new Intl.DateTimeFormat(locale, {
     month: 'short',
-    day: 'numeric',
-  }).format(new Date(timestamp));
-}
-
-function formatShortDate(timestamp: number, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
-    month: 'numeric',
     day: 'numeric',
   }).format(new Date(timestamp));
 }

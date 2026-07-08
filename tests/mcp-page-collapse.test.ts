@@ -48,18 +48,21 @@ describe('McpPage server row collapse', () => {
   it('collapses the initially selected Multimodal Vision row', async () => {
     await renderMcpPage();
 
-    expect(container.textContent).toContain(MULTIMODAL_MCP_NATIVE_HOST);
+    expect(container.textContent).toContain('连接器');
+    expect(container.textContent).toContain('连接');
+    expect(container.textContent).toContain('媒体分析宿主');
+    expect(container.textContent).not.toContain(MULTIMODAL_MCP_SERVER_NAME);
+    expect(container.textContent).not.toContain(MULTIMODAL_MCP_NATIVE_HOST);
 
-    const title = findExactText(MULTIMODAL_MCP_SERVER_NAME);
-    const collapseIcon = title.previousElementSibling;
-    expect(collapseIcon).toBeTruthy();
+    const row = container.querySelector('.ds-connector-row') as HTMLElement | null;
+    expect(row).toBeTruthy();
 
     await act(async () => {
-      collapseIcon!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(container.textContent).toContain(MULTIMODAL_MCP_SERVER_NAME);
-    expect(container.textContent).not.toContain(MULTIMODAL_MCP_NATIVE_HOST);
+    expect(container.textContent).toContain('媒体分析');
+    expect(container.textContent).not.toContain('媒体分析宿主');
   });
 });
 
@@ -77,14 +80,6 @@ async function settle() {
       await Promise.resolve();
     });
   }
-}
-
-function findExactText(text: string): HTMLElement {
-  const element = Array.from(container.querySelectorAll<HTMLElement>('*')).find(
-    (candidate) => candidate.textContent === text,
-  );
-  expect(element).toBeTruthy();
-  return element!;
 }
 
 const now = 1_718_000_000_000;

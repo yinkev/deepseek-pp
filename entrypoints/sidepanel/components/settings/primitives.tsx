@@ -1,4 +1,38 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
+import { Skeleton as ShadcnSkeleton } from '@/components/ui/skeleton';
+import { Slider as ShadcnSlider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { useI18n } from '../../i18n';
 
 /**
  * Shared building blocks for the settings sub-pages.
@@ -18,14 +52,14 @@ export function SettingsSection({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-2.5">
-      <div className="space-y-0.5">
+    <section className="ds-settings-section">
+      <div className="ds-settings-section-header">
         <h2 className="ds-settings-section-title">{title}</h2>
         {description && (
           <p className="ds-settings-section-description">{description}</p>
         )}
       </div>
-      <div className="ds-surface-panel p-4 space-y-3">{children}</div>
+      <div className="ds-surface-panel ds-settings-section-panel">{children}</div>
     </section>
   );
 }
@@ -37,6 +71,7 @@ export function ToggleRow({
   disabled,
   onToggle,
   trailing,
+  disabledLabel,
 }: {
   title: string;
   description?: string;
@@ -44,39 +79,53 @@ export function ToggleRow({
   disabled?: boolean;
   onToggle: (next: boolean) => void;
   trailing?: ReactNode;
+  disabledLabel?: string;
 }) {
+  const { t } = useI18n();
+  const switchId = useId();
+  const state = enabled ? 'on' : 'off';
+  const stateLabel = state === 'on' ? t('common.on') : t('common.off');
+  const availabilityLabel = disabled && disabledLabel ? disabledLabel : '';
+  const ariaLabel = availabilityLabel ? `${title}: ${stateLabel}, ${availabilityLabel}` : `${title}: ${stateLabel}`;
+
   return (
-    <div className="flex justify-between items-center gap-3">
-      <div className="min-w-0">
-        <div className="text-xs font-medium" style={{ color: 'var(--ds-text)' }}>
+    <Field
+      orientation="horizontal"
+      data-disabled={disabled ? true : undefined}
+      className="ds-toggle-row"
+    >
+      <FieldContent className="ds-toggle-row-copy">
+        <FieldLabel htmlFor={switchId} className="ds-toggle-row-title">
           {title}
-        </div>
+        </FieldLabel>
         {description && (
-          <div className="ds-toggle-row-description text-[11px] mt-0.5" style={{ color: 'var(--ds-text-tertiary)' }}>
+          <FieldDescription className="ds-toggle-row-description">
             {description}
-          </div>
+          </FieldDescription>
         )}
         {trailing}
-      </div>
-      <button
-        type="button"
-        onClick={() => !disabled && onToggle(!enabled)}
-        disabled={disabled}
-        role="switch"
-        aria-checked={enabled}
-        className="ds-switch relative shrink-0 w-10 h-8 rounded-lg transition-colors duration-200 disabled:opacity-40"
-      >
-        <span
-          className="absolute left-1 top-1/2 h-[18px] w-8 -translate-y-1/2 rounded-full transition-colors duration-200"
-          style={{ background: enabled ? 'var(--ds-blue)' : 'var(--ds-border)' }}
-        >
-          <span
-            className="ds-switch-thumb absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full transition-transform duration-200"
-            style={{ transform: enabled ? 'translateX(14px)' : 'translateX(0)' }}
-          />
+      </FieldContent>
+      <div className="ds-toggle-row-action">
+        <span className="ds-toggle-row-state" data-state={state}>
+          {stateLabel}
         </span>
-      </button>
-    </div>
+        {availabilityLabel && (
+          <span className="ds-toggle-row-state" data-state="unavailable">
+            {availabilityLabel}
+          </span>
+        )}
+        <Switch
+          id={switchId}
+          checked={enabled}
+          onCheckedChange={(next) => {
+            if (!disabled) onToggle(next);
+          }}
+          disabled={disabled}
+          aria-label={ariaLabel}
+          className="ds-switch"
+        />
+      </div>
+    </Field>
   );
 }
 
@@ -99,95 +148,286 @@ export function Slider({
   format?: (value: number) => string;
   onChange: (value: number) => void;
 }) {
-  const pct = ((value - min) / (max - min)) * 100;
+  const labelId = useId();
+  const valueId = `${labelId}-value`;
+
   return (
-    <div>
-      <div className="flex justify-between items-center mb-1.5">
-        <label className="text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+    <Field
+      data-disabled={disabled ? true : undefined}
+      className="ds-settings-slider-field"
+    >
+      <span className="ds-settings-slider-header">
+        <FieldLabel id={labelId} className="ds-settings-slider-label">
           {label}
-        </label>
-        <span className="text-[11px] font-mono" style={{ color: 'var(--ds-text-tertiary)' }}>
+        </FieldLabel>
+        <span id={valueId} className="ds-settings-slider-value">
           {format ? format(value) : value}
         </span>
-      </div>
-      <input
-        type="range"
+      </span>
+      <ShadcnSlider
+        aria-labelledby={labelId}
+        aria-describedby={valueId}
+        aria-valuetext={format ? format(value) : String(value)}
+        value={[value]}
         min={min}
         max={max}
         step={step}
-        value={value}
         disabled={disabled}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="ds-range w-full h-1.5 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-        style={{
-          background: `linear-gradient(to right, var(--ds-blue) ${pct}%, var(--ds-border) ${pct}%)`,
+        onValueChange={(next) => {
+          const nextValue = next[0];
+          if (typeof nextValue === 'number') onChange(nextValue);
         }}
+        className="ds-settings-slider"
       />
-    </div>
+    </Field>
   );
 }
 
-const inputClass =
-  'w-full px-3 py-2 text-xs border outline-none transition-colors focus:border-[var(--ds-blue)]';
-
-const inputStyle = {
-  background: 'var(--ds-bg)',
-  borderColor: 'var(--ds-border)',
-  color: 'var(--ds-text)',
-  borderRadius: 'var(--radius-ctrl)',
-};
-
 export function TextField({
+  id,
   label,
   hint,
+  meta,
   type = 'text',
   value,
   placeholder,
   autoComplete,
+  ariaLabel,
+  disabled,
+  fieldClassName,
+  inputClassName,
   onChange,
   onKeyDown,
   trailing,
 }: {
+  id?: string;
   label?: string;
   hint?: string;
+  meta?: ReactNode;
   type?: string;
   value: string;
   placeholder?: string;
   autoComplete?: string;
+  ariaLabel?: string;
+  disabled?: boolean;
+  fieldClassName?: string;
+  inputClassName?: string;
   onChange: (value: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void;
   trailing?: ReactNode;
 }) {
+  const generatedInputId = useId();
+  const inputId = id ?? generatedInputId;
+  const hintId = hint ? `${inputId}-hint` : undefined;
   const input = (
-    <input
+    <Input
+      id={inputId}
       type={type}
       value={value}
       placeholder={placeholder}
       autoComplete={autoComplete}
+      aria-label={ariaLabel}
+      aria-describedby={hintId}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
-      className={`${inputClass} ${trailing ? 'flex-1' : ''}`}
-      style={inputStyle}
+      className={['ds-input ds-settings-control-input', trailing ? 'flex-1' : '', inputClassName].filter(Boolean).join(' ')}
     />
   );
   return (
-    <label className="block space-y-1">
-      {(label || hint) && (
-        <span className="block text-[10px] font-medium" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {label}
+    <Field
+      data-disabled={disabled ? true : undefined}
+      className={['ds-settings-control-field', fieldClassName].filter(Boolean).join(' ')}
+    >
+      {(label || meta) && (
+        <span className="ds-field-label-row">
+          {label && (
+            <FieldLabel htmlFor={inputId} className="ds-field-label-text">
+              {label}
+            </FieldLabel>
+          )}
+          {meta && (
+            <span className="ds-field-label-meta">
+              {meta}
+            </span>
+          )}
         </span>
       )}
       {trailing ? (
-        <div className="flex gap-2 items-stretch">{input}{trailing}</div>
+        <div className="ds-settings-control-inline">{input}{trailing}</div>
       ) : (
         input
       )}
       {hint && (
-        <span className="block text-[10px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+        <FieldDescription id={hintId} className="ds-settings-control-description">
           {hint}
+        </FieldDescription>
+      )}
+    </Field>
+  );
+}
+
+export function TextAreaField({
+  label,
+  hint,
+  meta,
+  name,
+  value,
+  placeholder,
+  rows = 4,
+  fieldClassName,
+  textareaClassName,
+  onChange,
+}: {
+  label?: string;
+  hint?: string;
+  meta?: ReactNode;
+  name?: string;
+  value: string;
+  placeholder?: string;
+  rows?: number;
+  fieldClassName?: string;
+  textareaClassName?: string;
+  onChange: (value: string) => void;
+}) {
+  const textareaId = useId();
+  const hintId = hint ? `${textareaId}-hint` : undefined;
+
+  return (
+    <Field className={['ds-settings-control-field ds-library-textarea-field', fieldClassName].filter(Boolean).join(' ')}>
+      {(label || meta) && (
+        <span className="ds-field-label-row">
+          {label && (
+            <FieldLabel htmlFor={textareaId} className="ds-field-label-text">
+              {label}
+            </FieldLabel>
+          )}
+          {meta && (
+            <span className="ds-field-label-meta">
+              {meta}
+            </span>
+          )}
         </span>
       )}
-    </label>
+      <Textarea
+        id={textareaId}
+        name={name}
+        value={value}
+        placeholder={placeholder}
+        rows={rows}
+        aria-describedby={hintId}
+        onChange={(e) => onChange(e.target.value)}
+        className={['ds-library-textarea', textareaClassName].filter(Boolean).join(' ')}
+      />
+      {hint && (
+        <FieldDescription id={hintId} className="ds-settings-control-description">
+          {hint}
+        </FieldDescription>
+      )}
+    </Field>
+  );
+}
+
+export function SelectField<T extends string>({
+  label,
+  hint,
+  meta,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  label?: string;
+  hint?: string;
+  meta?: ReactNode;
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  disabled?: boolean;
+  onChange: (value: T) => void;
+}) {
+  const selectId = useId();
+  const hintId = hint ? `${selectId}-hint` : undefined;
+
+  return (
+    <Field
+      data-disabled={disabled ? true : undefined}
+      className="ds-settings-control-field"
+    >
+      {(label || meta) && (
+        <span className="ds-field-label-row">
+          {label && (
+            <FieldLabel htmlFor={selectId} className="ds-field-label-text">
+              {label}
+            </FieldLabel>
+          )}
+          {meta && (
+            <span className="ds-field-label-meta">
+              {meta}
+            </span>
+          )}
+        </span>
+      )}
+      <NativeSelect
+        id={selectId}
+        value={value}
+        disabled={disabled}
+        aria-describedby={hintId}
+        onChange={(e) => onChange(e.currentTarget.value as T)}
+        className="ds-settings-native-select"
+      >
+        {options.map((option) => (
+          <NativeSelectOption key={option.value} value={option.value}>
+            {option.label}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {hint && (
+        <FieldDescription id={hintId} className="ds-settings-control-description">
+          {hint}
+        </FieldDescription>
+      )}
+    </Field>
+  );
+}
+
+export function SettingsSegmentedGroup<T extends string>({
+  ariaLabel,
+  options,
+  value,
+  onChange,
+}: {
+  ariaLabel: string;
+  options: Array<{ value: T; label: string }>;
+  value: T | null;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      value={value ?? undefined}
+      onValueChange={(next) => {
+        if (next) onChange(next as T);
+      }}
+      className="ds-settings-segmented"
+      data-count={options.length}
+      aria-label={ariaLabel}
+      size="sm"
+      spacing={0}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <ToggleGroupItem
+            key={option.value}
+            value={option.value}
+            data-active={active ? 'true' : 'false'}
+            className="ds-settings-segmented-option"
+          >
+            {option.label}
+          </ToggleGroupItem>
+        );
+      })}
+    </ToggleGroup>
   );
 }
 
@@ -201,52 +441,35 @@ export function StatusMessage({
   onDismiss?: () => void;
 }) {
   const palette = {
-    success: { color: 'var(--ds-success)', bg: 'var(--ds-success-bg)' },
+    success: { color: 'var(--ds-text-secondary)', bg: 'var(--ds-surface)' },
     error: { color: 'var(--ds-danger)', bg: 'var(--ds-danger-bg)' },
     warning: { color: 'var(--ds-warning, var(--ds-text-secondary))', bg: 'var(--ds-warning-bg, var(--ds-surface))' },
     info: { color: 'var(--ds-text-secondary)', bg: 'var(--ds-surface)' },
   }[tone];
   return (
-    <div
-      className="text-[11px] px-3 py-2 flex items-start gap-2"
-      style={{ color: palette.color, background: palette.bg, border: '1px solid var(--ds-border)', borderRadius: 'var(--radius-ctrl)' }}
+    <Alert
+      variant={tone === 'error' ? 'destructive' : 'default'}
+      role={tone === 'error' ? 'alert' : 'status'}
+      aria-live={tone === 'error' ? 'assertive' : 'polite'}
+      aria-atomic="true"
+      className="grid-cols-[minmax(0,1fr)_auto] items-start gap-2 px-3 py-2"
+      style={{ color: palette.color, background: palette.bg, border: '1px solid var(--ds-border)', borderRadius: 'var(--radius-ctrl)', fontSize: '11px' }}
     >
-      <div className="flex-1 min-w-0">{children}</div>
+      <AlertDescription className="min-w-0 text-[11px] leading-snug text-inherit">
+        {children}
+      </AlertDescription>
       {onDismiss && (
         <button
           type="button"
           onClick={onDismiss}
           aria-label="dismiss"
-          className="shrink-0 leading-none opacity-60 hover:opacity-100"
+          className="shrink-0 leading-none text-inherit opacity-60 hover:opacity-100"
           style={{ color: palette.color }}
         >
           ×
         </button>
       )}
-    </div>
-  );
-}
-
-export function StatusBadge({
-  configured,
-  configuredLabel,
-  notConfiguredLabel,
-}: {
-  configured: boolean;
-  configuredLabel: string;
-  notConfiguredLabel: string;
-}) {
-  return (
-    <span
-      className="shrink-0 text-[10px] px-2 py-0.5 uppercase tracking-wide font-medium"
-      style={{
-        color: configured ? 'var(--ds-success)' : 'var(--ds-text-tertiary)',
-        background: configured ? 'var(--ds-success-bg)' : 'var(--ds-surface)',
-        borderRadius: 'var(--radius-ctrl)',
-      }}
-    >
-      {configured ? configuredLabel : notConfiguredLabel}
-    </span>
+    </Alert>
   );
 }
 
@@ -314,46 +537,54 @@ function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  // Close on Escape, lock body scroll while open.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  const resolvedRef = useRef(false);
+  const cancel = () => {
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
+    onCancel();
+  };
+  const confirm = () => {
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
+    onConfirm();
+  };
 
   return (
-    <div
-      className="ds-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="ds-confirm-title"
-      onClick={onCancel}
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) cancel();
+      }}
     >
-      <div className="ds-modal-card" onClick={(e) => e.stopPropagation()}>
-        <h3 id="ds-confirm-title" className="ds-modal-title">
-          {title}
-        </h3>
-        <p className="ds-modal-message">{message}</p>
-        <div className="ds-modal-actions">
-          <button type="button" className="ds-btn-cancel px-3 py-2 text-[11px] font-medium" style={{ borderRadius: 'var(--radius-ctrl)' }} onClick={onCancel}>
+      <AlertDialogContent
+        className="ds-modal-card"
+        size="sm"
+        onOverlayClick={cancel}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle id="ds-confirm-title" className="ds-modal-title">
+            {title}
+          </AlertDialogTitle>
+          <AlertDialogDescription className="ds-modal-message">
+            {message}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="ds-modal-actions">
+          <AlertDialogCancel type="button" size="sm" className="ds-btn-cancel px-3 py-2 text-[11px] font-medium" style={{ borderRadius: 'var(--radius-ctrl)' }} onClick={cancel}>
             {cancelLabel}
-          </button>
-          <button type="button" className="ds-btn-danger px-3 py-2 text-[11px] font-medium" style={{ borderRadius: 'var(--radius-ctrl)' }} onClick={onConfirm} autoFocus>
+          </AlertDialogCancel>
+          <AlertDialogAction type="button" variant="destructive" size="sm" className="ds-btn-danger px-3 py-2 text-[11px] font-medium" style={{ borderRadius: 'var(--radius-ctrl)' }} onClick={confirm} autoFocus>
             {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
 /**
- * Tab strip that replaces the hand-rolled `sub-tabs`/`sub-tab` markup in
- * LibraryPage / CapabilitiesPage / SettingsPage. Adds the ARIA tab semantics
- * (`role="tablist"`/`role="tab"`/`aria-selected`) and left/right keyboard
- * navigation that the duplicated markup was missing.
+ * Compact route tab strip. The public API stays small so existing pages can
+ * keep owning routing while shadcn/Radix owns tab semantics and keyboarding.
  */
 export function SubTabs<T extends string>({
   tabs,
@@ -366,33 +597,32 @@ export function SubTabs<T extends string>({
   onChange: (key: T) => void;
   ariaLabel: string;
 }) {
-  const onKeyDown = (e: React.KeyboardEvent, index: number) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    e.preventDefault();
-    const next = e.key === 'ArrowRight'
-      ? (index + 1) % tabs.length
-      : (index - 1 + tabs.length) % tabs.length;
-    onChange(tabs[next].key);
-  };
   return (
-    <nav className="sub-tabs" aria-label={ariaLabel} role="tablist">
-      {tabs.map((tab, index) => {
-        const active = tab.key === value;
-        return (
-          <button
-            key={tab.key}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            tabIndex={active ? 0 : -1}
-            onClick={() => onChange(tab.key)}
-            onKeyDown={(e) => onKeyDown(e, index)}
-            className={`sub-tab${active ? ' sub-tab-active' : ''}`}
-          >
-            {tab.label}
-          </button>
-        );
-      })}
+    <nav className="sub-tabs" aria-label={ariaLabel}>
+      <Tabs
+        value={value}
+        onValueChange={(next) => onChange(next as T)}
+        className="sub-tabs-tabs"
+      >
+        <TabsList
+          variant="line"
+          aria-label={ariaLabel}
+          className="sub-tabs-list"
+        >
+          {tabs.map((tab) => {
+            const active = tab.key === value;
+            return (
+              <TabsTrigger
+                key={tab.key}
+                value={tab.key}
+                className={`sub-tab${active ? ' sub-tab-active' : ''}`}
+              >
+                {tab.label}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
+      </Tabs>
     </nav>
   );
 }
@@ -417,29 +647,31 @@ export function SegmentedControl<T extends string>({
 }) {
   const padding = size === 'sm' ? 'px-2 py-1 text-[11px]' : 'px-2.5 py-1.5 text-[11px]';
   return (
-    <div className="ds-segmented flex flex-wrap gap-1.5" role="radiogroup" aria-label={ariaLabel}>
+    <ToggleGroup
+      type="single"
+      value={value}
+      onValueChange={(next) => {
+        if (next) onChange(next as T);
+      }}
+      className="ds-segmented"
+      aria-label={ariaLabel}
+      size="sm"
+      spacing={2}
+    >
       {options.map((option) => {
         const active = option.key === value;
         return (
-          <button
+          <ToggleGroupItem
             key={option.key}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(option.key)}
-            className={`${padding} font-medium border transition-colors duration-150`}
-            style={{
-              borderRadius: 'var(--radius-ctrl)',
-              background: active ? 'var(--ds-blue)' : 'transparent',
-              color: active ? 'var(--ds-text-on-primary)' : 'var(--ds-text-secondary)',
-              borderColor: active ? 'var(--ds-blue)' : 'var(--ds-border)',
-            }}
+            value={option.key}
+            data-active={active ? 'true' : 'false'}
+            className={`ds-segmented-option ${padding}`}
           >
             {option.label}
-          </button>
+          </ToggleGroupItem>
         );
       })}
-    </div>
+    </ToggleGroup>
   );
 }
 
@@ -459,18 +691,20 @@ export function EmptyState({
   icon?: ReactNode;
 }) {
   return (
-    <div className="ds-empty-state">
-      <div className="ds-empty-state-icon">
+    <Empty className="ds-empty-state">
+      <EmptyMedia className="ds-empty-state-icon">
         {icon ?? (
           <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0H4" />
           </svg>
         )}
-      </div>
-      <p className="ds-empty-state-title">{title}</p>
-      {description && <p className="ds-empty-state-description">{description}</p>}
-      {actions && <div className="flex flex-wrap gap-2 justify-center mt-1">{actions}</div>}
-    </div>
+      </EmptyMedia>
+      <EmptyHeader>
+        <EmptyTitle className="ds-empty-state-title">{title}</EmptyTitle>
+        {description && <EmptyDescription className="ds-empty-state-description">{description}</EmptyDescription>}
+      </EmptyHeader>
+      {actions && <EmptyContent className="flex flex-wrap gap-2 justify-center mt-1">{actions}</EmptyContent>}
+    </Empty>
   );
 }
 
@@ -481,7 +715,7 @@ export function EmptyState({
  */
 export function Skeleton({ className = '', width }: { className?: string; width?: string }) {
   return (
-    <div
+    <ShadcnSkeleton
       className={`ds-skeleton rounded ${className}`}
       style={width ? { width } : undefined}
     />

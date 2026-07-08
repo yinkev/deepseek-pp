@@ -43,18 +43,18 @@ describe('i18n translation', () => {
       servers: 2,
       enabled: 1,
       tools: 4,
-    })).toBe('2 servers, 1 enabled, 4 auto tools');
+    })).toBe('1/2 connected · 4 actions available');
     expect(translate('zh-CN', 'sidepanel.mcpPage.summary', {
       servers: 2,
       enabled: 1,
       tools: 4,
-    })).toBe('2 个服务，1 个启用，4 个自动工具');
+    })).toBe('1/2 个已连接 · 4 个可用动作');
     expect(translate('en', 'sidepanel.mcpPage.messages.deleteConfirm', {
-      name: 'Filesystem MCP',
-    })).toBe('Delete MCP server "Filesystem MCP"?');
+      name: 'Research service',
+    })).toBe('Delete connector "Research service"?');
     expect(translate('zh-CN', 'sidepanel.mcpPage.messages.deleteConfirm', {
-      name: 'Filesystem MCP',
-    })).toBe('删除 MCP 服务「Filesystem MCP」？');
+      name: '研究服务',
+    })).toBe('删除连接器「研究服务」？');
     expect(translate('en', 'sidepanel.automationPage.status.timeout')).toBe('Timed out');
     expect(translate('zh-CN', 'sidepanel.automationPage.status.timeout')).toBe('超时');
   });

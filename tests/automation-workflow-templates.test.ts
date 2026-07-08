@@ -94,7 +94,7 @@ describe('automation workflow templates', () => {
     expect(debuggingInput.prompt).toContain('passing check');
   });
 
-  it('includes a primary repair-and-verification long-loop profile with explicit budgets and artifacts', () => {
+  it('includes a primary repair-and-verification long-loop profile with explicit budgets and handoff evidence', () => {
     const repair = AUTOMATION_WORKFLOW_TEMPLATES.find((template) => template.id === 'repo-repair-verify-loop');
     expect(repair).toBeTruthy();
 
@@ -110,8 +110,8 @@ describe('automation workflow templates', () => {
     expect(input.promptOptions.thinkingEnabled).toBe(true);
     expect(input.promptOptions.visualMonitor?.enabled).toBe(true);
     expect(input.prompt).toContain('Run a bounded repair-and-verification loop');
-    expect(input.prompt).toContain('proof-ledger');
-    expect(input.prompt).toContain('verification-matrix');
+    expect(input.prompt).toContain('evidence log');
+    expect(input.prompt).toContain('verification checklist');
     expect(input.prompt).toContain('no critical/high defects remain');
   });
 
