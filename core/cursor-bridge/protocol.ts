@@ -42,6 +42,8 @@ export interface CursorBridgeJobRequest {
   threadId?: string;
   /** Force a new DeepSeek main session for this thread. */
   resetThread?: boolean;
+  /** Optional budgeted project/context pack from harness (not a repo crawl). */
+  dppContext?: string;
 }
 
 export type CursorBridgeErrorCode =
@@ -264,6 +266,8 @@ export function messagesToPrompt(
     eyesNotes?: string | null;
     /** Sticky continuation: omit prior dialogue; DeepSeek session holds history. */
     deltaOnly?: boolean;
+    /** Optional harness context pack (already truncated by caller). */
+    dppContext?: string | null;
   },
 ): string {
   const profile = options?.clientProfile ?? 'generic';
@@ -304,6 +308,15 @@ export function messagesToPrompt(
     parts.push(`Instructions:\n${systemParts.join('\n\n')}`);
   }
 
+  if (options?.dppContext?.trim()) {
+    parts.push(
+      [
+        'Project context (from the harness — use when relevant to the request):',
+        options.dppContext.trim(),
+      ].join('\n'),
+    );
+  }
+
   if (options?.eyesNotes?.trim()) {
     parts.push(
       [
@@ -342,6 +355,29 @@ export function messagesToPrompt(
   }
 
   return parts.join('\n\n').trim();
+}
+
+/** Prefer history when stream missed opening characters (e.g. "This" → "is"). */
+export function repairOpeningTruncation(streamed: string, history: string): string {
+  const s = (streamed ?? '').trimEnd();
+  const h = (history ?? '').trim();
+  if (!h) return streamed ?? '';
+  if (!s) return h;
+  if (h === s) return h;
+  if (h.startsWith(s) && h.length > s.length) return h;
+  // Classic: history "I'll..." vs stream "ll..." / "This dynamic" vs " dynamic"
+  if (h.endsWith(s) && h.length - s.length <= 12) return h;
+  if (h.includes(s) && h.length > s.length + 0 && h.length - s.length <= 80) {
+    // Prefer history when it is a modest superset containing the stream body
+    const idx = h.indexOf(s);
+    if (idx >= 0 && idx <= 12) return h;
+  }
+  // If stream is clearly shorter and shares a long suffix with history
+  if (h.length > s.length && s.length >= 20) {
+    const tail = s.slice(-40);
+    if (h.includes(tail)) return h;
+  }
+  return s.length >= h.length ? s : h;
 }
 
 export function formatEyesNotes(visionText: string, imageCount: number): string {

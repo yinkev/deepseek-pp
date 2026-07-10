@@ -12,6 +12,7 @@ export interface BridgeThreadRecord {
   createdAt: number;
   updatedAt: number;
   turnCount: number;
+  clientProfile?: string;
 }
 
 export interface BridgeThreadStoreSnapshot {
@@ -22,12 +23,19 @@ export interface BridgeThreadStoreSnapshot {
   lastError: string | null;
   lastModel: string | null;
   lastThreadId: string | null;
+  stickyHits: number;
+  stickyMisses: number;
+  eyesCacheHits: number;
+  lastPromptChars: number | null;
+  lastSticky: 'hit' | 'miss' | null;
 }
 
 const STORAGE_KEY = 'cursorBridgeThreadStore';
 const THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EYES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_THREADS = 40;
+export const MAX_THREAD_TURNS = 80;
+
 const MAX_EYES_CACHE = 30;
 
 const memory: BridgeThreadStoreSnapshot = {
@@ -37,6 +45,11 @@ const memory: BridgeThreadStoreSnapshot = {
   lastError: null,
   lastModel: null,
   lastThreadId: null,
+  stickyHits: 0,
+  stickyMisses: 0,
+  eyesCacheHits: 0,
+  lastPromptChars: null,
+  lastSticky: null,
 };
 
 let loaded = false;
@@ -116,15 +129,18 @@ export function resolveThreadId(input: {
   model: string;
   messages: Array<{ role: string; content: string }>;
   reset?: boolean;
+  clientProfile?: string | null;
 }): string {
   const explicit = (input.explicitThreadId ?? '').trim();
   if (explicit && !input.reset) return explicit.slice(0, 128);
 
   const family = modelFamilyFromBridgeModel(input.model);
+  const profile = (input.clientProfile ?? 'generic').toLowerCase();
+  // First *user* turn is the stable seed even when harnesses resend full history.
   const firstUser = input.messages.find((m) => m.role === 'user')?.content ?? '';
   const seed = firstUser.slice(0, 240);
-  const hash = simpleHash(`${family}\n${seed}`);
-  return `fp-${family}-${hash}`;
+  const hash = simpleHash(`${profile}\n${family}\n${seed}`);
+  return `fp-${profile}-${family}-${hash}`;
 }
 
 export async function getThread(threadId: string): Promise<BridgeThreadRecord | null> {
@@ -178,6 +194,11 @@ export async function getBridgeStatusSnapshot(): Promise<{
   lastModel: string | null;
   lastThreadId: string | null;
   lastSessionUrl: string | null;
+  stickyHits: number;
+  stickyMisses: number;
+  eyesCacheHits: number;
+  lastPromptChars: number | null;
+  lastSticky: 'hit' | 'miss' | null;
 }> {
   const store = await loadBridgeThreadStore();
   const last = store.lastThreadId ? store.threads[store.lastThreadId] : null;
@@ -188,7 +209,30 @@ export async function getBridgeStatusSnapshot(): Promise<{
     lastModel: store.lastModel,
     lastThreadId: store.lastThreadId,
     lastSessionUrl: last?.sessionUrl ?? null,
+    stickyHits: store.stickyHits ?? 0,
+    stickyMisses: store.stickyMisses ?? 0,
+    eyesCacheHits: store.eyesCacheHits ?? 0,
+    lastPromptChars: store.lastPromptChars ?? null,
+    lastSticky: store.lastSticky ?? null,
   };
+}
+
+export async function recordStickyOutcome(
+  sticky: boolean,
+  meta?: { promptChars?: number },
+): Promise<void> {
+  const store = await loadBridgeThreadStore();
+  if (sticky) store.stickyHits = (store.stickyHits ?? 0) + 1;
+  else store.stickyMisses = (store.stickyMisses ?? 0) + 1;
+  store.lastSticky = sticky ? 'hit' : 'miss';
+  if (typeof meta?.promptChars === 'number') store.lastPromptChars = meta.promptChars;
+  await persist();
+}
+
+export async function recordEyesCacheHit(): Promise<void> {
+  const store = await loadBridgeThreadStore();
+  store.eyesCacheHits = (store.eyesCacheHits ?? 0) + 1;
+  await persist();
 }
 
 /** Stable short hash for fingerprints / image cache keys. */
@@ -208,5 +252,10 @@ export function __resetBridgeThreadStoreForTests(): void {
   memory.lastError = null;
   memory.lastModel = null;
   memory.lastThreadId = null;
+  memory.stickyHits = 0;
+  memory.stickyMisses = 0;
+  memory.eyesCacheHits = 0;
+  memory.lastPromptChars = null;
+  memory.lastSticky = null;
   loaded = true;
 }

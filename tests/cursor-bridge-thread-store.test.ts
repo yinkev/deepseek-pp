@@ -30,13 +30,15 @@ describe('cursor-bridge thread store', () => {
     expect(id).toBe('cursor-xyz');
   });
 
-  it('fingerprints by family + first user turn', () => {
+  it('fingerprints by profile + family + first user turn', () => {
     const a = resolveThreadId({
       model: 'ds/octopus',
+      clientProfile: 'cursor',
       messages: [{ role: 'user', content: 'same seed question' }],
     });
     const b = resolveThreadId({
       model: 'ds/octopus',
+      clientProfile: 'cursor',
       messages: [
         { role: 'user', content: 'same seed question' },
         { role: 'assistant', content: 'ans' },
@@ -44,7 +46,14 @@ describe('cursor-bridge thread store', () => {
       ],
     });
     expect(a).toBe(b);
-    expect(a.startsWith('fp-octopus-')).toBe(true);
+    expect(a.startsWith('fp-cursor-octopus-')).toBe(true);
+
+    const hermes = resolveThreadId({
+      model: 'ds/octopus',
+      clientProfile: 'hermes',
+      messages: [{ role: 'user', content: 'same seed question' }],
+    });
+    expect(hermes).not.toBe(a);
   });
 
   it('persists threads and eyes cache in memory', async () => {

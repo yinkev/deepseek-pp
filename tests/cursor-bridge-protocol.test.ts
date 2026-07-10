@@ -14,6 +14,7 @@ import {
   normalizeBridgeModel,
   parseChatCompletionsBody,
   readinessToError,
+  repairOpeningTruncation,
 } from '../core/cursor-bridge';
 
 describe('cursor-bridge protocol', () => {
@@ -226,5 +227,23 @@ describe('cursor-bridge protocol', () => {
     }, 'job-thread', 1);
     expect(ok.job?.threadId).toBe('cursor-chat-abc');
     expect(ok.job?.resetThread).toBe(true);
+  });
+
+  it('repairs opening truncation from history', () => {
+    expect(repairOpeningTruncation(' dynamic typically follows', 'This dynamic typically follows')).toBe(
+      'This dynamic typically follows',
+    );
+    expect(repairOpeningTruncation("ll analyze", "I'll analyze")).toContain('analyze');
+    expect(repairOpeningTruncation('full answer here', 'full answer here')).toBe('full answer here');
+  });
+
+  it('injects dppContext into prompts', () => {
+    const prompt = messagesToPrompt(
+      [{ role: 'user', content: 'What does submitStreaming do?' }],
+      { dppContext: 'File worker.ts exports runCursorBridgeJob.' },
+    );
+    expect(prompt).toContain('Project context');
+    expect(prompt).toContain('runCursorBridgeJob');
+    expect(prompt).toContain('submitStreaming');
   });
 });

@@ -46,7 +46,8 @@
     "smoke:mcp": "node scripts/mcp-smoke.mjs",
     "verify:automation": "node scripts/automation-contract-smoke.mjs",
     "verify:mcp:mock": "node scripts/mcp-live-mock.mjs",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "smoke:bridge": "node scripts/bridge-smoke.mjs"
   },
   "dependencies": {
     "dexie": "^4.4.2",

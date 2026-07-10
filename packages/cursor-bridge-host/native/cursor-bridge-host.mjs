@@ -15,6 +15,10 @@ const PORT = Number(process.env.CURSOR_BRIDGE_PORT || 8787);
 const HOST = process.env.CURSOR_BRIDGE_HOST || '127.0.0.1';
 const MAX_NATIVE_MESSAGE_BYTES = 1 * 1024 * 1024;
 const JOB_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_JOB_TIMEOUT_MS || 300_000);
+const hostStartedAt = Date.now();
+let activeJobStartedAt = null;
+let lastJobMeta = { threadId: null, sticky: null, model: null, error: null };
+
 
 // --- Native messaging framing ---
 
@@ -185,9 +189,31 @@ async function nativeLoop() {
   }
 }
 
+
+function simpleHash(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function fingerprintThreadId(job) {
+  if (job?.threadId && String(job.threadId).trim()) return String(job.threadId).trim().slice(0, 128);
+  const model = String(job?.model || 'ds/octopus').toLowerCase();
+  let family = 'octopus';
+  if (model.includes('eyes') || model.includes('vision')) family = 'octopus-eyes';
+  else if (model.includes('squid') || model.includes('flash') || model.includes('instant')) family = 'squid';
+  const profile = String(job?.clientProfile || 'generic').toLowerCase();
+  const firstUser = (job?.messages || []).find((m) => m.role === 'user')?.content || '';
+  const seed = String(firstUser).slice(0, 240);
+  return `fp-${profile}-${family}-${simpleHash(`${profile}\n${family}\n${seed}`)}`;
+}
+
 // --- OpenAI-compatible HTTP surface ---
 
-function sendJson(res, status, body) {
+function sendJson(res, status, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -195,6 +221,8 @@ function sendJson(res, status, body) {
     'access-control-allow-origin': '*',
     'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-thread-id',
     'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-expose-headers': 'x-dpp-thread-id, x-dpp-sticky',
+    ...extraHeaders,
   });
   res.end(payload);
 }
@@ -481,6 +509,13 @@ function parseChatBody(body, clientHeader) {
     body.reset_thread === true
     || body.resetThread === true
     || body.new_session === true;
+  const dppContextRaw =
+    (typeof body.dpp_context === 'string' && body.dpp_context)
+    || (typeof body.dppContext === 'string' && body.dppContext)
+    || '';
+  const dppContext = dppContextRaw && String(dppContextRaw).trim()
+    ? String(dppContextRaw).trim().slice(0, 12000)
+    : undefined;
   return {
     job: {
       id: `chatcmpl-${randomUUID()}`,
@@ -493,6 +528,7 @@ function parseChatBody(body, clientHeader) {
       images: images.length > 0 ? images : undefined,
       threadId,
       resetThread: resetThread || undefined,
+      dppContext,
     },
   };
 }
@@ -606,16 +642,26 @@ async function handleChatCompletions(req, res) {
 
       if (result?.type === 'job_error') {
         const err = result.error || { code: 'upstream_error', message: 'Unknown bridge error' };
+        lastJobMeta = { threadId: job.threadId || null, sticky: null, model: job.model, error: err.message };
         sendJson(res, 502, { error: { message: err.message, type: err.code, code: err.code } });
         return;
       }
 
       const text = typeof result?.text === 'string' ? result.text : '';
+      const resultThreadId = result?.threadId || job.threadId || fingerprintThreadId(job);
+      const resultSticky = result?.sticky === true ? 'hit' : (result?.sticky === false ? 'miss' : 'unknown');
+      lastJobMeta = {
+        threadId: resultThreadId,
+        sticky: resultSticky,
+        model: job.model,
+        error: null,
+      };
       sendJson(res, 200, {
         id: job.id,
         object: 'chat.completion',
         created: job.createdAt,
         model: job.model,
+        system_fingerprint: resultThreadId || undefined,
         choices: [
           {
             index: 0,
@@ -624,6 +670,9 @@ async function handleChatCompletions(req, res) {
           },
         ],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      }, {
+        'x-dpp-thread-id': resultThreadId || '',
+        'x-dpp-sticky': resultSticky || '',
       });
     } catch (err) {
       if (!res.headersSent) {
@@ -649,6 +698,7 @@ async function handleChatCompletions(req, res) {
 
 const httpJobQueue = [];
 let httpJobActive = false;
+    activeJobStartedAt = null;
 
 function enqueueHttpJob(fn) {
   return new Promise((resolve, reject) => {
@@ -660,6 +710,7 @@ function enqueueHttpJob(fn) {
 async function drainHttpJobQueue() {
   if (httpJobActive) return;
   httpJobActive = true;
+    activeJobStartedAt = Date.now();
   while (httpJobQueue.length > 0) {
     const item = httpJobQueue.shift();
     try {
@@ -705,6 +756,7 @@ function createServer() {
 
       if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
         const readiness = await requestReadiness();
+        const queueDepth = typeof httpJobQueue !== 'undefined' ? httpJobQueue.length : 0;
         sendJson(res, readiness.ready ? 200 : 503, {
           ok: readiness.ready,
           readiness,
@@ -715,8 +767,13 @@ function createServer() {
             eyesAsTool: true,
             eyesCache: true,
             jobQueue: true,
+            contextPack: true,
           },
           host: 'cursor-bridge',
+          uptimeMs: Date.now() - hostStartedAt,
+          queueDepth,
+          activeJobAgeMs: activeJobStartedAt ? Date.now() - activeJobStartedAt : 0,
+          lastJob: lastJobMeta,
         });
         return;
       }

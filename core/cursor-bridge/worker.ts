@@ -27,13 +27,17 @@ import {
   isSquidModel,
   messagesToPrompt,
   normalizeMessageContent,
+  repairOpeningTruncation,
 } from './protocol';
 import {
   deleteThread,
   getEyesCache,
   getThread,
+  MAX_THREAD_TURNS,
   modelFamilyFromBridgeModel,
   putThread,
+  recordEyesCacheHit,
+  recordStickyOutcome,
   resolveThreadId,
   setBridgeLastError,
   setEyesCache,
@@ -151,6 +155,7 @@ export async function runCursorBridgeJob(
       model: typeof job.model === 'string' ? job.model : 'ds/octopus',
       messages: normalizedForThread,
       reset: job.resetThread === true,
+      clientProfile: job.clientProfile ?? 'generic',
     });
 
     if (job.resetThread) {
@@ -160,6 +165,10 @@ export async function runCursorBridgeJob(
     let existing = job.resetThread ? null : await getThread(threadId);
     if (existing && existing.modelFamily !== modelFamily) {
       // Different product surface — do not reuse expert session for squid/eyes.
+      existing = null;
+    }
+    if (existing && existing.turnCount >= MAX_THREAD_TURNS) {
+      await deleteThread(threadId);
       existing = null;
     }
 
@@ -174,7 +183,10 @@ export async function runCursorBridgeJob(
     const imageHash = images.length > 0 ? hashImages(images) : null;
     if (needsEyesSubcall && imageHash) {
       const cached = await getEyesCache(imageHash);
-      if (cached) eyesNotes = cached;
+      if (cached) {
+        eyesNotes = cached;
+        await recordEyesCacheHit();
+      }
     }
 
     if (images.length > 0 && !(needsEyesSubcall && eyesNotes)) {
@@ -240,6 +252,7 @@ export async function runCursorBridgeJob(
       clientProfile: job.clientProfile ?? 'generic',
       eyesNotes,
       deltaOnly: sticky,
+      dppContext: job.dppContext,
     });
     if (!prompt && visionFileIds.length === 0) {
       return { error: { code: 'invalid_request', message: 'Prompt is empty.' } };
@@ -291,11 +304,22 @@ export async function runCursorBridgeJob(
       try {
         const snapshot = await readHistory(chatSessionId, turn.responseMessageId, headers);
         const historyText = snapshot?.assistantText?.trim() ?? '';
-        if (historyText && (historyText.length > text.length || looksTruncatedOpening(text, historyText))) {
-          if (!streamedAny && historyText) {
-            onChunk(historyText);
+        if (historyText) {
+          const repaired = repairOpeningTruncation(text, historyText);
+          if (repaired !== text) {
+            if (!streamedAny) {
+              onChunk(repaired);
+            } else if (repaired.startsWith(text) && repaired.length > text.length) {
+              // Emit only the missing prefix if stream opened mid-word.
+              const missing = repaired.slice(0, repaired.length - text.length);
+              // Only emit prefix when history is prefix+stream (classic chop).
+              if (repaired.endsWith(text) || historyText.endsWith(text)) {
+                const prefix = repaired.slice(0, Math.max(0, repaired.length - text.length));
+                if (prefix && prefix.length <= 12) onChunk(prefix);
+              }
+            }
+            text = repaired;
           }
-          text = historyText;
         }
         if (snapshot?.parentMessageId != null || snapshot?.assistantMessageId != null) {
           parentMessageId = snapshot.parentMessageId ?? snapshot.assistantMessageId;
@@ -321,7 +345,14 @@ export async function runCursorBridgeJob(
       updatedAt: now,
       turnCount: (existing?.turnCount ?? 0) + 1,
     };
+    // Final safety: if opening still looks chopped, prefer any longer history-backed text already applied;
+    // if we never got history content, leave text as-is (SSE root cause).
+    if (looksLikeMissingOpening(text) && text.length > 0) {
+      // no-op marker for tests/debug — sticky path already tried history
+    }
+
     await putThread(record);
+    await recordStickyOutcome(sticky, { promptChars: mainPrompt.length });
     await setBridgeLastError(null);
 
     return { text, threadId, sticky };
@@ -358,6 +389,17 @@ function hashImages(images: CursorBridgeImagePart[]): string {
     .map((img) => `${img.mimeType ?? ''}|${img.url.slice(0, 120)}|${img.url.length}|${img.assetPath ?? ''}`)
     .join('\n');
   return simpleHash(seed);
+}
+
+function looksLikeMissingOpening(text: string): boolean {
+  if (!text) return true;
+  // Leading space or mid-word lowercase after a cut (" are three", "-turn", "icky ")
+  if (text.startsWith(' ') || text.startsWith("'") || text.startsWith('-')) return true;
+  if (/^[a-z]{2,}/.test(text) && !/^(https?|e\.g|i\.e)/i.test(text)) {
+    // Many full answers start with capital; lowercase start often means chop
+    return true;
+  }
+  return false;
 }
 
 function looksTruncatedOpening(streamed: string, history: string): boolean {

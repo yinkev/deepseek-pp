@@ -10,6 +10,11 @@ interface BridgeStatus {
   lastModel: string | null;
   lastThreadId: string | null;
   lastSessionUrl: string | null;
+  stickyHits?: number;
+  stickyMisses?: number;
+  eyesCacheHits?: number;
+  lastPromptChars?: number | null;
+  lastSticky?: 'hit' | 'miss' | null;
 }
 
 export default function AboutSubPage({ state }: { state: SettingsState }) {
@@ -69,7 +74,14 @@ export default function AboutSubPage({ state }: { state: SettingsState }) {
         {bridge ? (
           <div className="space-y-1.5 text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
             <div>Threads: {bridge.threadCount} · Eyes cache: {bridge.eyesCacheCount}</div>
-            <div>Last model: {bridge.lastModel ?? '—'}</div>
+            <div>
+              Sticky hits/misses: {bridge.stickyHits ?? 0}/{bridge.stickyMisses ?? 0}
+              {bridge.lastSticky ? ` · last ${bridge.lastSticky}` : ''}
+              {bridge.eyesCacheHits != null ? ` · eyes cache hits ${bridge.eyesCacheHits}` : ''}
+            </div>
+            <div>Last model: {bridge.lastModel ?? '—'}
+              {bridge.lastPromptChars != null ? ` · prompt ~${bridge.lastPromptChars} chars` : ''}
+            </div>
             <div className="break-all">Thread: {bridge.lastThreadId ?? '—'}</div>
             {bridge.lastSessionUrl && (
               <a
@@ -85,6 +97,16 @@ export default function AboutSubPage({ state }: { state: SettingsState }) {
             {bridge.lastError && (
               <div style={{ color: 'var(--ds-danger, #c44)' }}>Last error: {bridge.lastError}</div>
             )}
+            <button
+              type="button"
+              className="mt-2 text-[11px] px-2 py-1 rounded border"
+              style={{ borderColor: 'var(--ds-border)', color: 'var(--ds-text-secondary)' }}
+              onClick={() => {
+                void navigator.clipboard?.writeText(JSON.stringify(bridge, null, 2));
+              }}
+            >
+              Copy diagnostics
+            </button>
           </div>
         ) : (
           <div className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>

@@ -93,3 +93,12 @@ Eyes subcalls remain one-shot (ephemeral). Main expert/squid/eyes turns are stic
 ## Health
 
 `GET http://127.0.0.1:8787/v1/health` returns readiness, model list, and feature flags.
+
+
+## Troubleshooting (fast)
+
+1. `curl -s http://127.0.0.1:8787/v1/health` — need `extensionAlive`, `hasDeepSeekTab`, `hasLogin`
+2. Missing tab/login → open logged-in chat.deepseek.com and reload the extension
+3. Host dead → `npm run cursor-bridge:install -- --extension-id <id>` then reload extension
+4. Stale models/features → reinstall host + reload extension (service worker caches old code)
+5. Sticky: same first user message + same client profile reuses a web session; `reset_thread: true` forces new

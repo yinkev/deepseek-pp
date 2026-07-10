@@ -193,7 +193,7 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
         return;
       }
 
-      post({ type: 'job_done', requestId, jobId: job.id, text: result.text });
+      post({ type: 'job_done', requestId, jobId: job.id, text: result.text, threadId: result.threadId, sticky: result.sticky });
     } finally {
       busy = false;
       activeAbort = null;

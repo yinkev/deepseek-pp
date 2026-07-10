@@ -435,4 +435,65 @@ describe('cursor-bridge worker', () => {
     expect(mainCalls).toHaveLength(2);
     expect(mainCalls[1][0].prompt).toContain('Cached visual');
   });
+
+  it('reuses sticky session without explicit threadId via fingerprint', async () => {
+    let n = 0;
+    const createSession = vi.fn(async () => {
+      n += 1;
+      return `sess-${n}`;
+    });
+    const createPow = vi.fn(async () => ({ 'X-DS-PoW-Response': 'pow' }));
+    const submitStreaming = vi.fn(async (input, callbacks) => {
+      const text = input.parentMessageId == null ? 'First answer about binders' : 'Second answer continues binders';
+      callbacks.onTextChunk?.(text, text);
+      return {
+        assistantText: text,
+        responseMessageId: input.parentMessageId == null ? 11 : 22,
+        requestMessageId: null,
+        finished: true,
+      };
+    });
+    const deps = {
+      loadClientHeaders: async () => ({ Authorization: 'Bearer token' }),
+      queryDeepSeekTabs: async () => [{ id: 1 }],
+      createSession,
+      createPow,
+      submitStreaming,
+    };
+    const seed = 'Fingerprint seed about sticky binders for multi-turn agents';
+    await runCursorBridgeJob(
+      {
+        id: 'j1',
+        model: 'ds/octopus',
+        messages: [{ role: 'user', content: seed }],
+        stream: false,
+        thinkingEnabled: false,
+        createdAt: Date.now(),
+        clientProfile: 'cursor',
+      },
+      deps,
+      () => {},
+    );
+    const second = await runCursorBridgeJob(
+      {
+        id: 'j2',
+        model: 'ds/octopus',
+        messages: [
+          { role: 'user', content: seed },
+          { role: 'assistant', content: 'First answer about binders' },
+          { role: 'user', content: 'Continue with parent ids' },
+        ],
+        stream: false,
+        thinkingEnabled: false,
+        createdAt: Date.now(),
+        clientProfile: 'cursor',
+      },
+      deps,
+      () => {},
+    );
+    expect(second).toMatchObject({ sticky: true });
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(submitStreaming.mock.calls[1][0].chatSessionId).toBe('sess-1');
+    expect(submitStreaming.mock.calls[1][0].parentMessageId).toBe(11);
+  });
 });

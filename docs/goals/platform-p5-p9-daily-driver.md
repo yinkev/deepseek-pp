@@ -235,10 +235,10 @@ no chat folder product, no official API.
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| P5 | Commit/push/freeze P0–P4 base | planned |
-| P6 | First-token / stream repair E2E | planned |
-| P7 | Harness sticky without manual headers | planned |
-| P8 | Live multimodal + smoke pack | planned |
+| P5 | Commit/push/freeze P0–P4 base | done |
+| P6 | First-token / stream repair E2E | done (residual live chop) |
+| P7 | Harness sticky without manual headers | done |
+| P8 | Live multimodal + smoke pack | done |
 | P9a | Optional memory inject (read-only) | planned optional |
 | P9b | Optional light project pack | planned optional |
 

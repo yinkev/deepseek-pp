@@ -643,10 +643,23 @@ function normalizeHistoryMessage(raw: unknown): DeepSeekHistoryMessage {
 }
 
 function extractHistoryMessageContent(value: Record<string, unknown>): string | null {
-  const direct = firstString(value.content, value.text, value.markdown, value.answer);
+  const direct = firstString(value.content, value.text, value.markdown, value.answer, value.accumulated_content);
   if (direct) return direct;
 
-  const fragments = value.fragments ?? value.response_fragments ?? (value.response as Record<string, unknown> | undefined)?.fragments;
+  const response = value.response && typeof value.response === 'object'
+    ? value.response as Record<string, unknown>
+    : null;
+  if (response) {
+    const fromResponse = firstString(response.content, response.text, response.markdown);
+    if (fromResponse) return fromResponse;
+  }
+
+  const fragments = value.fragments
+    ?? value.response_fragments
+    ?? response?.fragments
+    ?? (value.biz_data && typeof value.biz_data === 'object'
+      ? (value.biz_data as Record<string, unknown>).fragments
+      : undefined);
   if (Array.isArray(fragments)) {
     const parts = fragments
       .map((frag) => {
@@ -669,6 +682,12 @@ function extractHistoryMessageContent(value: Record<string, unknown>): string | 
       })
       .filter(Boolean);
     if (parts.length > 0) return parts.join('');
+  }
+
+  // Nested message objects sometimes wrap the body.
+  const nested = value.message;
+  if (nested && typeof nested === 'object') {
+    return extractHistoryMessageContent(nested as Record<string, unknown>);
   }
 
   return null;

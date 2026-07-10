@@ -108,6 +108,17 @@ export function parseChatCompletionsBody(
     || record.resetThread === true
     || record.new_session === true;
 
+  const dppContextRaw =
+    (typeof record.dpp_context === 'string' && record.dpp_context)
+    || (typeof record.dppContext === 'string' && record.dppContext)
+    || (record.metadata && typeof record.metadata === 'object'
+      && typeof (record.metadata as { dpp_context?: string }).dpp_context === 'string'
+      && (record.metadata as { dpp_context: string }).dpp_context)
+    || '';
+  const dppContext = typeof dppContextRaw === 'string' && dppContextRaw.trim()
+    ? dppContextRaw.trim().slice(0, 12_000)
+    : undefined;
+
   return {
     job: {
       id: jobId,
@@ -120,6 +131,7 @@ export function parseChatCompletionsBody(
       images: images.length > 0 ? images : undefined,
       threadId: threadId || undefined,
       resetThread: resetThread || undefined,
+      dppContext,
     },
   };
 }
