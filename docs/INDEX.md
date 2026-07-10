@@ -8,7 +8,7 @@
 
 | Doc | Purpose |
 |-----|---------|
-| [HANDOFF-NEXT-AGENT.md](./HANDOFF-NEXT-AGENT.md) | Short next-agent brief + P0 auth bug |
+| [HANDOFF-NEXT-AGENT.md](./HANDOFF-NEXT-AGENT.md) | Next-agent brief (bridge FREEZE + upstream merged) |
 | [bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md) | **What we built** (chronological inventory) |
 | [bridge/ARCHITECTURE.md](./bridge/ARCHITECTURE.md) | How host ↔ extension ↔ DeepSeek connect |
 | [bridge/MODELS.md](./bridge/MODELS.md) | Model IDs and behavior |

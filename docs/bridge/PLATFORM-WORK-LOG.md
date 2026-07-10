@@ -2,7 +2,7 @@
 
 **Scope:** Browser-origin OpenAI bridge + ENI + Hermes daily driver  
 **Repo:** `/Users/kyin/Projects/deepseek-pp`  
-**Status of git:** large uncommitted surface on `main` as of 2026-07-10  
+**Status of git:** committed on `main` as of 2026-07-10 (`bcf7aaf` + upstream merge `09ee70c`); 6 ahead of `fork/main`  
 **Do not confuse with:** deleted `deepseek-pp-platform` worktree, deleted ds2api integration
 
 This document is the inventory of work so there is no ambiguity about what shipped vs what is broken.
@@ -205,9 +205,13 @@ Failure mode we hit: `40003` / `missing_login` with message about invalid token.
 
 ## Open P0
 
-**Hermes ENI 40003** while chat.deepseek.com works with tab open.  
-Root class: service-worker fetch with cached Bearer vs page live session.  
-Multi-account incomplete until this is green.
+None for bridge FREEZE. Optional: page-context fetch for cookie parity.
+
+## 2026-07-10 — Upstream merge
+
+- Merged `origin/main` @ `5b04415` (PR #310): local Skill preview/import, sidepanel UI, tests
+- `entrypoints/background.ts` auto-merged; bridge paths untouched
+- Post-merge: 113/113 cursor-bridge tests, build OK
 
 ## 2026-07-10 — Host-disk multi-account vault
 

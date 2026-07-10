@@ -3,7 +3,17 @@
 How to pull the latest **zhu1090093659/deepseek-pp** into this local fork without losing browser-bridge work or pushing to the wrong remote.
 
 **Repo:** `/Users/kyin/Projects/deepseek-pp`  
-**Last reviewed:** 2026-07-09
+**Last reviewed:** 2026-07-10
+
+
+
+## Merge log (local `main`)
+
+| Date | Upstream | Merge commit | Notes |
+|------|----------|--------------|-------|
+| 2026-07-10 | `origin/main` @ `5b04415` (PR #310) | `09ee70c` | Local Skill preview/import; `background.ts` auto-merged; bridge tests 113/113; build OK |
+
+**Current workflow on this machine:** bridge work lives on `main` (not only `local/browser-origin-api`). Still: `git fetch origin` → `git merge origin/main` → test → never push to `origin`.
 
 ---
 

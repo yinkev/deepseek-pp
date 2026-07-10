@@ -44,7 +44,7 @@ These still contain historical `deepseek-pp-platform` paths inside the body:
 
 | Claim | Reality |
 |-------|---------|
-| Multi-account works | Code exists; **40003** still broke ENI as of handoff |
+| Multi-account works | **Verified** smoke matrix + 5-account vault; individual dead tokens may still 40003 |
 | Health green ⇒ chat works | False |
 | Tab required | No longer required for readiness; still useful for auth refresh |
 | Two project folders | Only `deepseek-pp` |
@@ -79,4 +79,4 @@ Next agent can still fuck up by:
 
 ## Verdict
 
-Docs were **~85% complete** after first write. This audit pass closed the main hidden surfaces (storage keys, host routes, headers, commands, stale path warnings). Remaining gaps are intentional (prompt body, hermes yaml, non-bridge product).
+Docs were **~85% complete** after first write; **~95%** after FREEZE + upstream merge doc pass (2026-07-10 evening). This audit pass closed the main hidden surfaces (storage keys, host routes, headers, commands, stale path warnings). Remaining gaps are intentional (prompt body, hermes yaml, non-bridge product).

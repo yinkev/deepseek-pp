@@ -1,8 +1,9 @@
 # Handoff for next agent — DeepSeek++ / ENI / bridge
 
-**Date:** 2026-07-10  
+**Date:** 2026-07-10 (evening — post FREEZE + upstream merge)  
 **Repo (ONLY):** `/Users/kyin/Projects/deepseek-pp`  
-**Branch:** `main` (local work is mostly **uncommitted**)  
+**Branch:** `main` — **committed** (`bcf7aaf` bridge + `09ee70c` upstream merge)  
+**Git:** 6 commits ahead of `fork/main` (local machine OK; not pushed)  
 **Do not invent extra project folders.**
 
 **Full docs index:** [docs/INDEX.md](./INDEX.md) · **Work inventory:** [docs/bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md)
@@ -101,77 +102,38 @@ Key code:
 
 ## 4. CURRENT STATE (auth + multi-account)
 
-**As of end of 2026-07-10 session:** host vault has **5** accounts; wipe-on-40003 **fixed**. Health `accountCount=5` verified. Completion multi-account rotation **not** fully proven.
+**As of 2026-07-10 evening:** P0–P25 FREEZE verified. Host vault **5** accounts; wipe-on-40003 **fixed**; Hermes ENI + CPA completions **green**; smoke matrix **PASS**.
 
-### Symptom (may still recur for single dead tokens)
-
-
-Hermes ENI fails:
-
-```text
-DeepSeek auth token was rejected while creating chat session
-code 40003 Authorization Failed (invalid token)
-```
-
-Web UI on same machine **works** (tab logged in, user can send messages).
-
-### Root cause class (not “user forgot to login”)
-
-Bridge issues `createChatSession` / PoW / completion from the **extension service worker** using **cached `Authorization` headers**.
-
-Page traffic uses **live tab context** (cookies + current Bearer from real site requests).
-
-After multi-account vault work:
-
-- Stale vault slots (`primary` + `account-2`) still present
-- Round-robin / sticky / `markAccountUsed` previously **rewrote** live legacy cache with dead tokens (partially fixed, **not fully verified green**)
-- `createClientHeaders` was preferring remembered headers over `localStorage` (patched to prefer page token when content script runs; SW still uses storage)
-- Live probe after user reload + message still returned **40003** (2026-07-10 morning)
-
-### Health still looks “fine” while chat fails
+### Verified live
 
 ```bash
 curl -s http://127.0.0.1:8787/v1/health
-# ready:true, hasLogin:true, accountCount:2  ← does NOT mean token is valid for API
-```
+# ready:true, accountCount:5, lastJob populated
 
-**Always verify with a real completion:**
-
-```bash
 curl -sS -X POST http://127.0.0.1:8787/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -H 'X-DPP-Client: hermes' \
+  -H 'Content-Type: application/json' -H 'X-DPP-Client: hermes' \
   -d '{"model":"ds/eni","messages":[{"role":"user","content":"say only: hi"}],"stream":false,"reset_thread":true}'
+# 200 + content; x-dpp-account-id header set
 ```
 
-### Likely correct fix direction (not yet proven E2E)
+### If 40003 recurs
 
-1. **Prefer executing DeepSeek HTTP from the open DeepSeek tab** (content-script / MAIN world `fetch` with page cookies + headers just captured from a real site request), OR
-2. On every job: force capture of **last real page Authorization** (not vault RR), validate with a cheap authenticated call, drop 40003 accounts immediately
-3. Multi-account: only rotate **after** token validation; sticky pin must not outlive dead token
-4. Do **not** claim multi-account done until two accounts both pass completion probe
+- **Do not** delete vault slots — `markAccountAuthFailed` + cooldown only
+- Host ignores `vault_remove`
+- Re-capture from live tab or wait cooldown; optional future: page-context fetch
 
-Files to touch carefully:
+### Health alone is not enough
 
-- `core/cursor-bridge/account-vault.ts`
-- `core/cursor-bridge/worker.ts` (header pick + session create)
-- `core/deepseek/adapter.ts` (fetch context)
-- `entrypoints/content.ts` / `background.ts` (REFRESH_AUTH / capture)
+`ready:true` + `hasLogin:true` does not prove token validity. Use completion probe or `node scripts/bridge-smoke.mjs --quick`.
 
----
 
-## 5. Multi-account (design intent vs reality)
+## 5. Multi-account (shipped)
 
-**Intent:** user has multiple DeepSeek web accounts; bridge spreads new sessions.
-
-**Implemented:**
-
-- Vault in `chrome.storage.local` key `cursorBridgeAccountVault`
-- Legacy single cache: `deepseekCachedClientHeaders`
-- Upsert on header capture; health may show `accountCount` / `accounts`
-- Sticky `accountId` on thread records
-
-**Reality:** auth reliability regressed; treat multi-account as **P1 after ENI green**, or implement only with validate-before-use.
+**SoT:** host disk `~/Library/Application Support/DeepSeek++/CursorBridgeHost/account-vault.json`  
+**Cache:** `chrome.storage.local` `cursorBridgeAccountVault` (sync from host snapshot)  
+**Capture:** upsert on header capture from tabs; 5 accounts live on this machine  
+**Pick:** `pickAccountForJob` with cooldown exclude; sticky pins account; hermes/eni no rotate by default  
+**40003:** soft-fail only — never delete slots
 
 ---
 
@@ -201,12 +163,11 @@ Files to touch carefully:
 
 ## 8. Immediate next steps (ordered)
 
-1. **Make one ENI completion succeed** with tab open + extension reloaded from  
-   `/Users/kyin/Projects/deepseek-pp/dist/chrome-mv3`
-2. Prove health + completion both green; Hermes ENI retry works
-3. Only then: multi-account with validate-before-use + clear dead slots
-4. Optional: run bridge jobs via **page-context fetch** so cookies match website
-5. Commit on `main` when user asks (large uncommitted ENI/bridge surface)
+1. Reload extension from `/Users/kyin/Projects/deepseek-pp/dist/chrome-mv3` after any rebuild
+2. `node scripts/bridge-smoke.mjs --quick` after host/extension changes
+3. Optional: page-context fetch for even tighter cookie parity (deferred)
+4. `git fetch origin` + `git merge origin/main` when zhu updates (see UPSTREAM_UPDATE.md)
+5. Push to `fork` only if you want GitHub backup
 
 ---
 
