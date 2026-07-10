@@ -3,7 +3,7 @@
 **Updated:** 2026-07-10  
 **Worktree:** `/Users/kyin/Projects/deepseek-pp-platform`  
 **Branch:** `local/platform-p5-p9`  
-**Phase:** First-token SSE root-cause fix (needs extension hard-reload)
+**Phase:** DONE — first-token SSE fix live-verified 2026-07-10
 
 ## First-token fix (this pass)
 
@@ -49,3 +49,11 @@ DeepSeek SSE often uses **CRLF** (`\r\n`). We only split on bare `\n\n`, so earl
 ## Prior runway
 
 P5–P8 + P10/12/13/15/18 landed earlier on this branch.
+
+
+## Live verified (2026-07-10)
+
+- Health: ok, hasLogin
+- Forced openers Multi/There/Sticky: 3/3 clean
+- Sticky no-header T1→T2 same thread
+- ds/squid clean opening

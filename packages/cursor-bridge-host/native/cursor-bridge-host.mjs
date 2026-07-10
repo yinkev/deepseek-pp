@@ -178,6 +178,11 @@ function handleExtensionMessage(msg) {
       return;
     }
     if (msg.type === 'job_done' || msg.type === 'job_error' || msg.type === 'readiness' || msg.type === 'pong') {
+      if (msg.type === 'job_done') {
+        const n = msg.streamDebug?.events?.length ?? 0;
+        const preview = typeof msg.text === 'string' ? msg.text.slice(0, 40) : '';
+        process.stderr.write(`[cursor-bridge] job_done textPreview=${JSON.stringify(preview)} streamEvents=${n}\n`);
+      }
       if (msg.type === 'job_done' && msg.streamDebug) {
         try {
           const debugPath = path.join(os.homedir(), '.cursor-bridge-last-stream.json');
@@ -671,12 +676,27 @@ async function handleChatCompletions(req, res) {
         model: job.model,
         error: null,
       };
+      // Always try to persist stream debug for first-token diagnosis
+      if (result?.streamDebug) {
+        try {
+          const debugPath = path.join(os.homedir(), '.cursor-bridge-last-stream.json');
+          fs.writeFileSync(debugPath, JSON.stringify({
+            at: new Date().toISOString(),
+            textPreview: typeof result.text === 'string' ? result.text.slice(0, 200) : null,
+            streamDebug: result.streamDebug,
+          }, null, 2));
+        } catch (err) {
+          process.stderr.write(`[cursor-bridge] stream debug write failed: ${err}\n`);
+        }
+      }
+
       sendJson(res, 200, {
         id: job.id,
         object: 'chat.completion',
         created: job.createdAt,
         model: job.model,
         system_fingerprint: resultThreadId || undefined,
+        dpp_stream_debug: result?.streamDebug || null,
         choices: [
           {
             index: 0,
