@@ -34,12 +34,28 @@ export function initSkillPopup(initialSkills: SkillPopupItem[], nextCopy: Partia
 
 function watchTextarea() {
   tryAttach();
-  new MutationObserver(() => {
-    if (!textarea || !document.contains(textarea)) {
-      textarea = null;
-      tryAttach();
-    }
-  }).observe(document.body, { childList: true, subtree: true });
+  const startObserver = (root: Node) => {
+    new MutationObserver(() => {
+      if (!textarea || !document.contains(textarea)) {
+        textarea = null;
+        tryAttach();
+      }
+    }).observe(root, { childList: true, subtree: true });
+  };
+
+  // Main-world scripts can run before <body> exists. MutationObserver.observe(null) throws
+  // "parameter 1 is not of type Node" and can abort the rest of the content pipeline.
+  if (document.body) {
+    startObserver(document.body);
+    return;
+  }
+  if (document.documentElement) {
+    startObserver(document.documentElement);
+    return;
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    if (document.body) startObserver(document.body);
+  }, { once: true });
 }
 
 function tryAttach() {
@@ -134,9 +150,11 @@ function showPopup() {
   if (!textarea) return;
 
   if (!popupEl) {
+    const mount = document.body ?? document.documentElement;
+    if (!mount) return;
     popupEl = document.createElement('div');
     popupEl.className = 'dpp-skill-popup';
-    document.body.appendChild(popupEl);
+    mount.appendChild(popupEl);
   }
 
   const rect = textarea.getBoundingClientRect();

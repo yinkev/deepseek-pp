@@ -733,7 +733,6 @@ async function handleChatCompletions(req, res) {
 
 const httpJobQueue = [];
 let httpJobActive = false;
-    activeJobStartedAt = null;
 
 function enqueueHttpJob(fn) {
   return new Promise((resolve, reject) => {
@@ -745,13 +744,15 @@ function enqueueHttpJob(fn) {
 async function drainHttpJobQueue() {
   if (httpJobActive) return;
   httpJobActive = true;
-    activeJobStartedAt = Date.now();
   while (httpJobQueue.length > 0) {
     const item = httpJobQueue.shift();
+    activeJobStartedAt = Date.now();
     try {
       item.resolve(await item.fn());
     } catch (err) {
       item.reject(err);
+    } finally {
+      activeJobStartedAt = null;
     }
   }
   httpJobActive = false;
