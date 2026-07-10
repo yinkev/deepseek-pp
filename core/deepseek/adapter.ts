@@ -53,12 +53,15 @@ export interface DeepSeekHistorySnapshot {
   assistantMessageId: number | null;
   messageCount: number;
   verifiedAt: number;
+  /** Best-effort full assistant text for stream repair. */
+  assistantText?: string | null;
 }
 
 interface DeepSeekHistoryMessage {
   id: number | null;
   parentId: number | null;
   role: string | null;
+  content: string | null;
 }
 
 export interface SubmitPromptInput {
@@ -478,6 +481,7 @@ export async function readHistorySnapshot(
     assistantMessageId: latestAssistant.id,
     messageCount: messages.length,
     verifiedAt: Date.now(),
+    assistantText: latestAssistant.content,
   };
 }
 
@@ -634,7 +638,40 @@ function normalizeHistoryMessage(raw: unknown): DeepSeekHistoryMessage {
     id: firstMessageId(value.message_id, value.id, value.uuid),
     parentId: firstMessageId(value.parent_id, value.parent_message_id, value.parentMessageId),
     role: firstString(value.message_role, value.role)?.toLowerCase() ?? null,
+    content: extractHistoryMessageContent(value),
   };
+}
+
+function extractHistoryMessageContent(value: Record<string, unknown>): string | null {
+  const direct = firstString(value.content, value.text, value.markdown, value.answer);
+  if (direct) return direct;
+
+  const fragments = value.fragments ?? value.response_fragments ?? (value.response as Record<string, unknown> | undefined)?.fragments;
+  if (Array.isArray(fragments)) {
+    const parts = fragments
+      .map((frag) => {
+        if (!frag || typeof frag !== 'object') return '';
+        const record = frag as Record<string, unknown>;
+        return firstString(record.content, record.text, record.markdown) ?? '';
+      })
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join('');
+  }
+
+  const contentParts = value.content;
+  if (Array.isArray(contentParts)) {
+    const parts = contentParts
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        const record = part as Record<string, unknown>;
+        return firstString(record.text, record.content) ?? '';
+      })
+      .filter(Boolean);
+    if (parts.length > 0) return parts.join('');
+  }
+
+  return null;
 }
 
 function readDeepSeekUserToken(): string | null {

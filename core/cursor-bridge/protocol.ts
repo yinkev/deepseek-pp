@@ -38,6 +38,10 @@ export interface CursorBridgeJobRequest {
   clientProfile?: CursorBridgeClientProfile;
   /** Images attached to this turn (usually latest user message). */
   images?: CursorBridgeImagePart[];
+  /** Sticky bridge thread id (explicit or host-resolved fingerprint). */
+  threadId?: string;
+  /** Force a new DeepSeek main session for this thread. */
+  resetThread?: boolean;
 }
 
 export type CursorBridgeErrorCode =
@@ -258,9 +262,12 @@ export function messagesToPrompt(
   options?: {
     clientProfile?: CursorBridgeClientProfile;
     eyesNotes?: string | null;
+    /** Sticky continuation: omit prior dialogue; DeepSeek session holds history. */
+    deltaOnly?: boolean;
   },
 ): string {
   const profile = options?.clientProfile ?? 'generic';
+  const deltaOnly = options?.deltaOnly === true;
   const normalized = messages
     .map((message) => ({
       role: message.role,
@@ -287,7 +294,9 @@ export function messagesToPrompt(
     return dialogue.length > 0 ? dialogue.length - 1 : -1;
   })();
 
-  const history = latestUserIndex >= 0 ? dialogue.slice(0, latestUserIndex) : [];
+  const history = deltaOnly
+    ? []
+    : (latestUserIndex >= 0 ? dialogue.slice(0, latestUserIndex) : []);
   const latest = latestUserIndex >= 0 ? dialogue[latestUserIndex] : null;
 
   const parts: string[] = [];
@@ -319,7 +328,9 @@ export function messagesToPrompt(
     if (latest.role === 'user') {
       parts.push(
         [
-          'Latest user request — answer this directly now.',
+          deltaOnly
+            ? 'Continue this conversation. Answer the latest user request directly now.'
+            : 'Latest user request — answer this directly now.',
           'Do not greet, do not list capabilities, and do not ask what they want if the request is already clear.',
           '',
           latest.content,

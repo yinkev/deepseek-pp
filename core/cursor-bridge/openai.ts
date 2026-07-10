@@ -99,6 +99,15 @@ export function parseChatCompletionsBody(
     || (record.thinking === true)
     || (typeof record.thinking === 'object' && record.thinking !== null && (record.thinking as { type?: string }).type === 'enabled');
 
+  const threadId =
+    (typeof record.thread_id === 'string' && record.thread_id.trim())
+    || (typeof record.threadId === 'string' && record.threadId.trim())
+    || undefined;
+  const resetThread =
+    record.reset_thread === true
+    || record.resetThread === true
+    || record.new_session === true;
+
   return {
     job: {
       id: jobId,
@@ -109,6 +118,8 @@ export function parseChatCompletionsBody(
       createdAt: now,
       clientProfile,
       images: images.length > 0 ? images : undefined,
+      threadId: threadId || undefined,
+      resetThread: resetThread || undefined,
     },
   };
 }

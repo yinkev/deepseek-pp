@@ -1,9 +1,34 @@
+import { useEffect, useState } from 'react';
 import { useI18n } from '../../i18n';
 import { SettingsSection } from './primitives';
 import type { SettingsState } from './useSettingsState';
 
+interface BridgeStatus {
+  threadCount: number;
+  eyesCacheCount: number;
+  lastError: string | null;
+  lastModel: string | null;
+  lastThreadId: string | null;
+  lastSessionUrl: string | null;
+}
+
 export default function AboutSubPage({ state }: { state: SettingsState }) {
   const { t } = useI18n();
+  const [bridge, setBridge] = useState<BridgeStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    chrome.runtime
+      .sendMessage({ type: 'GET_CURSOR_BRIDGE_STATUS' })
+      .then((res: { ok?: boolean; status?: BridgeStatus } | undefined) => {
+        if (!cancelled && res?.ok && res.status) setBridge(res.status);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="space-y-5">
       <SettingsSection
@@ -38,6 +63,34 @@ export default function AboutSubPage({ state }: { state: SettingsState }) {
           </svg>
           GitHub
         </a>
+      </SettingsSection>
+
+      <SettingsSection title="Cursor bridge" description="Browser-origin OpenAI surface status">
+        {bridge ? (
+          <div className="space-y-1.5 text-[11px]" style={{ color: 'var(--ds-text-secondary)' }}>
+            <div>Threads: {bridge.threadCount} · Eyes cache: {bridge.eyesCacheCount}</div>
+            <div>Last model: {bridge.lastModel ?? '—'}</div>
+            <div className="break-all">Thread: {bridge.lastThreadId ?? '—'}</div>
+            {bridge.lastSessionUrl && (
+              <a
+                href={bridge.lastSessionUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block break-all hover:opacity-80"
+                style={{ color: 'var(--ds-blue)' }}
+              >
+                {bridge.lastSessionUrl}
+              </a>
+            )}
+            {bridge.lastError && (
+              <div style={{ color: 'var(--ds-danger, #c44)' }}>Last error: {bridge.lastError}</div>
+            )}
+          </div>
+        ) : (
+          <div className="text-[11px]" style={{ color: 'var(--ds-text-tertiary)' }}>
+            No bridge activity yet (or status unavailable).
+          </div>
+        )}
       </SettingsSection>
     </div>
   );

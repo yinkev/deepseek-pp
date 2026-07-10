@@ -302,3 +302,36 @@ Stop and ask only if: account risk, need filesystem native host permissions beyo
 - `docs/goals/browser-origin-cursor-api.md` — v1 goal / hard rules  
 - `docs/cursor-bridge-try-it-out.md` — operator steps  
 - `/Users/kyin/cliproxyapi/docs/DEEPSEEK_PP_BROWSER_BRIDGE.md` — proxy wiring  
+
+
+## Platform P0–P4 (2026-07-09)
+
+See `docs/goals/platform-p0-p4-e2e.md`.
+
+- Models: `ds/octopus` (expert), `ds/octopus-eyes` (vision), `ds/squid` (default/instant)
+- Sticky main sessions + delta prompts
+- Eyes-as-tool + eyes notes cache
+- About → Cursor bridge status; host `/v1/health` feature flags
+
+## Platform P5–P9 daily driver (next)
+
+See `docs/goals/platform-p5-p9-daily-driver.md`.
+
+| Phase | Focus |
+|---|---|
+| P5 | Land/freeze git |
+| P6 | First-token reliability |
+| P7 | Sticky for Cursor/Hermes without manual headers |
+| P8 | Live multimodal smoke pack |
+| P9a/b | Optional: memory inject + light project pack |
+
+**Not next:** chat folders product, multi-agent, jshandler completions.
+
+
+## Platform P10+ useful runway
+
+See `docs/goals/platform-p10-plus-useful-runway.md`.
+
+High priority after daily driver: diagnostics (P10), stream/cancel (P11), sticky lifecycle (P12), smoke script (P18), context pack (P13), queue honesty (P15).
+
+**Reject:** chat folders product, multi-agent, model rename churn, jshandler completions.

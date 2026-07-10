@@ -1,4 +1,5 @@
 import {
+  buildDeepSeekSessionUrl,
   createChatSession,
   createClientHeaders,
   createPowHeaders,
@@ -25,7 +26,20 @@ import {
   isEyesModel,
   isSquidModel,
   messagesToPrompt,
+  normalizeMessageContent,
 } from './protocol';
+import {
+  deleteThread,
+  getEyesCache,
+  getThread,
+  modelFamilyFromBridgeModel,
+  putThread,
+  resolveThreadId,
+  setBridgeLastError,
+  setEyesCache,
+  simpleHash,
+  type BridgeThreadRecord,
+} from './thread-store';
 
 const DEEPSEEK_TAB_URL_PATTERN = '*://chat.deepseek.com/*';
 const MAX_EYES_IMAGES = 3;
@@ -81,7 +95,7 @@ export async function runCursorBridgeJob(
   deps: CursorBridgeWorkerDeps,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-): Promise<{ text: string } | { error: CursorBridgeError }> {
+): Promise<{ text: string; threadId?: string; sticky?: boolean } | { error: CursorBridgeError }> {
   try {
     let headers = await deps.loadClientHeaders();
     if (!headers && deps.refreshClientHeadersFromTabs) {
@@ -89,6 +103,7 @@ export async function runCursorBridgeJob(
       headers = await deps.loadClientHeaders();
     }
     if (!headers?.Authorization) {
+      await setBridgeLastError('missing_login');
       return {
         error: {
           code: 'missing_login',
@@ -100,6 +115,7 @@ export async function runCursorBridgeJob(
     const queryTabs = deps.queryDeepSeekTabs ?? defaultQueryDeepSeekTabs;
     const tabs = await queryTabs();
     if (tabs.length === 0) {
+      await setBridgeLastError('missing_tab');
       return {
         error: {
           code: 'missing_tab',
@@ -120,15 +136,48 @@ export async function runCursorBridgeJob(
     const images = (job.images ?? []).slice(0, MAX_EYES_IMAGES);
     const wantsEyesModel = isEyesModel(job.model);
     const usesSquid = isSquidModel(job.model);
-    // Native vision on main turn: squid (default) or explicit eyes model.
-    // Expert octopus uses eyes subcall notes instead of ref_file_ids on main.
     const useNativeVisionMain = bridgeModelUsesNativeVision(job.model);
     const needsEyesSubcall = !useNativeVisionMain && images.length > 0;
+
+    const modelType = wantsEyesModel ? 'vision' : bridgeModelToDeepSeekType(job.model);
+    const modelFamily = modelFamilyFromBridgeModel(job.model);
+
+    const normalizedForThread = job.messages.map((m) => ({
+      role: m.role,
+      content: normalizeMessageContent(m.content).trim(),
+    }));
+    const threadId = resolveThreadId({
+      explicitThreadId: job.threadId,
+      model: typeof job.model === 'string' ? job.model : 'ds/octopus',
+      messages: normalizedForThread,
+      reset: job.resetThread === true,
+    });
+
+    if (job.resetThread) {
+      await deleteThread(threadId);
+    }
+
+    let existing = job.resetThread ? null : await getThread(threadId);
+    if (existing && existing.modelFamily !== modelFamily) {
+      // Different product surface — do not reuse expert session for squid/eyes.
+      existing = null;
+    }
+
+    const sticky = Boolean(existing?.chatSessionId);
+    let chatSessionId = existing?.chatSessionId ?? '';
+    let parentMessageId: number | null = existing?.parentMessageId ?? null;
 
     let eyesNotes: string | null = null;
     let visionFileIds: string[] = [];
 
-    if (images.length > 0) {
+    // P4: eyes notes cache by image hash (skip vision subcall when hit).
+    const imageHash = images.length > 0 ? hashImages(images) : null;
+    if (needsEyesSubcall && imageHash) {
+      const cached = await getEyesCache(imageHash);
+      if (cached) eyesNotes = cached;
+    }
+
+    if (images.length > 0 && !(needsEyesSubcall && eyesNotes)) {
       const uploaded: DeepSeekUploadedFile[] = [];
       for (let i = 0; i < images.length; i += 1) {
         const image = images[i];
@@ -146,7 +195,6 @@ export async function runCursorBridgeJob(
           {
             file: blob,
             filename,
-            // Squid uploads under default; eyes/expert path under vision.
             modelType: usesSquid ? 'default' : 'vision',
             clientHeaders: headers,
             powHeaders: uploadPowHeaders,
@@ -158,7 +206,8 @@ export async function runCursorBridgeJob(
       visionFileIds = uploaded.map((f) => f.id).filter(Boolean);
     }
 
-    if (needsEyesSubcall && visionFileIds.length > 0) {
+    if (needsEyesSubcall && !eyesNotes && visionFileIds.length > 0) {
+      // Eyes sessions stay ephemeral (one-shot vision chat).
       const eyesSessionId = await createSession(headers);
       const eyesPow = await createPow(headers);
       let eyesText = '';
@@ -182,20 +231,25 @@ export async function runCursorBridgeJob(
         signal,
       );
       eyesNotes = formatEyesNotes(eyesText || eyesTurn.assistantText || '', visionFileIds.length);
+      if (imageHash && eyesNotes) {
+        await setEyesCache(imageHash, eyesNotes);
+      }
     }
 
-    const modelType = wantsEyesModel
-      ? 'vision'
-      : bridgeModelToDeepSeekType(job.model);
     const prompt = messagesToPrompt(job.messages, {
       clientProfile: job.clientProfile ?? 'generic',
       eyesNotes,
+      deltaOnly: sticky,
     });
     if (!prompt && visionFileIds.length === 0) {
       return { error: { code: 'invalid_request', message: 'Prompt is empty.' } };
     }
 
-    const chatSessionId = await createSession(headers);
+    if (!chatSessionId) {
+      chatSessionId = await createSession(headers);
+      parentMessageId = null;
+    }
+
     const powHeaders = await createPow(headers);
     let fullText = '';
     let streamedAny = false;
@@ -209,7 +263,7 @@ export async function runCursorBridgeJob(
     const turn = await submitStreaming(
       {
         chatSessionId,
-        parentMessageId: null,
+        parentMessageId,
         modelType,
         prompt: mainPrompt,
         refFileIds: useNativeVisionMain ? visionFileIds : [],
@@ -240,20 +294,40 @@ export async function runCursorBridgeJob(
         if (historyText && (historyText.length > text.length || looksTruncatedOpening(text, historyText))) {
           if (!streamedAny && historyText) {
             onChunk(historyText);
-          } else if (streamedAny && historyText.startsWith(text) === false && historyText.length > text.length) {
-            // Prefer history as authoritative final text; client already saw partial stream.
-            // Non-stream callers get the fixed text; stream already emitted chunks.
           }
           text = historyText;
         }
+        if (snapshot?.parentMessageId != null || snapshot?.assistantMessageId != null) {
+          parentMessageId = snapshot.parentMessageId ?? snapshot.assistantMessageId;
+        } else if (turn.responseMessageId != null) {
+          parentMessageId = turn.responseMessageId;
+        }
       } catch {
-        // best-effort only
+        if (turn.responseMessageId != null) parentMessageId = turn.responseMessageId;
       }
+    } else if (turn.responseMessageId != null) {
+      parentMessageId = turn.responseMessageId;
     }
 
-    return { text };
+    const now = Date.now();
+    const record: BridgeThreadRecord = {
+      id: threadId,
+      modelFamily,
+      chatSessionId,
+      parentMessageId,
+      modelType,
+      sessionUrl: buildDeepSeekSessionUrl(chatSessionId),
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      turnCount: (existing?.turnCount ?? 0) + 1,
+    };
+    await putThread(record);
+    await setBridgeLastError(null);
+
+    return { text, threadId, sticky };
   } catch (err) {
     if (err instanceof DeepSeekAuthError) {
+      await setBridgeLastError(err.message);
       return {
         error: {
           code: 'missing_login',
@@ -262,6 +336,7 @@ export async function runCursorBridgeJob(
       };
     }
     const message = err instanceof Error ? err.message : String(err);
+    await setBridgeLastError(message);
     if (signal?.aborted) {
       return { error: { code: 'aborted', message: 'Request aborted.' } };
     }
@@ -278,10 +353,16 @@ export function createClientHeadersSafe(): Record<string, string> | null {
   }
 }
 
+function hashImages(images: CursorBridgeImagePart[]): string {
+  const seed = images
+    .map((img) => `${img.mimeType ?? ''}|${img.url.slice(0, 120)}|${img.url.length}|${img.assetPath ?? ''}`)
+    .join('\n');
+  return simpleHash(seed);
+}
+
 function looksTruncatedOpening(streamed: string, history: string): boolean {
   if (!streamed || !history) return false;
   if (history === streamed) return false;
-  // Classic bug: history "I'll analyze..." vs stream "ll analyze..."
   if (history.endsWith(streamed) && history.length - streamed.length <= 4) return true;
   if (history.includes(streamed) && history.length > streamed.length) return true;
   return false;

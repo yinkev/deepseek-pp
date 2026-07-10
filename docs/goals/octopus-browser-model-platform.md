@@ -1,6 +1,6 @@
 # Goal: Octopus browser model platform (harness-agnostic)
 
-**Status:** active long-horizon (P0–P4 implemented in code; live eyes E2E pending user reload)  
+**Status:** superseded in part by platform P0–P4 sticky runtime — see docs/goals/platform-p0-p4-e2e.md  
 **Date:** 2026-07-09  
 **Working tree:** `/Users/kyin/Projects/deepseek-pp` only  
 **Feature branch:** `local/browser-origin-api`  

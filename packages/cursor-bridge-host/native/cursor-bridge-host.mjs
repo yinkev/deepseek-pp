@@ -193,7 +193,7 @@ function sendJson(res, status, body) {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'authorization, content-type, x-dpp-client',
+    'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-thread-id',
     'access-control-allow-methods': 'GET, POST, OPTIONS',
   });
   res.end(payload);
@@ -289,6 +289,16 @@ function createModelsResponse(readiness) {
         owned_by: 'deepseek-pp-cursor-bridge',
         permission: [],
         root: 'ds/octopus-eyes',
+        parent: null,
+        available,
+      },
+      {
+        id: 'ds/squid',
+        object: 'model',
+        created: 0,
+        owned_by: 'deepseek-pp-cursor-bridge',
+        permission: [],
+        root: 'ds/squid',
         parent: null,
         available,
       },
@@ -399,6 +409,18 @@ function normalizeBridgeModel(modelRaw) {
   ) {
     return 'ds/octopus-eyes';
   }
+  if (
+    lower.includes('ds/squid')
+    || lower.endsWith('/squid')
+    || lower.endsWith('-squid')
+    || lower === 'squid'
+    || lower.includes('ds/flash')
+    || lower.endsWith('/flash')
+    || lower === 'flash'
+    || lower.includes('instant')
+  ) {
+    return 'ds/squid';
+  }
   return 'ds/octopus';
 }
 
@@ -451,6 +473,14 @@ function parseChatBody(body, clientHeader) {
     || body.thinking === true;
   const model = normalizeBridgeModel(modelRaw);
   const clientProfile = detectClientProfile(messages, clientHeader);
+  const threadId =
+    (typeof body.thread_id === 'string' && body.thread_id.trim())
+    || (typeof body.threadId === 'string' && body.threadId.trim())
+    || undefined;
+  const resetThread =
+    body.reset_thread === true
+    || body.resetThread === true
+    || body.new_session === true;
   return {
     job: {
       id: `chatcmpl-${randomUUID()}`,
@@ -461,6 +491,8 @@ function parseChatBody(body, clientHeader) {
       createdAt: Math.floor(Date.now() / 1000),
       clientProfile,
       images: images.length > 0 ? images : undefined,
+      threadId,
+      resetThread: resetThread || undefined,
     },
   };
 }
@@ -489,7 +521,15 @@ async function handleChatCompletions(req, res) {
   }
 
   const clientHeader = req.headers['x-dpp-client'] || req.headers['x-dpp-profile'] || null;
+  const threadHeader = req.headers['x-dpp-thread-id'] || req.headers['x-thread-id'] || null;
+  const resetHeader = req.headers['x-dpp-reset-thread'] === '1' || req.headers['x-dpp-reset-thread'] === 'true';
   const parsed = parseChatBody(body, clientHeader);
+  if (parsed.job) {
+    if (!parsed.job.threadId && typeof threadHeader === 'string' && threadHeader.trim()) {
+      parsed.job.threadId = threadHeader.trim();
+    }
+    if (resetHeader) parsed.job.resetThread = true;
+  }
   if (parsed.error) {
     sendJson(res, 400, { error: { message: parsed.error.message, type: parsed.error.code, code: parsed.error.code } });
     return;
@@ -638,7 +678,7 @@ function createServer() {
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
           'access-control-allow-origin': '*',
-          'access-control-allow-headers': 'authorization, content-type, x-dpp-client',
+          'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-thread-id',
           'access-control-allow-methods': 'GET, POST, OPTIONS',
         });
         res.end();
@@ -665,7 +705,19 @@ function createServer() {
 
       if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
         const readiness = await requestReadiness();
-        sendJson(res, readiness.ready ? 200 : 503, { ok: readiness.ready, readiness });
+        sendJson(res, readiness.ready ? 200 : 503, {
+          ok: readiness.ready,
+          readiness,
+          models: ['ds/octopus', 'ds/octopus-eyes', 'ds/squid'],
+          features: {
+            stickyThreads: true,
+            deltaPrompts: true,
+            eyesAsTool: true,
+            eyesCache: true,
+            jobQueue: true,
+          },
+          host: 'cursor-bridge',
+        });
         return;
       }
 

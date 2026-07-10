@@ -55,14 +55,14 @@ In `/Users/kyin/cliproxyapi/config.yaml` under `openai-compatibility`:
   models:
     - name: ds/octopus
       alias: ""
-    - name: ds/octopus-eyes
+    - name: ds/octopus-eyes`, `ds/squid
       alias: ""
 ```
 
 Then point Cursor at CLIProxyAPI as usual and pick:
 
 - `ds/octopus` — expert (default brain)
-- `ds/octopus-eyes` — vision
+- `ds/octopus-eyes`, `ds/squid` — vision
 
 If you send an image on `ds/octopus`, the bridge runs an internal eyes pass and injects notes into the expert turn (text history is preserved).
 
@@ -78,3 +78,18 @@ If you send an image on `ds/octopus`, the bridge runs an internal eyes pass and 
 ```bash
 npm run cursor-bridge:install -- uninstall --browser chrome
 ```
+
+
+## Sticky threads (P1–P2)
+
+Same harness chat can continue the same DeepSeek web session:
+
+- Pass `thread_id` in the chat body, or header `X-DPP-Thread-Id`
+- Force a new session with `reset_thread: true` or `X-DPP-Reset-Thread: true`
+- Without an explicit id, the bridge fingerprints the first user turn + model family
+
+Eyes subcalls remain one-shot (ephemeral). Main expert/squid/eyes turns are sticky.
+
+## Health
+
+`GET http://127.0.0.1:8787/v1/health` returns readiness, model list, and feature flags.

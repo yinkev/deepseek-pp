@@ -17,7 +17,7 @@ import {
 } from '../core/cursor-bridge';
 
 describe('cursor-bridge protocol', () => {
-  it('normalizes models: octopus + eyes (expert/vision)', () => {
+  it('normalizes models: octopus + eyes + squid', () => {
     expect(normalizeBridgeModel('ds/octopus')).toBe('ds/octopus');
     expect(normalizeBridgeModel('ds/octopus-eyes')).toBe('ds/octopus-eyes');
     expect(normalizeBridgeModel('dspp/ds/octopus-eyes')).toBe('ds/octopus-eyes');
@@ -25,6 +25,8 @@ describe('cursor-bridge protocol', () => {
     expect(isEyesModel('ds/octopus')).toBe(false);
     expect(bridgeModelToDeepSeekType('ds/octopus')).toBe('expert');
     expect(bridgeModelToDeepSeekType('ds/octopus-eyes')).toBe('vision');
+    expect(normalizeBridgeModel('ds/squid')).toBe('ds/squid');
+    expect(bridgeModelToDeepSeekType('ds/squid')).toBe('default');
     // thinking is a flag, not a separate public model id
     expect(modelThinkingEnabled('ds/octopus-thinking')).toBe(true);
     expect(normalizeBridgeModel('ds/octopus-thinking')).toBe('ds/octopus');
@@ -181,7 +183,7 @@ describe('cursor-bridge protocol', () => {
       hasLogin: true,
       busy: false,
     });
-    expect(models.data.map((m) => m.id)).toEqual(['ds/octopus', 'ds/octopus-eyes']);
+    expect(models.data.map((m) => m.id)).toEqual(['ds/octopus', 'ds/octopus-eyes', 'ds/squid']);
     expect(models.data[0].available).toBe(true);
 
     const completion = createNonStreamCompletion('ds/octopus', 'hello', 'id-1', 10);
@@ -193,5 +195,36 @@ describe('cursor-bridge protocol', () => {
     const err = createErrorResponse({ code: 'missing_tab', message: 'no tab' });
     expect(err.status).toBe(503);
     expect(err.body.error.code).toBe('missing_tab');
+  });
+
+  it('deltaOnly omits conversation history for sticky sessions', () => {
+    const full = messagesToPrompt([
+      { role: 'user', content: 'First question about widgets' },
+      { role: 'assistant', content: 'Widgets are X' },
+      { role: 'user', content: 'What about Y?' },
+    ]);
+    expect(full).toContain('Conversation so far');
+    expect(full).toContain('First question');
+
+    const delta = messagesToPrompt([
+      { role: 'user', content: 'First question about widgets' },
+      { role: 'assistant', content: 'Widgets are X' },
+      { role: 'user', content: 'What about Y?' },
+    ], { deltaOnly: true });
+    expect(delta).not.toContain('Conversation so far');
+    expect(delta).not.toContain('First question about widgets');
+    expect(delta).toContain('What about Y?');
+    expect(delta).toContain('Continue this conversation');
+  });
+
+  it('parses thread_id and reset_thread on chat bodies', () => {
+    const ok = parseChatCompletionsBody({
+      model: 'ds/octopus',
+      thread_id: 'cursor-chat-abc',
+      reset_thread: true,
+      messages: [{ role: 'user', content: 'ping' }],
+    }, 'job-thread', 1);
+    expect(ok.job?.threadId).toBe('cursor-chat-abc');
+    expect(ok.job?.resetThread).toBe(true);
   });
 });

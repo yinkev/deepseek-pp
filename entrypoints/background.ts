@@ -210,7 +210,7 @@ import {
   uploadDeepSeekFile,
 } from '../core/deepseek/adapter';
 // Thin hook: browser-origin Cursor API bridge (isolated package; survives upstream merges).
-import { startCursorBridgeRuntime } from '../core/cursor-bridge';
+import { getBridgeStatusSnapshot, startCursorBridgeRuntime } from '../core/cursor-bridge';
 import {
   submitOfficialDeepSeekStreaming,
   type OfficialDeepSeekMessage,
@@ -709,6 +709,10 @@ async function handleMessage(
     case 'GET_ACTIVE_PRESET':
       return getActivePreset();
 
+    case 'GET_CURSOR_BRIDGE_STATUS': {
+      const status = await getBridgeStatusSnapshot();
+      return { ok: true, status };
+    }
     case 'GET_PROMPT_INJECTION_SETTINGS':
       return getPromptInjectionSettings();
 
