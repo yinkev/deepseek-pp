@@ -37,7 +37,7 @@ curl -s http://127.0.0.1:8787/health | jq .
 curl -s http://127.0.0.1:8787/v1/models | jq .
 curl -s http://127.0.0.1:8787/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"deepseek-web","messages":[{"role":"user","content":"Say hi in one short sentence."}]}' | jq .
+  -d '{"model":"ds/octopus","messages":[{"role":"user","content":"Say hi in one short sentence."}]}' | jq .
 ```
 
 When not ready, `/v1/models` still returns model ids but `available: false`, and chat returns a structured 503 (`missing_tab` / `missing_login` / `not_ready`).
@@ -53,13 +53,18 @@ In `/Users/kyin/cliproxyapi/config.yaml` under `openai-compatibility`:
   api-key-entries:
     - api-key: local-bridge-key
   models:
-    - name: deepseek-web
+    - name: ds/octopus
       alias: ""
-    - name: deepseek-web-thinking
+    - name: ds/octopus-eyes
       alias: ""
 ```
 
-Then point Cursor at CLIProxyAPI as usual and pick `deepseek-web`.
+Then point Cursor at CLIProxyAPI as usual and pick:
+
+- `ds/octopus` — expert (default brain)
+- `ds/octopus-eyes` — vision
+
+If you send an image on `ds/octopus`, the bridge runs an internal eyes pass and injects notes into the expert turn (text history is preserved).
 
 ## Requirements while using
 

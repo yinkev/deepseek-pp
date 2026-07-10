@@ -1,5 +1,16 @@
-import type { CursorBridgeError, CursorBridgeJobRequest, CursorBridgeReadiness } from './protocol';
-import { messagesToPrompt, modelThinkingEnabled, normalizeBridgeModel } from './protocol';
+import type {
+  CursorBridgeError,
+  CursorBridgeJobRequest,
+  CursorBridgeReadiness,
+} from './protocol';
+import {
+  detectClientProfile,
+  extractImagesFromMessages,
+  messagesToPrompt,
+  modelThinkingEnabled,
+  normalizeBridgeModel,
+  normalizeMessageContent,
+} from './protocol';
 
 export function createModelsResponse(readiness: CursorBridgeReadiness) {
   const available = readiness.ready;
@@ -7,22 +18,32 @@ export function createModelsResponse(readiness: CursorBridgeReadiness) {
     object: 'list',
     data: [
       {
-        id: 'deepseek-web',
+        id: 'ds/octopus',
         object: 'model',
         created: 0,
         owned_by: 'deepseek-pp-cursor-bridge',
         permission: [],
-        root: 'deepseek-web',
+        root: 'ds/octopus',
         parent: null,
         available,
       },
       {
-        id: 'deepseek-web-thinking',
+        id: 'ds/octopus-eyes',
         object: 'model',
         created: 0,
         owned_by: 'deepseek-pp-cursor-bridge',
         permission: [],
-        root: 'deepseek-web-thinking',
+        root: 'ds/octopus-eyes',
+        parent: null,
+        available,
+      },
+      {
+        id: 'ds/squid',
+        object: 'model',
+        created: 0,
+        owned_by: 'deepseek-pp-cursor-bridge',
+        permission: [],
+        root: 'ds/squid',
         parent: null,
         available,
       },
@@ -30,7 +51,12 @@ export function createModelsResponse(readiness: CursorBridgeReadiness) {
   };
 }
 
-export function parseChatCompletionsBody(body: unknown, jobId: string, now = Date.now()): {
+export function parseChatCompletionsBody(
+  body: unknown,
+  jobId: string,
+  now = Date.now(),
+  clientHeader?: string | null,
+): {
   job?: CursorBridgeJobRequest;
   error?: CursorBridgeError;
 } {
@@ -48,18 +74,21 @@ export function parseChatCompletionsBody(body: unknown, jobId: string, now = Dat
   for (const item of messagesRaw) {
     if (!item || typeof item !== 'object') continue;
     const role = (item as { role?: unknown }).role;
-    const content = (item as { content?: unknown }).content;
     if (role !== 'system' && role !== 'user' && role !== 'assistant') continue;
-    if (typeof content !== 'string') continue;
-    messages.push({ role, content });
+    const content = normalizeMessageContent((item as { content?: unknown }).content).trim();
+    // Keep messages that only contain images (empty text) as empty user markers for history.
+    if (!content && role !== 'user') continue;
+    messages.push({ role, content: content || '(image attached)' });
   }
 
   if (messages.length === 0) {
     return { error: { code: 'invalid_request', message: 'No valid chat messages found.' } };
   }
 
-  const prompt = messagesToPrompt(messages);
-  if (!prompt) {
+  const images = extractImagesFromMessages(messagesRaw as Array<{ content?: unknown }>);
+  const clientProfile = detectClientProfile(messages, clientHeader);
+  const prompt = messagesToPrompt(messages, { clientProfile });
+  if (!prompt && images.length === 0) {
     return { error: { code: 'invalid_request', message: 'Prompt is empty after normalizing messages.' } };
   }
 
@@ -78,6 +107,8 @@ export function parseChatCompletionsBody(body: unknown, jobId: string, now = Dat
       stream,
       thinkingEnabled,
       createdAt: now,
+      clientProfile,
+      images: images.length > 0 ? images : undefined,
     },
   };
 }

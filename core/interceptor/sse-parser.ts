@@ -71,7 +71,21 @@ function isTextPatchPath(path: unknown): path is string {
 }
 
 function isResponsePatchPath(path: unknown): path is string {
-  return typeof path === 'string' && (path === 'response' || path.startsWith('response/'));
+  if (typeof path !== 'string') return false;
+  // Absolute response paths
+  if (path === 'response' || path.startsWith('response/')) return true;
+  // Relative paths nested under a response BATCH (common for the first tokens).
+  // e.g. {"p":"response","o":"BATCH","v":[{"p":"fragments/-1/content","v":"Hi"}]}
+  if (
+    path === 'content'
+    || path === 'text'
+    || path === 'markdown'
+    || path === 'delta'
+    || path.startsWith('fragments/')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function isThinkingPatchPath(path: unknown): path is string {
@@ -92,8 +106,9 @@ export function extractTextFromParsed(parsed: any): string | null {
   if (!parsed.p && typeof parsed.v === 'string') {
     return parsed.v;
   }
-  // Format 2: {"p":"...", "o":"APPEND", "v":"text"} — explicit append
-  if (parsed.p && parsed.o === 'APPEND' && typeof parsed.v === 'string') {
+  // Format 2: {"p":"...", "o":"APPEND"|"SET", "v":"text"} — explicit write/append
+  // DeepSeek often SETs the first fragment content, then APPENDs the rest.
+  if (parsed.p && (parsed.o === 'APPEND' || parsed.o === 'SET') && typeof parsed.v === 'string') {
     return parsed.v;
   }
   // Format 3: {"p":"response/fragments/-1/content", "v":"text"} — text/content patch (no "o" field)
@@ -122,7 +137,11 @@ export function extractResponseTextFromParsed(parsed: any): string | null {
   if (!parsed.p && typeof parsed.v === 'string') {
     return parsed.v;
   }
-  if (isResponseTextPatchPath(parsed.p) && parsed.o === 'APPEND' && typeof parsed.v === 'string') {
+  if (
+    isResponseTextPatchPath(parsed.p)
+    && (parsed.o === 'APPEND' || parsed.o === 'SET')
+    && typeof parsed.v === 'string'
+  ) {
     return parsed.v;
   }
   if (isResponseTextPatchPath(parsed.p) && typeof parsed.v === 'string' && !parsed.o) {

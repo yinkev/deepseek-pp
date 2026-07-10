@@ -29,7 +29,7 @@ curl http://127.0.0.1:8787/health
 Add an `openai-compatibility` provider pointing at:
 
 - Base URL: `http://127.0.0.1:8787/v1`
-- Models: `deepseek-web`, `deepseek-web-thinking`
+- Models: `ds/octopus` (expert), `ds/octopus-eyes` (vision)
 
 Any API key string is accepted by the bridge (local only); use a random local key in CLIProxyAPI.
 

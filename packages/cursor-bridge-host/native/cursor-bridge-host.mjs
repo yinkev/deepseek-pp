@@ -193,7 +193,7 @@ function sendJson(res, status, body) {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'authorization, content-type',
+    'access-control-allow-headers': 'authorization, content-type, x-dpp-client',
     'access-control-allow-methods': 'GET, POST, OPTIONS',
   });
   res.end(payload);
@@ -233,28 +233,62 @@ function readinessToError(readiness) {
   return { code: 'not_ready', message: readiness.reason || 'Cursor bridge is not ready.' };
 }
 
+// Ephemeral image assets so large data URLs never go through native messaging.
+const bridgeAssets = new Map();
+const BRIDGE_ASSET_TTL_MS = 10 * 60 * 1000;
+const MAX_INLINE_DATA_URL_CHARS = 24_000;
+
+function pruneBridgeAssets() {
+  const now = Date.now();
+  for (const [id, asset] of bridgeAssets) {
+    if (now - asset.createdAt > BRIDGE_ASSET_TTL_MS) bridgeAssets.delete(id);
+  }
+}
+
+function storeBridgeAsset(dataUrl) {
+  pruneBridgeAssets();
+  const id = randomUUID();
+  const comma = dataUrl.indexOf(',');
+  if (comma < 0) throw new Error('Invalid data URL');
+  const header = dataUrl.slice(0, comma);
+  const data = dataUrl.slice(comma + 1);
+  const mimeMatch = /data:([^;]+)/i.exec(header);
+  const mime = mimeMatch?.[1] || 'application/octet-stream';
+  const isBase64 = /;base64/i.test(header);
+  const buffer = isBase64
+    ? Buffer.from(data, 'base64')
+    : Buffer.from(decodeURIComponent(data), 'utf8');
+  bridgeAssets.set(id, { buffer, mime, createdAt: Date.now() });
+  return {
+    id,
+    path: `/bridge-assets/${id}`,
+    url: `http://${HOST}:${PORT}/bridge-assets/${id}`,
+    mime,
+  };
+}
+
 function createModelsResponse(readiness) {
   const available = readiness.ready === true;
   return {
     object: 'list',
     data: [
       {
-        id: 'deepseek-web',
+        id: 'ds/octopus',
         object: 'model',
         created: 0,
         owned_by: 'deepseek-pp-cursor-bridge',
         permission: [],
-        root: 'deepseek-web',
+        root: 'ds/octopus',
         parent: null,
         available,
       },
       {
-        id: 'deepseek-web-thinking',
+        id: 'ds/octopus-eyes',
         object: 'model',
         created: 0,
         owned_by: 'deepseek-pp-cursor-bridge',
         permission: [],
-        root: 'deepseek-web-thinking',
+        root: 'ds/octopus-eyes',
         parent: null,
         available,
       },
@@ -262,7 +296,113 @@ function createModelsResponse(readiness) {
   };
 }
 
-function parseChatBody(body) {
+function normalizeMessageContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts = [];
+    for (const part of content) {
+      if (typeof part === 'string') {
+        parts.push(part);
+        continue;
+      }
+      if (!part || typeof part !== 'object') continue;
+      if (typeof part.text === 'string') parts.push(part.text);
+      else if (typeof part.content === 'string') parts.push(part.content);
+      else if (part.type === 'text' && typeof part.value === 'string') parts.push(part.value);
+    }
+    return parts.join('\n');
+  }
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') return content.text;
+    if (typeof content.content === 'string') return content.content;
+  }
+  return '';
+}
+
+function extractImageParts(content) {
+  const images = [];
+  const pushUrl = (url, mimeHint) => {
+    if (typeof url !== 'string' || !url.trim()) return;
+    const trimmed = url.trim();
+    if (
+      !trimmed.startsWith('data:image/')
+      && !trimmed.startsWith('http://')
+      && !trimmed.startsWith('https://')
+    ) {
+      return;
+    }
+    let mimeType = typeof mimeHint === 'string' && mimeHint.startsWith('image/') ? mimeHint : undefined;
+    if (!mimeType && trimmed.startsWith('data:image/')) {
+      const m = /^data:(image\/[a-zA-Z0-9.+-]+);/i.exec(trimmed);
+      if (m) mimeType = m[1].toLowerCase();
+    }
+    images.push({ url: trimmed, mimeType });
+  };
+
+  if (typeof content === 'string') {
+    if (content.startsWith('data:image/')) pushUrl(content);
+    return images;
+  }
+  if (!Array.isArray(content)) return images;
+
+  for (const part of content) {
+    if (!part || typeof part !== 'object') continue;
+    const type = typeof part.type === 'string' ? part.type : '';
+    if (type === 'image_url' || type === 'input_image') {
+      const imageUrl = part.image_url;
+      if (typeof imageUrl === 'string') {
+        pushUrl(imageUrl, part.mime_type || part.media_type);
+      } else if (imageUrl && typeof imageUrl === 'object') {
+        pushUrl(imageUrl.url, imageUrl.mime_type || imageUrl.media_type || part.mime_type);
+      }
+      continue;
+    }
+    if (type === 'image' && typeof part.url === 'string') {
+      pushUrl(part.url, part.mime_type || part.media_type);
+    }
+  }
+  return images;
+}
+
+function detectClientProfile(messages, headerValue) {
+  const header = typeof headerValue === 'string' ? headerValue.trim().toLowerCase() : '';
+  if (header === 'cursor' || header === 'hermes' || header === 'generic') return header;
+
+  const systemText = messages
+    .filter((m) => m.role === 'system')
+    .map((m) => m.content)
+    .join('\n')
+    .toLowerCase();
+  if (!systemText) return 'generic';
+
+  const cursorHits = ['cursor ide', 'you are a coding agent', 'agent skills', 'mcp server']
+    .filter((n) => systemText.includes(n)).length;
+  const hermesHits = ['hermes', 'agent hermes', 'openhermes']
+    .filter((n) => systemText.includes(n)).length;
+
+  if (cursorHits >= 2) return 'cursor';
+  if (hermesHits >= 1 && systemText.length > 400) return 'hermes';
+  if (cursorHits >= 1 && systemText.length > 1200) return 'cursor';
+  return 'generic';
+}
+
+function normalizeBridgeModel(modelRaw) {
+  if (typeof modelRaw !== 'string') return 'ds/octopus';
+  const lower = modelRaw.toLowerCase();
+  if (
+    lower.includes('octopus-eyes')
+    || lower.endsWith('/eyes')
+    || lower.endsWith('-eyes')
+    || lower === 'vision'
+    || lower.endsWith('/vision')
+    || lower.endsWith('-vision')
+  ) {
+    return 'ds/octopus-eyes';
+  }
+  return 'ds/octopus';
+}
+
+function parseChatBody(body, clientHeader) {
   if (!body || typeof body !== 'object') {
     return { error: { code: 'invalid_request', message: 'Request body must be a JSON object.' } };
   }
@@ -271,18 +411,46 @@ function parseChatBody(body) {
     return { error: { code: 'invalid_request', message: 'messages must be a non-empty array.' } };
   }
   const messages = [];
+  const images = [];
   for (const item of messagesRaw) {
     if (!item || typeof item !== 'object') continue;
     if (item.role !== 'system' && item.role !== 'user' && item.role !== 'assistant') continue;
-    if (typeof item.content !== 'string') continue;
-    messages.push({ role: item.role, content: item.content });
+    const content = normalizeMessageContent(item.content).trim();
+    const parts = extractImageParts(item.content);
+    for (const img of parts) {
+      if (img.url.startsWith('data:image/') && img.url.length > MAX_INLINE_DATA_URL_CHARS) {
+        try {
+          const asset = storeBridgeAsset(img.url);
+          images.push({
+            url: asset.url,
+            mimeType: img.mimeType || asset.mime,
+            assetPath: asset.path,
+          });
+        } catch (err) {
+          return {
+            error: {
+              code: 'invalid_request',
+              message: err instanceof Error ? err.message : 'Failed to store image asset.',
+            },
+          };
+        }
+      } else {
+        images.push(img);
+      }
+    }
+    if (!content && item.role !== 'user') continue;
+    messages.push({ role: item.role, content: content || '(image attached)' });
   }
   if (messages.length === 0) {
     return { error: { code: 'invalid_request', message: 'No valid chat messages found.' } };
   }
-  const modelRaw = typeof body.model === 'string' ? body.model : 'deepseek-web';
-  const thinkingEnabled = modelRaw.includes('thinking') || modelRaw.endsWith('-think') || body.thinking === true;
-  const model = thinkingEnabled ? 'deepseek-web-thinking' : 'deepseek-web';
+  const modelRaw = typeof body.model === 'string' ? body.model : 'ds/octopus';
+  const thinkingEnabled =
+    modelRaw.includes('thinking')
+    || modelRaw.endsWith('-think')
+    || body.thinking === true;
+  const model = normalizeBridgeModel(modelRaw);
+  const clientProfile = detectClientProfile(messages, clientHeader);
   return {
     job: {
       id: `chatcmpl-${randomUUID()}`,
@@ -291,6 +459,8 @@ function parseChatBody(body) {
       stream: body.stream === true,
       thinkingEnabled,
       createdAt: Math.floor(Date.now() / 1000),
+      clientProfile,
+      images: images.length > 0 ? images : undefined,
     },
   };
 }
@@ -318,130 +488,147 @@ async function handleChatCompletions(req, res) {
     return;
   }
 
-  const parsed = parseChatBody(body);
+  const clientHeader = req.headers['x-dpp-client'] || req.headers['x-dpp-profile'] || null;
+  const parsed = parseChatBody(body, clientHeader);
   if (parsed.error) {
     sendJson(res, 400, { error: { message: parsed.error.message, type: parsed.error.code, code: parsed.error.code } });
     return;
   }
 
   const readiness = await requestReadiness();
-  if (!readiness.ready) {
-    const err = readinessToError(readiness);
+  // Busy is queued below — only hard-fail missing extension/tab/login.
+  if (!readiness.extensionAlive || !readiness.hasDeepSeekTab || !readiness.hasLogin) {
+    const err = readinessToError({ ...readiness, busy: false, ready: false });
     sendJson(res, 503, { error: { message: err.message, type: err.code, code: err.code } });
     return;
   }
 
-  if (extensionBusy) {
-    sendJson(res, 503, {
-      error: {
-        message: 'DeepSeek++ cursor bridge is busy with another request.',
-        type: 'busy',
-        code: 'busy',
-      },
-    });
-    return;
-  }
-
   const job = parsed.job;
-  const requestId = randomUUID();
-  extensionBusy = true;
+  // FIFO queue: wait instead of hard 503 when another job is running.
+  await enqueueHttpJob(async () => {
+    const requestId = randomUUID();
+    extensionBusy = true;
+    try {
+      if (job.stream) {
+        sendSseHeaders(res);
+        const created = job.createdAt;
+        const completionId = job.id;
 
-  try {
-    if (job.stream) {
-      sendSseHeaders(res);
-      const created = job.createdAt;
-      const completionId = job.id;
+        const writeChunk = (delta, finishReason) => {
+          const payload = {
+            id: completionId,
+            object: 'chat.completion.chunk',
+            created,
+            model: job.model,
+            choices: [
+              {
+                index: 0,
+                delta: finishReason ? {} : { content: delta },
+                finish_reason: finishReason,
+              },
+            ],
+          };
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        };
 
-      const writeChunk = (delta, finishReason) => {
-        const payload = {
+        res.write(`data: ${JSON.stringify({
           id: completionId,
           object: 'chat.completion.chunk',
           created,
           model: job.model,
-          choices: [
-            {
-              index: 0,
-              delta: finishReason ? {} : { content: delta },
-              finish_reason: finishReason,
-            },
-          ],
-        };
-        res.write(`data: ${JSON.stringify(payload)}\n\n`);
-      };
+          choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+        })}\n\n`);
 
-      res.write(`data: ${JSON.stringify({
-        id: completionId,
-        object: 'chat.completion.chunk',
-        created,
-        model: job.model,
-        choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
-      })}\n\n`);
+        const jobPromise = waitForJob(requestId, (text) => {
+          if (text) writeChunk(text, null);
+        }, JOB_TIMEOUT_MS);
 
-      const jobPromise = waitForJob(requestId, (text) => {
-        if (text) writeChunk(text, null);
-      }, JOB_TIMEOUT_MS);
+        await writeNativeMessage({ type: 'run_job', requestId, job });
+        const result = await jobPromise;
 
-      await writeNativeMessage({ type: 'run_job', requestId, job });
-      const result = await jobPromise;
+        if (result?.type === 'job_error') {
+          const err = result.error || { code: 'upstream_error', message: 'Unknown bridge error' };
+          res.write(`data: ${JSON.stringify({ error: { message: err.message, type: err.code, code: err.code } })}\n\n`);
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
 
-      if (result?.type === 'job_error') {
-        const err = result.error || { code: 'upstream_error', message: 'Unknown bridge error' };
-        res.write(`data: ${JSON.stringify({ error: { message: err.message, type: err.code, code: err.code } })}\n\n`);
+        writeChunk('', 'stop');
         res.write('data: [DONE]\n\n');
         res.end();
         return;
       }
 
-      writeChunk('', 'stop');
-      res.write('data: [DONE]\n\n');
-      res.end();
-      return;
-    }
+      const jobPromise = waitForJob(requestId, null, JOB_TIMEOUT_MS);
+      await writeNativeMessage({ type: 'run_job', requestId, job });
+      const result = await jobPromise;
 
-    const jobPromise = waitForJob(requestId, null, JOB_TIMEOUT_MS);
-    await writeNativeMessage({ type: 'run_job', requestId, job });
-    const result = await jobPromise;
-
-    if (result?.type === 'job_error') {
-      const err = result.error || { code: 'upstream_error', message: 'Unknown bridge error' };
-      sendJson(res, 502, { error: { message: err.message, type: err.code, code: err.code } });
-      return;
-    }
-
-    const text = typeof result?.text === 'string' ? result.text : '';
-    sendJson(res, 200, {
-      id: job.id,
-      object: 'chat.completion',
-      created: job.createdAt,
-      model: job.model,
-      choices: [
-        {
-          index: 0,
-          message: { role: 'assistant', content: text },
-          finish_reason: 'stop',
-        },
-      ],
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-    });
-  } catch (err) {
-    if (!res.headersSent) {
-      sendJson(res, 500, {
-        error: {
-          message: err instanceof Error ? err.message : String(err),
-          type: 'upstream_error',
-          code: 'upstream_error',
-        },
-      });
-    } else {
-      try {
-        res.end();
-      } catch {
-        // ignore
+      if (result?.type === 'job_error') {
+        const err = result.error || { code: 'upstream_error', message: 'Unknown bridge error' };
+        sendJson(res, 502, { error: { message: err.message, type: err.code, code: err.code } });
+        return;
       }
+
+      const text = typeof result?.text === 'string' ? result.text : '';
+      sendJson(res, 200, {
+        id: job.id,
+        object: 'chat.completion',
+        created: job.createdAt,
+        model: job.model,
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: text },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      });
+    } catch (err) {
+      if (!res.headersSent) {
+        sendJson(res, 500, {
+          error: {
+            message: err instanceof Error ? err.message : String(err),
+            type: 'upstream_error',
+            code: 'upstream_error',
+          },
+        });
+      } else {
+        try {
+          res.end();
+        } catch {
+          // ignore
+        }
+      }
+    } finally {
+      extensionBusy = false;
     }
-  } finally {
-    extensionBusy = false;
+  });
+}
+
+const httpJobQueue = [];
+let httpJobActive = false;
+
+function enqueueHttpJob(fn) {
+  return new Promise((resolve, reject) => {
+    httpJobQueue.push({ fn, resolve, reject });
+    void drainHttpJobQueue();
+  });
+}
+
+async function drainHttpJobQueue() {
+  if (httpJobActive) return;
+  httpJobActive = true;
+  while (httpJobQueue.length > 0) {
+    const item = httpJobQueue.shift();
+    try {
+      item.resolve(await item.fn());
+    } catch (err) {
+      item.reject(err);
+    }
   }
+  httpJobActive = false;
 }
 
 function createServer() {
@@ -451,10 +638,28 @@ function createServer() {
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
           'access-control-allow-origin': '*',
-          'access-control-allow-headers': 'authorization, content-type',
+          'access-control-allow-headers': 'authorization, content-type, x-dpp-client',
           'access-control-allow-methods': 'GET, POST, OPTIONS',
         });
         res.end();
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname.startsWith('/bridge-assets/')) {
+        pruneBridgeAssets();
+        const id = url.pathname.slice('/bridge-assets/'.length).split('/')[0];
+        const asset = bridgeAssets.get(id);
+        if (!asset) {
+          sendJson(res, 404, { error: { message: 'Asset not found or expired', type: 'not_found', code: 'not_found' } });
+          return;
+        }
+        res.writeHead(200, {
+          'content-type': asset.mime,
+          'content-length': asset.buffer.length,
+          'cache-control': 'no-store',
+          'access-control-allow-origin': '*',
+        });
+        res.end(asset.buffer);
         return;
       }
 

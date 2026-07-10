@@ -64,6 +64,9 @@ function createManifest(env: ConfigEnv): UserManifest {
       'https://api.deepseek.com/*',
       '*://cn.bing.com/*',
       '*://www.bing.com/*',
+      // Cursor bridge host: image asset relay for eyes pipeline (never DeepSeek itself).
+      'http://127.0.0.1:8787/*',
+      'http://localhost:8787/*',
       // Cloud sync OAuth providers — required (not optional) because their API
       // hosts are fixed and the background service worker's fetch to these hosts
       // needs host permission to bypass CORS. Declaring them as required avoids a

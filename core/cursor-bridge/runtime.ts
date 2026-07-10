@@ -11,6 +11,7 @@ import {
 import { probeCursorBridgeReadiness, runCursorBridgeJob, type CursorBridgeWorkerDeps } from './worker';
 
 const RECONNECT_MS = 2_000;
+const RECONNECT_MISSING_HOST_MS = 15_000;
 
 export interface CursorBridgeRuntimeOptions {
   deps: CursorBridgeWorkerDeps;
@@ -75,23 +76,38 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
     });
 
     nextPort.onDisconnect.addListener(() => {
-      log('cursor-bridge native port disconnected');
+      // Read lastError so Chrome does not surface "Unchecked runtime.lastError".
+      const lastError =
+        typeof chrome !== 'undefined' && chrome.runtime?.lastError
+          ? chrome.runtime.lastError.message
+          : null;
+      const missingHost = Boolean(
+        lastError
+        && /native messaging host|not found|specified native messaging host/i.test(lastError),
+      );
+      if (missingHost) {
+        log(`cursor-bridge host not installed yet (${lastError})`);
+      } else if (lastError) {
+        log(`cursor-bridge native port disconnected: ${lastError}`);
+      } else {
+        log('cursor-bridge native port disconnected');
+      }
       port = null;
       if (activeAbort) {
         activeAbort.abort();
         activeAbort = null;
         busy = false;
       }
-      scheduleReconnect();
+      scheduleReconnect(missingHost ? RECONNECT_MISSING_HOST_MS : RECONNECT_MS);
     });
   };
 
-  const scheduleReconnect = () => {
+  const scheduleReconnect = (delayMs = RECONNECT_MS) => {
     if (stopped || reconnectTimer) return;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
-    }, RECONNECT_MS);
+    }, delayMs);
   };
 
   const post = (message: CursorBridgeExtensionToHost) => {

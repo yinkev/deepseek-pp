@@ -315,7 +315,8 @@ export default defineBackground(() => {
       loadClientHeaders: () => loadClientHeadersFromStorage(),
       refreshClientHeadersFromTabs: () => refreshClientHeadersFromDeepSeekTabs(),
     },
-    onLog: (message) => reportBackgroundStartupError('cursor_bridge', message),
+    // Lifecycle noise only — never console.error (shows up as Chrome extension Errors).
+    onLog: (message) => console.debug(`[DeepSeek++] cursor_bridge: ${message}`),
   });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

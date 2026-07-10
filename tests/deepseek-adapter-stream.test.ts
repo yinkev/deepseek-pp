@@ -67,6 +67,42 @@ describe('DeepSeek web adapter streaming', () => {
     expect(turn.assistantText).toBe('Hello world');
   });
 
+  it('keeps the opening fragment when DeepSeek SETs content before APPENDing', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+      'data: {"p":"response/fragments/-1/content","o":"SET","v":"Real talk"}',
+      'data: {"p":"response/fragments/-1/content","o":"APPEND","v":": yes"}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const chunks: string[] = [];
+    const turn = await submitPromptStreaming(createSubmitInput(), {
+      onTextChunk(text) {
+        chunks.push(text);
+      },
+    });
+
+    expect(chunks.join('')).toBe('Real talk: yes');
+    expect(turn.assistantText).toBe('Real talk: yes');
+  });
+
+  it('keeps opening text from relative BATCH fragment paths', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+      'data: {"p":"response","o":"BATCH","v":[{"p":"fragments/-1/content","o":"SET","v":"This"}]}',
+      'data: {"p":"response/fragments/-1/content","o":"APPEND","v":" is hard"}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const chunks: string[] = [];
+    const turn = await submitPromptStreaming(createSubmitInput(), {
+      onTextChunk(text) {
+        chunks.push(text);
+      },
+    });
+
+    expect(chunks.join('')).toBe('This is hard');
+    expect(turn.assistantText).toBe('This is hard');
+  });
+
   it('emits token speed progress for bypass streaming requests', async () => {
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => now);
