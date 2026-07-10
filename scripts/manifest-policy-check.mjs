@@ -11,12 +11,12 @@ const targets = [
   {
     browser: 'chrome',
     manifestPath: 'dist/chrome-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'sidePanel'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'scripting', 'sidePanel'],
   },
   {
     browser: 'edge',
     manifestPath: 'dist/edge-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'sidePanel'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'scripting', 'sidePanel'],
   },
   {
     browser: 'firefox',

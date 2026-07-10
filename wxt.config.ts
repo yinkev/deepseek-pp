@@ -49,7 +49,9 @@ function createManifest(env: ConfigEnv): UserManifest {
   // The providers' fixed API hosts are declared as required host_permissions below
   // so the background service worker can fetch them without a runtime permission
   // request; WebDAV URLs are arbitrary and stay in optional_host_permissions.
-  const chromiumPermissions = [...permissions, 'offscreen', 'debugger', 'tabs', 'identity'];
+  // scripting: MAIN-world localStorage read for DeepSeek userToken after extension
+  // reload (isolated content world cannot see page storage; vault was stale).
+  const chromiumPermissions = [...permissions, 'offscreen', 'debugger', 'tabs', 'identity', 'scripting'];
 
   return {
     default_locale: 'en',

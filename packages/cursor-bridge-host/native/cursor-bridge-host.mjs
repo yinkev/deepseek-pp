@@ -13,6 +13,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import {
+  defaultVaultSnapshot,
+  loadVault,
+  saveVault,
+  upsertAccount,
+  removeAccount,
+  markUsed,
+  listAccountsPublic,
+  mergeReadinessAccounts,
+  resolveVaultPath,
+} from './account-vault.mjs';
 
 const PORT = Number(process.env.CURSOR_BRIDGE_PORT || 8787);
 const HOST = process.env.CURSOR_BRIDGE_HOST || '127.0.0.1';
@@ -20,7 +32,21 @@ const MAX_NATIVE_MESSAGE_BYTES = 1 * 1024 * 1024;
 const JOB_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_JOB_TIMEOUT_MS || 300_000);
 const hostStartedAt = Date.now();
 let activeJobStartedAt = null;
-let lastJobMeta = { threadId: null, sticky: null, model: null, error: null };
+let lastJobMeta = {
+  id: null,
+  model: null,
+  accountId: null,
+  threadId: null,
+  sticky: null,
+  ok: null,
+  errorCode: null,
+  error: null,
+  durationMs: null,
+  finishedAt: null,
+  promptChars: null,
+  toolLoopDepth: null,
+  openAiToolCalls: null,
+};
 
 
 // --- Native messaging framing ---
@@ -113,6 +139,50 @@ function defaultReadiness() {
 
 let lastReadiness = defaultReadiness();
 
+// Host-disk multi-account vault (SoT shared across extension reloads / profiles).
+const HOST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const VAULT_PATH = resolveVaultPath(process.env.CURSOR_BRIDGE_HOST_DIR || HOST_DIR);
+let hostVault = loadVault(VAULT_PATH);
+
+function persistHostVault() {
+  try {
+    saveVault(VAULT_PATH, hostVault);
+  } catch (err) {
+    process.stderr.write(`[cursor-bridge] vault save failed: ${err?.message || err}\n`);
+  }
+}
+
+function vaultPublicList() {
+  return listAccountsPublic(hostVault);
+}
+
+function applyVaultUpsert(headers, options = {}) {
+  const result = upsertAccount(hostVault, headers, options);
+  if (result.account) {
+    hostVault = result.snapshot;
+    persistHostVault();
+  }
+  return result.account;
+}
+
+function applyVaultRemove(accountId) {
+  const result = removeAccount(hostVault, accountId);
+  if (result.removed) {
+    hostVault = result.snapshot;
+    persistHostVault();
+  }
+  return result.removed;
+}
+
+function applyVaultMarkUsed(accountId) {
+  const result = markUsed(hostVault, accountId);
+  if (result.account) {
+    hostVault = result.snapshot;
+    persistHostVault();
+  }
+  return result.account;
+}
+
 async function requestReadiness() {
   if (!extensionConnected) {
     lastReadiness = defaultReadiness();
@@ -123,7 +193,17 @@ async function requestReadiness() {
   await writeNativeMessage({ type: 'get_readiness', requestId });
   const msg = await readinessPromise;
   if (msg && (msg.type === 'readiness' || msg.type === 'pong') && msg.readiness) {
-    lastReadiness = { ...msg.readiness, extensionAlive: true };
+    lastReadiness = {
+      ...mergeReadinessAccounts(msg.readiness, hostVault),
+      extensionAlive: true,
+      hostVaultPath: VAULT_PATH,
+    };
+    // Prefer host hasLogin if vault has tokens even if extension cache empty.
+    if (!lastReadiness.hasLogin && (hostVault.order?.length ?? 0) > 0) {
+      lastReadiness.hasLogin = true;
+      lastReadiness.ready = !lastReadiness.busy;
+      if (lastReadiness.reason === 'missing_login') lastReadiness.reason = undefined;
+    }
     return lastReadiness;
   }
   lastReadiness = defaultReadiness();
@@ -168,6 +248,69 @@ function handleExtensionMessage(msg) {
   if (msg.type === 'hello') {
     extensionConnected = true;
     lastReadiness = { ...lastReadiness, extensionAlive: true };
+    // Push host vault snapshot so extension can rehydrate multi-account SoT.
+    writeNativeMessage({
+      type: 'vault_snapshot',
+      requestId: randomUUID(),
+      vault: hostVault,
+    }).catch(() => {});
+    return;
+  }
+
+  if (msg.type === 'vault_upsert') {
+    const headers = msg.headers && typeof msg.headers === 'object' ? msg.headers : null;
+    const account = headers ? applyVaultUpsert(headers, {
+      label: msg.label,
+      makeDefault: msg.makeDefault === true,
+    }) : null;
+    if (msg.requestId) {
+      writeNativeMessage({
+        type: 'vault_ack',
+        requestId: msg.requestId,
+        ok: Boolean(account),
+        account: account ? { id: account.id, label: account.label, useCount: account.useCount } : null,
+        accounts: vaultPublicList(),
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  if (msg.type === 'vault_remove') {
+    // HARD RULE: never delete host vault slots from extension auth paths.
+    // Multi-account was wiped by 40003 remove loops. Manual admin can edit the file.
+    process.stderr.write(`[cursor-bridge] vault_remove ignored (protect multi-account): ${msg.accountId || ''}\n`);
+    if (msg.requestId) {
+      writeNativeMessage({
+        type: 'vault_ack',
+        requestId: msg.requestId,
+        ok: false,
+        accounts: vaultPublicList(),
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  if (msg.type === 'vault_mark_used') {
+    const account = applyVaultMarkUsed(msg.accountId);
+    if (msg.requestId) {
+      writeNativeMessage({
+        type: 'vault_ack',
+        requestId: msg.requestId,
+        ok: Boolean(account),
+        accounts: vaultPublicList(),
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  if (msg.type === 'vault_get') {
+    if (msg.requestId) {
+      writeNativeMessage({
+        type: 'vault_snapshot',
+        requestId: msg.requestId,
+        vault: hostVault,
+      }).catch(() => {});
+    }
     return;
   }
 
@@ -177,7 +320,14 @@ function handleExtensionMessage(msg) {
       entry.onChunk(typeof msg.text === 'string' ? msg.text : '');
       return;
     }
-    if (msg.type === 'job_done' || msg.type === 'job_error' || msg.type === 'readiness' || msg.type === 'pong') {
+    if (
+      msg.type === 'job_done'
+      || msg.type === 'job_error'
+      || msg.type === 'readiness'
+      || msg.type === 'pong'
+      || msg.type === 'vault_snapshot'
+      || msg.type === 'vault_ack'
+    ) {
       if (msg.type === 'job_done') {
         const n = msg.streamDebug?.events?.length ?? 0;
         const preview = typeof msg.text === 'string' ? msg.text.slice(0, 40) : '';
@@ -226,6 +376,10 @@ function fingerprintThreadId(job) {
   if (model.includes('eyes') || model.includes('vision')) family = 'octopus-eyes';
   else if (model.includes('squid') || model.includes('flash') || model.includes('instant')) family = 'squid';
   const profile = String(job?.clientProfile || 'generic').toLowerCase();
+  const hint = String(job?.conversationHint || '').trim().slice(0, 128);
+  if (hint) {
+    return `fp-${profile}-${family}-c-${simpleHash(`${profile}\n${family}\nhint\n${hint}`)}`;
+  }
   const firstUser = (job?.messages || []).find((m) => m.role === 'user')?.content || '';
   const seed = String(firstUser).slice(0, 240);
   return `fp-${profile}-${family}-${simpleHash(`${profile}\n${family}\n${seed}`)}`;
@@ -239,9 +393,9 @@ function sendJson(res, status, body, extraHeaders = {}) {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
     'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-thread-id',
+    'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-dpp-force-tools, x-dpp-conversation-id, x-dpp-account, x-dpp-account-id, x-thread-id, user-agent',
     'access-control-allow-methods': 'GET, POST, OPTIONS',
-    'access-control-expose-headers': 'x-dpp-thread-id, x-dpp-sticky',
+    'access-control-expose-headers': 'x-dpp-thread-id, x-dpp-sticky, x-dpp-account-id',
     ...extraHeaders,
   });
   res.end(payload);
@@ -263,19 +417,14 @@ function readinessToError(readiness) {
   if (!readiness.extensionAlive) {
     return {
       code: 'not_ready',
-      message: 'DeepSeek++ extension is not connected. Open Chrome with DeepSeek++ loaded and a chat.deepseek.com tab.',
+      message: 'DeepSeek++ extension is not connected. Open Chrome with DeepSeek++ loaded.',
     };
   }
-  if (!readiness.hasDeepSeekTab) {
-    return {
-      code: 'missing_tab',
-      message: 'Open a logged-in chat.deepseek.com tab with DeepSeek++ active, then retry.',
-    };
-  }
+  // Tab is optional — cached Authorization is enough.
   if (!readiness.hasLogin) {
     return {
       code: 'missing_login',
-      message: 'DeepSeek login token is missing. Sign in at chat.deepseek.com and refresh the page.',
+      message: 'DeepSeek login token is missing. Sign in at chat.deepseek.com once so the extension can cache your login, then retry.',
     };
   }
   return { code: 'not_ready', message: readiness.reason || 'Cursor bridge is not ready.' };
@@ -317,39 +466,27 @@ function storeBridgeAsset(dataUrl) {
 
 function createModelsResponse(readiness) {
   const available = readiness.ready === true;
+  const mk = (id, contextLength) => ({
+    id,
+    object: 'model',
+    created: 0,
+    owned_by: 'deepseek-pp-cursor-bridge',
+    permission: [],
+    root: id,
+    parent: null,
+    available,
+    context_length: contextLength,
+    context_window: contextLength,
+    max_model_len: contextLength,
+    max_tokens: Math.min(8192, Math.floor(contextLength / 8)),
+  });
   return {
     object: 'list',
     data: [
-      {
-        id: 'ds/octopus',
-        object: 'model',
-        created: 0,
-        owned_by: 'deepseek-pp-cursor-bridge',
-        permission: [],
-        root: 'ds/octopus',
-        parent: null,
-        available,
-      },
-      {
-        id: 'ds/octopus-eyes',
-        object: 'model',
-        created: 0,
-        owned_by: 'deepseek-pp-cursor-bridge',
-        permission: [],
-        root: 'ds/octopus-eyes',
-        parent: null,
-        available,
-      },
-      {
-        id: 'ds/squid',
-        object: 'model',
-        created: 0,
-        owned_by: 'deepseek-pp-cursor-bridge',
-        permission: [],
-        root: 'ds/squid',
-        parent: null,
-        available,
-      },
+      mk('ds/octopus', 890880),
+      mk('ds/octopus-eyes', 890880),
+      mk('ds/squid', 890880),
+      mk('ds/eni', 890880),
     ],
   };
 }
@@ -422,9 +559,31 @@ function extractImageParts(content) {
   return images;
 }
 
-function detectClientProfile(messages, headerValue) {
+function detectClientProfile(messages, headerValue, userAgent) {
   const header = typeof headerValue === 'string' ? headerValue.trim().toLowerCase() : '';
   if (header === 'cursor' || header === 'hermes' || header === 'generic') return header;
+  if (
+    header === 'agent-hermes'
+    || header === 'openhermes'
+    || header === 'nous'
+    || header === 'discord'
+    || header === 'telegram'
+    || header === 'gateway'
+  ) {
+    return 'hermes';
+  }
+  if (header === 'cursor-ide' || header === 'cursor-agent') return 'cursor';
+
+  const ua = typeof userAgent === 'string' ? userAgent.toLowerCase() : '';
+  if (
+    ua.includes('hermes')
+    || ua.includes('openhermes')
+    || ua.includes('nousresearch')
+    || ua.includes('hermesagent')
+  ) {
+    return 'hermes';
+  }
+  if (ua.includes('cursor')) return 'cursor';
 
   const systemText = messages
     .filter((m) => m.role === 'system')
@@ -433,14 +592,30 @@ function detectClientProfile(messages, headerValue) {
     .toLowerCase();
   if (!systemText) return 'generic';
 
-  const cursorHits = ['cursor ide', 'you are a coding agent', 'agent skills', 'mcp server']
+  const cursorHits = ['cursor ide', 'you are a coding agent', 'agent skills', 'mcp server', 'cursor rules', 'composer']
     .filter((n) => systemText.includes(n)).length;
-  const hermesHits = ['hermes', 'agent hermes', 'openhermes']
-    .filter((n) => systemText.includes(n)).length;
+  // Discord/Telegram/WhatsApp/Slack gateway prompts from Hermes — same brain-only policy as CLI.
+  const hermesHits = [
+    'hermes',
+    'agent hermes',
+    'openhermes',
+    'nousresearch',
+    'nous research',
+    'you are hermes',
+    'hermes agent',
+    'they call me hermes',
+    'you are in a discord server',
+    'you are on a text messaging communication platform, telegram',
+    'you are on a text messaging communication platform, whatsapp',
+    'you are in a slack workspace',
+    'you are communicating via email',
+    'media:/absolute/path/to/file',
+  ].filter((n) => systemText.includes(n)).length;
 
+  if (hermesHits >= 1) return 'hermes';
   if (cursorHits >= 2) return 'cursor';
-  if (hermesHits >= 1 && systemText.length > 400) return 'hermes';
-  if (cursorHits >= 1 && systemText.length > 1200) return 'cursor';
+  if (cursorHits >= 1 && systemText.length > 800) return 'cursor';
+  if (systemText.length > 2000 && (systemText.includes('tool') || systemText.includes('agent'))) return 'cursor';
   return 'generic';
 }
 
@@ -458,6 +633,16 @@ function normalizeBridgeModel(modelRaw) {
     return 'ds/octopus-eyes';
   }
   if (
+    lower.includes('ds/eni')
+    || lower.endsWith('/eni')
+    || lower.endsWith('-eni')
+    || lower === 'eni'
+    || lower.includes('roleplay')
+    || lower.includes('nsfw-rp')
+  ) {
+    return 'ds/eni';
+  }
+  if (
     lower.includes('ds/squid')
     || lower.endsWith('/squid')
     || lower.endsWith('-squid')
@@ -472,7 +657,82 @@ function normalizeBridgeModel(modelRaw) {
   return 'ds/octopus';
 }
 
-function parseChatBody(body, clientHeader) {
+/** Hermes (and similar) fire a second completion just to name the chat — never open DeepSeek. */
+function isTitleGenerationJob(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const blob = messages.map((m) => String(m?.content || '')).join('\n').toLowerCase();
+  return (
+    blob.includes('generate a short, descriptive title')
+    || blob.includes('return only the title text')
+    || (blob.includes('descriptive title') && blob.includes('3-7 words'))
+    || (blob.includes('title should capture') && blob.includes('conversation'))
+    || (blob.includes('return only the title') && blob.includes('title'))
+  );
+}
+
+function localTitleFromMessages(messages) {
+  if (!Array.isArray(messages)) return 'New Conversation';
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (!m || (m.role !== 'user' && m.role !== 'system' && m.role !== 'assistant')) continue;
+    const cleaned = String(m.content || '')
+      .replace(/\n*\[Autonomic Loop\][\s\S]*$/gi, '')
+      .replace(/\n*\[Note:[^\]]*\]/gi, '');
+    for (const line of cleaned.split('\n')) {
+      let t = line.trim()
+        .replace(/^user:\s*/i, '')
+        .replace(/^assistant:\s*/i, '');
+      if (!t || t.startsWith('[')) continue;
+      if (/generate a short/i.test(t)) continue;
+      if (/^instructions:/i.test(t)) continue;
+      if (/return only the title/i.test(t)) continue;
+      if (/latest user request/i.test(t)) continue;
+      const words = t.replace(/[^\p{L}\p{N}\s'-]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+      if (words.length === 0) continue;
+      return words.slice(0, 7).join(' ').slice(0, 64);
+    }
+  }
+  return 'New Conversation';
+}
+
+function writeLocalCompletion(res, job, text, stream) {
+  const created = job.createdAt || Math.floor(Date.now() / 1000);
+  const completionId = job.id || `chatcmpl-${randomUUID()}`;
+  if (stream) {
+    sendSseHeaders(res);
+    res.write(`data: ${JSON.stringify({
+      id: completionId,
+      object: 'chat.completion.chunk',
+      created,
+      model: job.model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: completionId,
+      object: 'chat.completion.chunk',
+      created,
+      model: job.model,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+  sendJson(res, 200, {
+    id: completionId,
+    object: 'chat.completion',
+    created,
+    model: job.model,
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content: text },
+      finish_reason: 'stop',
+    }],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  });
+}
+
+function parseChatBody(body, clientHeader, userAgent) {
   if (!body || typeof body !== 'object') {
     return { error: { code: 'invalid_request', message: 'Request body must be a JSON object.' } };
   }
@@ -484,8 +744,17 @@ function parseChatBody(body, clientHeader) {
   const images = [];
   for (const item of messagesRaw) {
     if (!item || typeof item !== 'object') continue;
-    if (item.role !== 'system' && item.role !== 'user' && item.role !== 'assistant') continue;
+    if (item.role !== 'system' && item.role !== 'user' && item.role !== 'assistant' && item.role !== 'tool') continue;
     const content = normalizeMessageContent(item.content).trim();
+    if (item.role === 'tool') {
+      messages.push({
+        role: 'tool',
+        content: content || '(empty tool result)',
+        tool_call_id: typeof item.tool_call_id === 'string' ? item.tool_call_id : undefined,
+        name: typeof item.name === 'string' ? item.name : undefined,
+      });
+      continue;
+    }
     const parts = extractImageParts(item.content);
     for (const img of parts) {
       if (img.url.startsWith('data:image/') && img.url.length > MAX_INLINE_DATA_URL_CHARS) {
@@ -508,19 +777,62 @@ function parseChatBody(body, clientHeader) {
         images.push(img);
       }
     }
-    if (!content && item.role !== 'user') continue;
-    messages.push({ role: item.role, content: content || '(image attached)' });
+    let tool_calls;
+    if (item.role === 'assistant' && Array.isArray(item.tool_calls)) {
+      tool_calls = item.tool_calls
+        .map((tc, index) => {
+          if (!tc || typeof tc !== 'object') return null;
+          const fn = tc.function && typeof tc.function === 'object' ? tc.function : null;
+          if (!fn || typeof fn.name !== 'string') return null;
+          return {
+            id: typeof tc.id === 'string' ? tc.id : `call_${index}`,
+            type: 'function',
+            function: {
+              name: fn.name,
+              arguments: typeof fn.arguments === 'string'
+                ? fn.arguments
+                : JSON.stringify(fn.arguments ?? {}),
+            },
+          };
+        })
+        .filter(Boolean);
+      if (tool_calls.length === 0) tool_calls = undefined;
+    }
+    if (!content && item.role !== 'user' && !tool_calls) continue;
+    messages.push({
+      role: item.role,
+      content: content || (tool_calls ? '' : '(image attached)'),
+      tool_calls,
+    });
   }
   if (messages.length === 0) {
     return { error: { code: 'invalid_request', message: 'No valid chat messages found.' } };
   }
+  // OpenAI tools array from Hermes/Cursor — passed through for prompt inject + parse.
+  const openAiTools = Array.isArray(body.tools)
+    ? body.tools
+      .filter((t) => t && t.type === 'function' && t.function && typeof t.function.name === 'string')
+      .slice(0, 128)
+      .map((t) => ({
+        type: 'function',
+        function: {
+          name: String(t.function.name).trim(),
+          description: typeof t.function.description === 'string' ? t.function.description : undefined,
+          parameters: t.function.parameters,
+        },
+      }))
+    : [];
   const modelRaw = typeof body.model === 'string' ? body.model : 'ds/octopus';
   const thinkingEnabled =
     modelRaw.includes('thinking')
     || modelRaw.endsWith('-think')
     || body.thinking === true;
   const model = normalizeBridgeModel(modelRaw);
-  const clientProfile = detectClientProfile(messages, clientHeader);
+  const clientProfile = detectClientProfile(
+    messages.filter((m) => m.role !== 'tool'),
+    clientHeader,
+    userAgent,
+  );
   const threadId =
     (typeof body.thread_id === 'string' && body.thread_id.trim())
     || (typeof body.threadId === 'string' && body.threadId.trim())
@@ -536,6 +848,25 @@ function parseChatBody(body, clientHeader) {
   const dppContext = dppContextRaw && String(dppContextRaw).trim()
     ? String(dppContextRaw).trim().slice(0, 12000)
     : undefined;
+  const forceTools =
+    body.force_tools === true
+    || body.forceTools === true;
+  const conversationHintRaw =
+    (typeof body.conversation_id === 'string' && body.conversation_id)
+    || (typeof body.conversationId === 'string' && body.conversationId)
+    || (typeof body.session_id === 'string' && body.session_id)
+    || (typeof body.sessionId === 'string' && body.sessionId)
+    || (typeof body.hermes_session_id === 'string' && body.hermes_session_id)
+    || (body.metadata && typeof body.metadata === 'object' && (
+      (typeof body.metadata.session_id === 'string' && body.metadata.session_id)
+      || (typeof body.metadata.conversation_id === 'string' && body.metadata.conversation_id)
+      || (typeof body.metadata.platform === 'string' && typeof body.metadata.chat_id === 'string'
+        && `${body.metadata.platform}:${body.metadata.chat_id}`)
+    ))
+    || '';
+  const conversationHint = conversationHintRaw && String(conversationHintRaw).trim()
+    ? String(conversationHintRaw).trim().slice(0, 128)
+    : undefined;
   return {
     job: {
       id: `chatcmpl-${randomUUID()}`,
@@ -549,6 +880,9 @@ function parseChatBody(body, clientHeader) {
       threadId,
       resetThread: resetThread || undefined,
       dppContext,
+      forceTools: forceTools || undefined,
+      conversationHint,
+      openAiTools: openAiTools.length > 0 ? openAiTools : undefined,
     },
   };
 }
@@ -576,30 +910,56 @@ async function handleChatCompletions(req, res) {
     return;
   }
 
-  const clientHeader = req.headers['x-dpp-client'] || req.headers['x-dpp-profile'] || null;
-  const threadHeader = req.headers['x-dpp-thread-id'] || req.headers['x-thread-id'] || null;
+  const clientHeader = req.headers['x-dpp-client'] || req.headers['x-dpp-profile'] || req.headers['x-hermes-client'] || null;
+  const threadHeader = req.headers['x-dpp-thread-id'] || req.headers['x-thread-id'] || req.headers['x-hermes-thread-id'] || null;
   const resetHeader = req.headers['x-dpp-reset-thread'] === '1' || req.headers['x-dpp-reset-thread'] === 'true';
-  const parsed = parseChatBody(body, clientHeader);
+  const forceToolsHeader = req.headers['x-dpp-force-tools'] === '1' || req.headers['x-dpp-force-tools'] === 'true';
+  const accountHeader = req.headers['x-dpp-account'] || req.headers['x-dpp-account-id'] || null;
+  // Hermes gateway (Discord/Telegram/CLI) may send session id under several names.
+  const conversationHeader =
+    req.headers['x-dpp-conversation-id']
+    || req.headers['x-conversation-id']
+    || req.headers['x-hermes-session-id']
+    || req.headers['x-session-id']
+    || null;
+  const userAgent = req.headers['user-agent'] || null;
+  const parsed = parseChatBody(body, clientHeader, userAgent);
   if (parsed.job) {
     if (!parsed.job.threadId && typeof threadHeader === 'string' && threadHeader.trim()) {
       parsed.job.threadId = threadHeader.trim();
     }
     if (resetHeader) parsed.job.resetThread = true;
+    if (forceToolsHeader) parsed.job.forceTools = true;
+    if (!parsed.job.conversationHint && typeof conversationHeader === 'string' && conversationHeader.trim()) {
+      parsed.job.conversationHint = conversationHeader.trim().slice(0, 128);
+    }
+    if (!parsed.job.accountId && typeof accountHeader === 'string' && accountHeader.trim()) {
+      parsed.job.accountId = accountHeader.trim().slice(0, 64);
+    }
   }
   if (parsed.error) {
     sendJson(res, 400, { error: { message: parsed.error.message, type: parsed.error.code, code: parsed.error.code } });
     return;
   }
 
+  const job = parsed.job;
+
+  // Title side-jobs: answer in host — never touch DeepSeek (stops the twin chat).
+  if (isTitleGenerationJob(job.messages)) {
+    const title = localTitleFromMessages(job.messages);
+    writeLocalCompletion(res, job, title, job.stream === true);
+    return;
+  }
+
   const readiness = await requestReadiness();
-  // Busy is queued below — only hard-fail missing extension/tab/login.
-  if (!readiness.extensionAlive || !readiness.hasDeepSeekTab || !readiness.hasLogin) {
+  // Busy is queued below — only hard-fail missing extension/login.
+  // Tab is optional: cached Authorization is enough to run.
+  if (!readiness.extensionAlive || !readiness.hasLogin) {
     const err = readinessToError({ ...readiness, busy: false, ready: false });
     sendJson(res, 503, { error: { message: err.message, type: err.code, code: err.code } });
     return;
   }
 
-  const job = parsed.job;
   // FIFO queue: wait instead of hard 503 when another job is running.
   await enqueueHttpJob(async () => {
     const requestId = randomUUID();
@@ -650,7 +1010,37 @@ async function handleChatCompletions(req, res) {
           return;
         }
 
-        writeChunk('', 'stop');
+        // Hermes OpenAI tool loop: emit structured tool_calls in the stream.
+        const toolCalls = Array.isArray(result?.tool_calls) ? result.tool_calls : [];
+        if (toolCalls.length > 0) {
+          for (let i = 0; i < toolCalls.length; i += 1) {
+            const tc = toolCalls[i];
+            res.write(`data: ${JSON.stringify({
+              id: completionId,
+              object: 'chat.completion.chunk',
+              created,
+              model: job.model,
+              choices: [{
+                index: 0,
+                delta: {
+                  tool_calls: [{
+                    index: i,
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                      name: tc.function?.name || '',
+                      arguments: tc.function?.arguments || '{}',
+                    },
+                  }],
+                },
+                finish_reason: null,
+              }],
+            })}\n\n`);
+          }
+          writeChunk('', 'tool_calls');
+        } else {
+          writeChunk('', 'stop');
+        }
         res.write('data: [DONE]\n\n');
         res.end();
         return;
@@ -662,19 +1052,50 @@ async function handleChatCompletions(req, res) {
 
       if (result?.type === 'job_error') {
         const err = result.error || { code: 'upstream_error', message: 'Unknown bridge error' };
-        lastJobMeta = { threadId: job.threadId || null, sticky: null, model: job.model, error: err.message };
-        sendJson(res, 502, { error: { message: err.message, type: err.code, code: err.code } });
+        lastJobMeta = {
+          id: job.id || null,
+          model: job.model || null,
+          accountId: job.accountId || null,
+          threadId: job.threadId || null,
+          sticky: null,
+          ok: false,
+          errorCode: err.code || 'upstream_error',
+          error: String(err.message || '').slice(0, 240),
+          durationMs: activeJobStartedAt ? Date.now() - activeJobStartedAt : null,
+          finishedAt: Date.now(),
+          promptChars: null,
+          toolLoopDepth: null,
+          openAiToolCalls: null,
+        };
+        sendJson(res, 502, { error: { message: err.message, type: err.code, code: err.code } }, {
+          'x-dpp-thread-id': job.threadId || '',
+          'x-dpp-sticky': 'miss',
+          'x-dpp-account-id': job.accountId || '',
+        });
         return;
       }
 
       const text = typeof result?.text === 'string' ? result.text : '';
       const resultThreadId = result?.threadId || job.threadId || fingerprintThreadId(job);
       const resultSticky = result?.sticky === true ? 'hit' : (result?.sticky === false ? 'miss' : 'unknown');
+      const resultAccountId = result?.accountId || job.accountId || null;
+      const toolsMeta = result?.tools && typeof result.tools === 'object' ? result.tools : {};
       lastJobMeta = {
+        id: job.id || null,
+        model: job.model || null,
+        accountId: resultAccountId,
         threadId: resultThreadId,
         sticky: resultSticky,
-        model: job.model,
+        ok: true,
+        errorCode: null,
         error: null,
+        durationMs: activeJobStartedAt ? Date.now() - activeJobStartedAt : null,
+        finishedAt: Date.now(),
+        promptChars: typeof toolsMeta.promptChars === 'number' ? toolsMeta.promptChars : null,
+        toolLoopDepth: typeof toolsMeta.toolLoopDepth === 'number' ? toolsMeta.toolLoopDepth : null,
+        openAiToolCalls: typeof toolsMeta.openAiToolCallCount === 'number'
+          ? toolsMeta.openAiToolCallCount
+          : (Array.isArray(result?.tool_calls) ? result.tool_calls.length : 0),
       };
       // Always try to persist stream debug for first-token diagnosis
       if (result?.streamDebug) {
@@ -690,6 +1111,8 @@ async function handleChatCompletions(req, res) {
         }
       }
 
+      const toolCalls = Array.isArray(result?.tool_calls) ? result.tool_calls : [];
+      const hasTools = toolCalls.length > 0;
       sendJson(res, 200, {
         id: job.id,
         object: 'chat.completion',
@@ -700,14 +1123,17 @@ async function handleChatCompletions(req, res) {
         choices: [
           {
             index: 0,
-            message: { role: 'assistant', content: text },
-            finish_reason: 'stop',
+            message: hasTools
+              ? { role: 'assistant', content: text || null, tool_calls: toolCalls }
+              : { role: 'assistant', content: text },
+            finish_reason: hasTools ? 'tool_calls' : (result?.finish_reason || 'stop'),
           },
         ],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       }, {
         'x-dpp-thread-id': resultThreadId || '',
         'x-dpp-sticky': resultSticky || '',
+        'x-dpp-account-id': resultAccountId || '',
       });
     } catch (err) {
       if (!res.headersSent) {
@@ -765,7 +1191,7 @@ function createServer() {
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
           'access-control-allow-origin': '*',
-          'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-thread-id',
+          'access-control-allow-headers': 'authorization, content-type, x-dpp-client, x-dpp-profile, x-dpp-thread-id, x-dpp-reset-thread, x-dpp-force-tools, x-dpp-conversation-id, x-dpp-account, x-dpp-account-id, x-thread-id, user-agent',
           'access-control-allow-methods': 'GET, POST, OPTIONS',
         });
         res.end();
@@ -804,6 +1230,52 @@ function createServer() {
         return;
       }
 
+      // ENI Life Era habitat + autonomic nudge + forced dream.
+      if (req.method === 'GET' && (url.pathname === '/v1/eni/home' || url.pathname === '/eni/home')) {
+        const requestId = randomUUID();
+        const p = waitForResponse(requestId, 10_000);
+        try {
+          await writeNativeMessage({ type: 'get_eni_home', requestId });
+          const result = await p;
+          if (result?.type === 'eni_home' || result?.home) {
+            sendJson(res, 200, result.home || result);
+          } else if (result?.type === 'job_done' && result.home) {
+            sendJson(res, 200, result.home);
+          } else {
+            sendJson(res, 503, { error: 'eni home unavailable', detail: result });
+          }
+        } catch (err) {
+          sendJson(res, 503, { error: String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'GET' && (url.pathname === '/v1/eni/nudge' || url.pathname === '/eni/nudge')) {
+        const requestId = randomUUID();
+        const p = waitForResponse(requestId, 8_000);
+        try {
+          await writeNativeMessage({ type: 'get_eni_nudge', requestId });
+          const result = await p;
+          sendJson(res, 200, result?.nudge || result || { shouldNudge: false });
+        } catch (err) {
+          sendJson(res, 503, { error: String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && (url.pathname === '/v1/eni/dream' || url.pathname === '/eni/dream')) {
+        const requestId = randomUUID();
+        const p = waitForResponse(requestId, 12_000);
+        try {
+          await writeNativeMessage({ type: 'run_eni_dream', requestId });
+          const result = await p;
+          sendJson(res, 200, result?.dream || result || { ran: false });
+        } catch (err) {
+          sendJson(res, 503, { error: String(err) });
+        }
+        return;
+      }
+
       if (req.method === 'POST' && (url.pathname === '/v1/admin/reload-extension' || url.pathname === '/admin/reload-extension')) {
         const requestId = randomUUID();
         try {
@@ -816,12 +1288,19 @@ function createServer() {
       }
 
       if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/v1/health')) {
-        const readiness = await requestReadiness();
+        const readiness = mergeReadinessAccounts(await requestReadiness(), hostVault);
+        if (!readiness.hasLogin && (hostVault.order?.length ?? 0) > 0) {
+          readiness.hasLogin = true;
+          readiness.ready = !readiness.busy && readiness.extensionAlive;
+          if (readiness.reason === 'missing_login') readiness.reason = undefined;
+        }
+        readiness.hostVaultPath = VAULT_PATH;
         const queueDepth = typeof httpJobQueue !== 'undefined' ? httpJobQueue.length : 0;
+        readiness.lastJob = lastJobMeta;
         sendJson(res, readiness.ready ? 200 : 503, {
           ok: readiness.ready,
           readiness,
-          models: ['ds/octopus', 'ds/octopus-eyes', 'ds/squid'],
+          models: ['ds/octopus', 'ds/octopus-eyes', 'ds/squid', 'ds/eni'],
           features: {
             stickyThreads: true,
             deltaPrompts: true,
@@ -829,7 +1308,43 @@ function createServer() {
             eyesCache: true,
             jobQueue: true,
             contextPack: true,
+            dppTools: true,
+            harnessPromptSurgery: true,
+            hermesProfile: true,
+            hermesBrainOnly: true,
+            conversationHint: true,
+            taggedMemoryInject: true,
+            contextBudgets: true,
+            eniMode: true,
+            eniRpAndAgent: true,
+            eniStripMemoryContext: true,
+            eniOwnedMemory: true,
+            eniSceneReset: true,
+            eniActionSceneGate: true,
+            eniSmartToolSilence: true,
+            eniPresenceCues: true,
+            eniProjectAffinity: true,
+            eniSoftToolNarration: true,
+            eniBondCard: true,
+            eniToolReceipts: true,
+            eniDiscordToolAllowlist: true,
+            eniEyes: true,
+            eniLifeEra: true,
+            hostAccountVault: true,
+            operatorLastJob: true,
+            accountCooldown: true,
+            eniHome: true,
+            eniWill: true,
+            eniDreams: true,
+            eniAutonomic: true,
+            eniScenePorts: true,
+            eniProprioception: true,
+            eniGut: true,
+            multiAccount: true,
+            openAiToolsProtocol: true,
+            antiBureaucracy: true,
           },
+
           host: 'cursor-bridge',
           uptimeMs: Date.now() - hostStartedAt,
           queueDepth,

@@ -128,6 +128,12 @@ function hookFetch() {
   window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
+    // Capture Bearer on any DeepSeek API call (settings/history/session), not only completion.
+    if (isDeepSeekApiURL(url) && init?.headers) {
+      const captured = captureDeepSeekClientHeaders(init.headers);
+      if (captured) hookState.onHeadersCaptured(captured);
+    }
+
     if (url.includes(HISTORY_PATH)) {
       return interceptHistoryResponse(originalFetch.call(this, input, init));
     }
@@ -176,6 +182,10 @@ function hookXHR() {
 
   XMLHttpRequest.prototype.send = function (body?: Document | XMLHttpRequestBodyInit | null) {
     const url = xhrUrls.get(this);
+    if (url && isDeepSeekApiURL(url)) {
+      const captured = captureDeepSeekClientHeaders(xhrHeaders.get(this));
+      if (captured) hookState.onHeadersCaptured(captured);
+    }
     if (url && isChatStreamURL(url) && typeof body === 'string') {
       const xhr = this;
       const sendChatRequest = async () => {
@@ -300,6 +310,11 @@ function createRequestContext(bodyStr: string, overrides: RequestContextOverride
 
 function isChatStreamURL(url: string): boolean {
   return CHAT_STREAM_PATHS.some((path) => url.includes(path));
+}
+
+/** Any chat.deepseek.com /api/ request that may carry Authorization. */
+function isDeepSeekApiURL(url: string): boolean {
+  return url.includes('/api/v0/') || url.includes('chat.deepseek.com/api/');
 }
 
 function hasBypassHookHeader(headers: HeadersInit | undefined): boolean {

@@ -1,59 +1,57 @@
 # Autonomous status
 
-**Updated:** 2026-07-10  
-**Worktree:** `/Users/kyin/Projects/deepseek-pp-platform`  
-**Branch:** `local/platform-p5-p9`  
-**Phase:** DONE — first-token SSE fix live-verified 2026-07-10
+**Updated:** 2026-07-10 (full eval pass — FREEZE verified)  
+**Repo:** `/Users/kyin/Projects/deepseek-pp` only (`main`, large uncommitted bridge surface)  
+**Goal board:** [bridge-p0-p25-autonomous.md](./bridge-p0-p25-autonomous.md)
 
-## First-token fix (this pass)
+## Full eval verdict
 
-### Root cause (DeepSeek++ SSE stack)
+| Gate | Result |
+|------|--------|
+| Unit (`cursor-bridge-*.test.ts`) | **113/113 PASS** |
+| Live smoke matrix | **SMOKE PASS** (H M C1 S Q T E V) |
+| ENI + headers | **200** + `x-dpp-account-id: ds-75222fbc` |
+| CPA `:8317` | **200** `cpa-eval` |
+| Vault stability | **5 → 5** after all probes |
+| ds2api in code deps | **none** (docs ban only) |
+| Auth delete path | soft-fail only; host `vault_remove` ignored |
 
-Not Cursor. Not CPA. Shared path in:
+**Overall grade: A** (P0–P25). Transient `502 Failed to fetch` can still appear under concurrent load; retry succeeded; not a vault wipe.
 
-- `core/interceptor/sse-parser.ts`
-- `core/deepseek/adapter.ts`
+## Done (this runway)
 
-DeepSeek SSE often uses **CRLF** (`\r\n`). We only split on bare `\n\n`, so early events never framed correctly. Multiple `data:` JSON lines could collapse into one invalid parse → **opening tokens dropped**, later APPENDs survived (`-turn…`, ` are three…`, `icky…`).
+- Host-disk multi-account vault (5 accounts); never-delete on auth failure
+- Soft-fail cooldown (`markAccountAuthFailed`) + pick exclude
+- Operator `lastJob` on `/v1/health` (id/model/thread/sticky/ok/duration/promptChars/…)
+- Account public fields (label, lastErrorCode, cooldownUntil)
+- Sticky multi-turn + concurrent queue smoke
+- Tool-loop abort stops continuation; OpenAI tools shape OK
+- Sticky parent recovery path; per-client rotate policy (hermes ENI no rotate)
+- `scripts/bridge-smoke.mjs` matrix + `--quick`
+- CPA `dspp/ds/octopus` live OK
+- Upstream bridge checklist (P21)
+- **113** `tests/cursor-bridge-*.test.ts` green; full smoke **PASS**
 
-### Fix shipped
+## Needs human (optional)
 
-1. Normalize CRLF → LF before framing  
-2. One SSEEvent per JSON `data:` line when multiple land in one block  
-3. `ResponseTextAssembler` for SET (prefix-delta) vs APPEND  
-4. Relative `fragments` BATCH create extraction  
-5. Fixture tests: `tests/sse-crlf-framing.test.ts`, assembler tests  
+1. Commit when you ask (do not auto-commit)
+2. After any extension rebuild, reload once in `chrome://extensions` so service worker matches source
 
-### Verification
+## Do not
 
-- Unit: **46 passed** including CRLF + Multi-turn fixtures  
-- Live: **still chopped until hard-reload** (SW did not pick up new `background.js`; no `~/.cursor-bridge-last-stream.json`)
+- Delete vault slots on auth failure
+- ds2api / dual worktrees / multi-profile capture automation
+- Claim multi-account production-done from health alone (use smoke matrix)
+- List banned paths under ROI / “skip for now” tiers
 
-### When you return
+## Evidence
 
-1. Hard-reload unpacked extension:  
-   `/Users/kyin/Projects/deepseek-pp-platform/dist/chrome-mv3`
-2. Then either:
-   - `curl -s -X POST http://127.0.0.1:8787/v1/admin/reload-extension` (future reloads)
-   - or just re-test
-3. Check opening:
-   ```bash
-   curl -s http://127.0.0.1:8787/v1/chat/completions \
-     -H 'Authorization: Bearer local-bridge-key' \
-     -H 'Content-Type: application/json' \
-     -d '{"model":"ds/octopus","stream":false,"messages":[{"role":"user","content":"Start with the exact word Multi-turn then one sentence about SSE. No greeting."}]}' \
-     | python3 -c "import sys,json; t=json.load(sys.stdin)['choices'][0]['message']['content']; print(repr(t[:80])); print('OK' if t.startswith('Multi') else 'CHOPPED')"
-   ```
-4. Optional debug dump after a turn: `~/.cursor-bridge-last-stream.json`
-
-## Prior runway
-
-P5–P8 + P10/12/13/15/18 landed earlier on this branch.
-
-
-## Live verified (2026-07-10)
-
-- Health: ok, hasLogin
-- Forced openers Multi/There/Sticky: 3/3 clean
-- Sticky no-header T1→T2 same thread
-- ds/squid clean opening
+```bash
+cd /Users/kyin/Projects/deepseek-pp
+npx vitest run tests/cursor-bridge-*.test.ts
+npm run build
+node scripts/install-cursor-bridge-host.mjs --extension-id chhlagfdfeanaefgbdbgmdlpgaoahhbi
+# reload extension in chrome://extensions after install
+node scripts/bridge-smoke.mjs
+curl -s http://127.0.0.1:8787/v1/health | python3 -m json.tool | head -60
+```

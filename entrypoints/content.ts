@@ -888,6 +888,13 @@ async function persistDeepSeekClientHeaders(capturedHeaders?: Record<string, str
       rememberDeepSeekClientHeaders(headers);
       const saved = await saveClientHeadersToStorage();
       if (!saved) return false;
+      // Multi-account vault: same token updates, new token adds another slot.
+      try {
+        const { upsertAccountFromHeaders } = await import('../core/cursor-bridge/account-vault');
+        await upsertAccountFromHeaders(headers);
+      } catch {
+        // vault optional — legacy cache still works
+      }
       // Ask the sidepanel to re-check login status.
       chrome.runtime.sendMessage({ type: 'AUTH_STATUS_CHANGED' }).catch(() => {});
       return true;

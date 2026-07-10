@@ -3,6 +3,7 @@ import {
   addConversationToProject,
   bindPendingProjectConversation,
   createProjectContext,
+  ensureProjectContextByName,
   formatProjectPromptContext,
   getProjectContextState,
   getProjectForConversation,
@@ -143,5 +144,15 @@ describe('session-based project context', () => {
     expect(updated.name).toBe('Alpha Prime');
     expect(state.projects[0].instructions).toBe('New');
     expect(state.conversations).toEqual([]);
+  });
+
+  it('ensureProjectContextByName reuses case-insensitive match', async () => {
+    const first = await ensureProjectContextByName('Cursor', {
+      description: 'Bridge sessions from Cursor agent harness',
+    });
+    const second = await ensureProjectContextByName('cursor');
+    expect(second.id).toBe(first.id);
+    const state = await getProjectContextState();
+    expect(state.projects.filter((p) => p.name === 'Cursor')).toHaveLength(1);
   });
 });

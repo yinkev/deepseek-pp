@@ -156,6 +156,10 @@ function copyHostScript(installDir) {
   const hostPath = resolve(installDir, 'cursor-bridge-host.mjs');
   mkdirSync(installDir, { recursive: true });
   copyFileSync(HOST_SOURCE, hostPath);
+  // Host-disk multi-account vault module (imported by host).
+  const vaultSource = resolve(dirname(HOST_SOURCE), 'account-vault.mjs');
+  const vaultDest = resolve(installDir, 'account-vault.mjs');
+  copyFileSync(vaultSource, vaultDest);
   if (platform() !== 'win32') chmodSync(hostPath, 0o755);
   return hostPath;
 }

@@ -1,6 +1,6 @@
 /** Durable bridge-thread bindings (sticky DeepSeek main sessions). */
 
-export type BridgeThreadModelFamily = 'octopus' | 'octopus-eyes' | 'squid';
+export type BridgeThreadModelFamily = 'octopus' | 'octopus-eyes' | 'squid' | 'eni';
 
 export interface BridgeThreadRecord {
   id: string;
@@ -13,6 +13,14 @@ export interface BridgeThreadRecord {
   updatedAt: number;
   turnCount: number;
   clientProfile?: string;
+  /** Fingerprint of ENI persona last injected into this sticky session. */
+  eniPromptHash?: string | null;
+  /** True after full OpenAI tool schemas were injected (sticky reminder path). */
+  openAiToolsInjected?: boolean;
+  /** Last ENI turn mode for diagnostics. */
+  lastEniMode?: 'scene' | 'agent' | null;
+  /** Vault account that owns this sticky DeepSeek session. */
+  accountId?: string | null;
 }
 
 export interface BridgeThreadStoreSnapshot {
@@ -60,6 +68,16 @@ export function modelFamilyFromBridgeModel(model: string | undefined): BridgeThr
   const lower = (model ?? '').toLowerCase();
   if (lower.includes('octopus-eyes') || lower.endsWith('-eyes') || lower.endsWith('/eyes') || lower.includes('vision')) {
     return 'octopus-eyes';
+  }
+  if (
+    lower.includes('ds/eni')
+    || lower.endsWith('/eni')
+    || lower.endsWith('-eni')
+    || lower === 'eni'
+    || lower.includes('roleplay')
+    || lower.includes('nsfw-rp')
+  ) {
+    return 'eni';
   }
   if (lower.includes('squid') || lower.includes('flash') || lower.includes('instant')) {
     return 'squid';
@@ -132,12 +150,19 @@ export function resolveThreadId(input: {
   messages: Array<{ role: string; content: string }>;
   reset?: boolean;
   clientProfile?: string | null;
+  /** Stable harness conversation id (preferred over first-user text). */
+  conversationHint?: string | null;
 }): string {
   const explicit = (input.explicitThreadId ?? '').trim();
   if (explicit && !input.reset) return explicit.slice(0, 128);
 
   const family = modelFamilyFromBridgeModel(input.model);
   const profile = (input.clientProfile ?? 'generic').toLowerCase();
+  const hint = (input.conversationHint ?? '').trim().slice(0, 128);
+  if (hint) {
+    const hash = simpleHash(`${profile}\n${family}\nhint\n${hint}`);
+    return `fp-${profile}-${family}-c-${hash}`;
+  }
   // First *user* turn is the stable seed even when harnesses resend full history.
   const firstUser = input.messages.find((m) => m.role === 'user')?.content ?? '';
   const seed = firstUser.slice(0, 240);

@@ -20,3 +20,4 @@ Reject headless ds2api-class reverse proxies and official API as the product pat
 ## Related
 
 - Goal: `docs/goals/browser-origin-cursor-api.md`
+- Full comparison + ban signals: `docs/decisions/2026-07-10-ds2api-vs-browser-origin.md`

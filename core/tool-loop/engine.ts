@@ -50,6 +50,13 @@ export async function runToolContinuationLoop<TTurn>(
       executions.push(execution);
     }
 
+    // Stop the loop if tools were aborted — do not submit continuation.
+    const allAborted = stepExecutions.length > 0 && stepExecutions.every((e) => {
+      const summary = (e.result?.summary || '').toLowerCase();
+      return e.result?.ok === false && (summary === 'aborted' || summary.includes('abort'));
+    });
+    if (allAborted) break;
+
     turn = await input.submitContinuation(
       input.buildContinuationPrompt(stepExecutions),
       parentMessageId,

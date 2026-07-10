@@ -312,8 +312,19 @@ export default defineBackground(() => {
   // Local Cursor bridge: native host OpenAI surface → extension → DeepSeek web path.
   startCursorBridgeRuntime({
     deps: {
-      loadClientHeaders: () => loadClientHeadersFromStorage(),
+      loadClientHeaders: async () => {
+        // Content script write to legacy cache is the freshest after a page message.
+        const legacy = await loadClientHeadersFromStorage();
+        if (legacy?.Authorization) return legacy;
+        const { loadAnyAccountHeaders } = await import('../core/cursor-bridge/account-vault');
+        return await loadAnyAccountHeaders();
+      },
       refreshClientHeadersFromTabs: () => refreshClientHeadersFromDeepSeekTabs(),
+      // Same DeepSeek++ tool runtime as web chat / automation / sidepanel.
+      executeTool: (call) => executeBackgroundRuntimeToolCall(call, call.source?.trigger ?? 'agent_run'),
+      loadToolDescriptors: () => getRuntimeToolDescriptors(currentBackgroundLocale),
+      loadMemories: () => getAllMemories(),
+      toolsEnabled: true,
     },
     // Lifecycle noise only — never console.error (shows up as Chrome extension Errors).
     onLog: (message) => console.debug(`[DeepSeek++] cursor_bridge: ${message}`),
@@ -1361,6 +1372,30 @@ async function loadOrRefreshClientHeaders(preferredTabId?: number): Promise<Reco
 
 async function refreshClientHeadersFromDeepSeekTabs(preferredTabId?: number): Promise<boolean> {
   const tabs = await getDeepSeekTabsForAuthRefresh(preferredTabId);
+
+  // Prefer MAIN-world page userToken (same web login the SPA uses). Isolated content
+  // world cannot read page localStorage; after reload content scripts are often dead
+  // while chat still works — vault then keeps stale tokens (40003).
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    try {
+      const fromPage = await captureDeepSeekTokenFromTabMainWorld(tab.id);
+      if (fromPage?.Authorization) {
+        await chrome.storage.local.set({ deepseekCachedClientHeaders: fromPage });
+        try {
+          const { upsertAccountFromHeaders } = await import('../core/cursor-bridge/account-vault');
+          // Upsert only — never wipe other vault slots (multi-account).
+          await upsertAccountFromHeaders(fromPage, { makeDefault: true });
+        } catch {
+          // vault optional
+        }
+        return true;
+      }
+    } catch {
+      // scripting may be unavailable or tab restricted
+    }
+  }
+
   for (const tab of tabs) {
     if (!tab.id) continue;
     try {
@@ -1371,6 +1406,60 @@ async function refreshClientHeadersFromDeepSeekTabs(preferredTabId?: number): Pr
     }
   }
   return false;
+}
+
+/**
+ * Read chat.deepseek.com page localStorage userToken in MAIN world.
+ * Same Bearer the website uses — not official API keys.
+ */
+async function captureDeepSeekTokenFromTabMainWorld(tabId: number): Promise<Record<string, string> | null> {
+  if (!chrome.scripting?.executeScript) return null;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => {
+      const USER_TOKEN_KEY = 'userToken';
+      const DEFAULT_APP_VERSION = '2.0.0';
+      const DEEPSEEK_CLIENT_PLATFORM = 'web';
+      try {
+        const raw = localStorage.getItem(USER_TOKEN_KEY);
+        if (!raw || raw.trim() === 'null') return null;
+        let token: string | null = null;
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (typeof parsed === 'string') token = parsed.trim() || null;
+          else if (parsed && typeof parsed === 'object') {
+            const o = parsed as Record<string, unknown>;
+            for (const k of ['token', 'value', 'accessToken']) {
+              if (typeof o[k] === 'string' && (o[k] as string).trim()) {
+                token = (o[k] as string).trim();
+                break;
+              }
+            }
+          }
+        } catch {
+          token = raw.trim() || null;
+        }
+        if (!token) return null;
+        const auth = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+        return {
+          Authorization: auth,
+          'X-App-Version': DEFAULT_APP_VERSION,
+          'x-client-platform': DEEPSEEK_CLIENT_PLATFORM,
+          'x-client-version': DEFAULT_APP_VERSION,
+          'x-client-locale': document.documentElement.lang || navigator.language || 'en-US',
+          'x-client-timezone-offset': String(-new Date().getTimezoneOffset() * 60),
+        };
+      } catch {
+        return null;
+      }
+    },
+  });
+  const first = results?.[0]?.result;
+  if (!first || typeof first !== 'object') return null;
+  const headers = first as Record<string, string>;
+  if (typeof headers.Authorization !== 'string' || !headers.Authorization) return null;
+  return headers;
 }
 
 async function getDeepSeekTabsForAuthRefresh(preferredTabId?: number): Promise<chrome.tabs.Tab[]> {

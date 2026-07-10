@@ -46,6 +46,24 @@ export async function createProjectContext(input: ProjectContextCreateInput): Pr
   return project;
 }
 
+/** Find project by case-insensitive name, or create it. Used by bridge harness routing. */
+export async function ensureProjectContextByName(
+  name: string,
+  defaults?: Omit<ProjectContextCreateInput, 'name'>,
+): Promise<ProjectContext> {
+  const trimmed = requiredTrimmed(name, 'Project name');
+  const state = await getProjectContextState();
+  const existing = state.projects.find(
+    (project) => project.name.localeCompare(trimmed, undefined, { sensitivity: 'accent' }) === 0,
+  );
+  if (existing) return existing;
+  return createProjectContext({
+    name: trimmed,
+    description: defaults?.description,
+    instructions: defaults?.instructions,
+  });
+}
+
 export async function updateProjectContext(
   projectId: string,
   patch: ProjectContextUpdateInput,

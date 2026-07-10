@@ -1,5 +1,8 @@
 # Goal: Platform P0–P4 E2E (long-horizon, autonomous)
 
+
+> **STALE PATHS (2026-07-10):** This goal doc may still mention `/Users/kyin/Projects/deepseek-pp-platform` or dual worktrees. **Ignore those paths.** Only `/Users/kyin/Projects/deepseek-pp` exists. Chrome load: `dist/chrome-mv3` under that repo. See [docs/INDEX.md](../INDEX.md) and [docs/bridge/PLATFORM-WORK-LOG.md](../bridge/PLATFORM-WORK-LOG.md).
+
 **Status:** done in code (live reload pending operator)  
 **Date:** 2026-07-09  
 **Working tree:** `/Users/kyin/Projects/deepseek-pp-platform`  

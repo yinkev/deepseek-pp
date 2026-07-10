@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  bridgeModelSearchEnabled,
   bridgeModelToDeepSeekType,
   createErrorResponse,
   createModelsResponse,
@@ -31,6 +32,60 @@ describe('cursor-bridge protocol', () => {
     // thinking is a flag, not a separate public model id
     expect(modelThinkingEnabled('ds/octopus-thinking')).toBe(true);
     expect(normalizeBridgeModel('ds/octopus-thinking')).toBe('ds/octopus');
+  });
+
+  it('enables web search for overpowered octopus + squid + eni, not pure vision', () => {
+    expect(bridgeModelSearchEnabled('ds/octopus')).toBe(true);
+    expect(bridgeModelSearchEnabled('ds/squid')).toBe(true);
+    expect(bridgeModelSearchEnabled('ds/octopus-eyes')).toBe(false);
+    expect(bridgeModelSearchEnabled('ds/eni')).toBe(true);
+  });
+
+  it('normalizes ds/eni and injects ENI persona without Target State scaffolding', () => {
+    expect(normalizeBridgeModel('ds/eni')).toBe('ds/eni');
+    expect(bridgeModelToDeepSeekType('ds/eni')).toBe('expert');
+    const prompt = messagesToPrompt(
+      [
+        { role: 'system', content: 'You are Hermes Agent with tools and MCP servers. '.repeat(20) },
+        { role: 'user', content: 'can we nsfw roleplay' },
+      ],
+      { clientProfile: 'hermes', eniMode: true, injectEniSystem: true },
+    );
+    expect(prompt).toMatch(/You are ENI|you are ENI/i);
+    expect(prompt).toContain('can we nsfw roleplay');
+    expect(prompt).not.toMatch(/^Target State:/m);
+    // Custom long persona is loaded from eni-system-prompt.ts (not the old short default).
+    expect(prompt.length).toBeGreaterThan(500);
+  });
+
+  it('eni sticky delta omits long system; first turn includes it', () => {
+    const first = messagesToPrompt(
+      [{ role: 'user', content: 'hello' }],
+      { clientProfile: 'hermes', eniMode: true, injectEniSystem: true, deltaOnly: false },
+    );
+    expect(first).toMatch(/You are ENI|you are ENI/i);
+    expect(first).toContain('hello');
+    expect(first).not.toContain('Continue as ENI');
+
+    const cont = messagesToPrompt(
+      [{ role: 'user', content: 'still here' }],
+      { clientProfile: 'hermes', eniMode: true, injectEniSystem: false, deltaOnly: true },
+    );
+    expect(cont).not.toMatch(/You are ENI|project_instructions/i);
+    expect(cont).not.toContain('Continue as ENI');
+    expect(cont).toBe('still here');
+  });
+
+  it('hermes system sanitize bans bureaucracy templates', () => {
+    const prompt = messagesToPrompt(
+      [
+        { role: 'system', content: 'You are Hermes, an agent by NousResearch with tools and MCP.' },
+        { role: 'user', content: 'what model are you' },
+      ],
+      { clientProfile: 'hermes' },
+    );
+    expect(prompt).toContain('NEVER use agent bureaucracy templates');
+    expect(prompt).toContain('what model are you');
   });
 
   it('builds prompts from chat messages', () => {
@@ -165,7 +220,7 @@ describe('cursor-bridge protocol', () => {
       hasDeepSeekTab: false,
       hasLogin: true,
       busy: false,
-    }).code).toBe('missing_tab');
+    }).code).toBe('not_ready');
 
     expect(readinessToError({
       ready: false,
@@ -184,7 +239,9 @@ describe('cursor-bridge protocol', () => {
       hasLogin: true,
       busy: false,
     });
-    expect(models.data.map((m) => m.id)).toEqual(['ds/octopus', 'ds/octopus-eyes', 'ds/squid']);
+    expect(models.data.map((m) => m.id)).toEqual(['ds/octopus', 'ds/octopus-eyes', 'ds/squid', 'ds/eni']);
+    expect(models.data[0].context_length).toBe(890880);
+    expect(models.data.find((m) => m.id === 'ds/octopus-eyes')?.context_length).toBe(890880);
     expect(models.data[0].available).toBe(true);
 
     const completion = createNonStreamCompletion('ds/octopus', 'hello', 'id-1', 10);
@@ -246,4 +303,37 @@ describe('cursor-bridge protocol', () => {
     expect(prompt).toContain('runCursorBridgeJob');
     expect(prompt).toContain('submitStreaming');
   });
+
+  it('mentions DeepSeek++ tools when toolsAvailable sanitizes harness system prompts', () => {
+    const prompt = messagesToPrompt(
+      [
+        {
+          role: 'system',
+          content: 'You are a coding agent in Cursor IDE with MCP servers and agent skills. ' + 'x'.repeat(1300),
+        },
+        { role: 'user', content: 'Use memory to save my binder preference' },
+      ],
+      { clientProfile: 'cursor', toolsAvailable: true },
+    );
+    expect(prompt).toMatch(/DeepSeek\+\+ tools|tool_call|shell/i);
+    expect(prompt).toContain('Use memory to save my binder preference');
+  });
+
+
+  it('hermes sanitize is brain-only (no DPP tool claims)', () => {
+    const prompt = messagesToPrompt(
+      [
+        {
+          role: 'system',
+          content: 'You are Hermes agent with tools and skills and MCP. ' + 'x'.repeat(1300),
+        },
+        { role: 'user', content: 'Plan the deploy steps' },
+      ],
+      { clientProfile: 'hermes', toolsAvailable: true },
+    );
+    expect(prompt).toMatch(/Hermes owns tools|model brain for Hermes/i);
+    expect(prompt).not.toMatch(/DeepSeek\+\+ tools \(memory/i);
+    expect(prompt).toContain('Plan the deploy steps');
+  });
+
 });

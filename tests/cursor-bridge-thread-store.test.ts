@@ -15,10 +15,12 @@ describe('cursor-bridge thread store', () => {
     __resetBridgeThreadStoreForTests();
   });
 
+  // User: "proceed" — eni family + eniPromptHash on thread records.
   it('maps model families', () => {
     expect(modelFamilyFromBridgeModel('ds/octopus')).toBe('octopus');
     expect(modelFamilyFromBridgeModel('ds/octopus-eyes')).toBe('octopus-eyes');
     expect(modelFamilyFromBridgeModel('ds/squid')).toBe('squid');
+    expect(modelFamilyFromBridgeModel('ds/eni')).toBe('eni');
   });
 
   it('prefers explicit thread id over fingerprint', () => {
@@ -68,10 +70,12 @@ describe('cursor-bridge thread store', () => {
       createdAt: now,
       updatedAt: now,
       turnCount: 1,
+      eniPromptHash: 'abc123',
     });
     const got = await getThread('t1');
     expect(got?.chatSessionId).toBe('sess');
     expect(got?.parentMessageId).toBe(3);
+    expect(got?.eniPromptHash).toBe('abc123');
 
     const hash = simpleHash('img');
     await setEyesCache(hash, 'notes here');

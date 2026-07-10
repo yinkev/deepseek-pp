@@ -9,7 +9,10 @@ import {
   isCursorBridgeEnvelope,
 } from './protocol';
 import { getBridgeStatusSnapshot } from './thread-store';
+import { buildEniHomeView, buildEniNudgeSuggestion, runEniDream } from './eni-life';
 import { probeCursorBridgeReadiness, runCursorBridgeJob, type CursorBridgeWorkerDeps } from './worker';
+import { setHostVaultPost } from './host-vault-bridge';
+import { applyHostVaultSnapshot, seedHostVaultFromLocal } from './account-vault';
 
 const RECONNECT_MS = 2_000;
 const RECONNECT_MISSING_HOST_MS = 15_000;
@@ -94,6 +97,7 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
         log('cursor-bridge native port disconnected');
       }
       port = null;
+      setHostVaultPost(null);
       if (activeAbort) {
         activeAbort.abort();
         activeAbort = null;
@@ -118,6 +122,15 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
       log(`cursor-bridge post failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
+
+  // Register fire-and-forget vault push channel for account-vault module.
+  setHostVaultPost((message) => {
+    try {
+      port?.postMessage(message);
+    } catch {
+      // ignore
+    }
+  });
 
   const handleHostMessage = async (raw: unknown) => {
     if (!isCursorBridgeEnvelope(raw)) return;
@@ -156,6 +169,40 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
       return;
     }
 
+    if (message.type === 'get_eni_home') {
+      const home = await buildEniHomeView();
+      post({ type: 'eni_home', requestId: message.requestId, home });
+      return;
+    }
+
+    if (message.type === 'get_eni_nudge') {
+      const nudge = await buildEniNudgeSuggestion();
+      post({ type: 'eni_nudge', requestId: message.requestId, nudge });
+      return;
+    }
+
+    if (message.type === 'run_eni_dream') {
+      const dream = await runEniDream({ force: true });
+      post({ type: 'eni_dream', requestId: message.requestId, dream });
+      return;
+    }
+
+    if (message.type === 'vault_snapshot') {
+      try {
+        const n = await applyHostVaultSnapshot(message.vault);
+        const seeded = await seedHostVaultFromLocal();
+        log(`cursor-bridge host vault snapshot applied (${n}); local→host seed ${seeded}`);
+      } catch (err) {
+        log(`cursor-bridge vault snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return;
+    }
+
+    if (message.type === 'vault_ack') {
+      // optional ack from host upsert/remove — no-op for now
+      return;
+    }
+
     if (message.type === 'run_job') {
       await handleRunJob(message.requestId, message.job);
     }
@@ -177,18 +224,11 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
     try {
       const readiness = await probeCursorBridgeReadiness(options.deps, false);
       if (!readiness.ready) {
-        const code =
-          readiness.reason === 'missing_tab'
-            ? 'missing_tab'
-            : readiness.reason === 'missing_login'
-              ? 'missing_login'
-              : 'not_ready';
+        const code = readiness.reason === 'missing_login' ? 'missing_login' : 'not_ready';
         const messageText =
-          readiness.reason === 'missing_tab'
-            ? 'Open a logged-in chat.deepseek.com tab with DeepSeek++ active, then retry.'
-            : readiness.reason === 'missing_login'
-              ? 'DeepSeek login token is missing. Sign in at chat.deepseek.com and refresh the page.'
-              : 'Cursor bridge is not ready.';
+          readiness.reason === 'missing_login'
+            ? 'DeepSeek login token is missing. Sign in at chat.deepseek.com once so the extension can cache your login, then retry.'
+            : 'Cursor bridge is not ready.';
         post({
           type: 'job_error',
           requestId,
@@ -212,7 +252,21 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
         return;
       }
 
-      post({ type: 'job_done', requestId, jobId: job.id, text: result.text, threadId: result.threadId, sticky: result.sticky, streamDebug: (result as { streamDebug?: unknown }).streamDebug });
+      // User: "I want to give her tools in hermes and discord"
+      // Forward OpenAI tool_calls so Hermes can execute terminal/web/etc.
+      post({
+        type: 'job_done',
+        requestId,
+        jobId: job.id,
+        text: result.text,
+        threadId: result.threadId,
+        sticky: result.sticky,
+        accountId: (result as { accountId?: string | null }).accountId ?? null,
+        streamDebug: (result as { streamDebug?: unknown }).streamDebug,
+        tool_calls: (result as { tool_calls?: unknown }).tool_calls,
+        finish_reason: (result as { finish_reason?: 'stop' | 'tool_calls' }).finish_reason,
+        tools: (result as { tools?: unknown }).tools,
+      });
     } finally {
       busy = false;
       activeAbort = null;
@@ -231,6 +285,7 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
         // ignore
       }
       port = null;
+      setHostVaultPost(null);
       if (activeAbort) activeAbort.abort();
     },
   };

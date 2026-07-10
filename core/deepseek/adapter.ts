@@ -192,23 +192,30 @@ export async function createPowHeadersForPath(
 }
 
 export function createClientHeaders(options?: { missingTokenMessage?: string }): Record<string, string> {
-  if (rememberedClientHeaders) return { ...rememberedClientHeaders };
-
+  // Always prefer page localStorage token. rememberedClientHeaders can be from a
+  // previous account after login switch and must not win over live userToken.
   const token = readDeepSeekUserToken();
-  if (!token) {
-    throw new DeepSeekAuthError(
-      options?.missingTokenMessage ?? 'DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again.',
-    );
+  if (token) {
+    const base = rememberedClientHeaders ? { ...rememberedClientHeaders } : {};
+    return {
+      ...base,
+      Authorization: `Bearer ${token}`,
+      'X-App-Version': base['X-App-Version'] || getDeepSeekAppVersion(),
+      'x-client-platform': base['x-client-platform'] || DEEPSEEK_CLIENT_PLATFORM,
+      'x-client-version': base['x-client-version'] || getDeepSeekAppVersion(),
+      'x-client-locale': base['x-client-locale'] || getDeepSeekLocale(),
+      'x-client-timezone-offset':
+        base['x-client-timezone-offset'] || String(-new Date().getTimezoneOffset() * 60),
+    };
   }
 
-  return {
-    Authorization: `Bearer ${token}`,
-    'X-App-Version': getDeepSeekAppVersion(),
-    'x-client-platform': DEEPSEEK_CLIENT_PLATFORM,
-    'x-client-version': getDeepSeekAppVersion(),
-    'x-client-locale': getDeepSeekLocale(),
-    'x-client-timezone-offset': String(-new Date().getTimezoneOffset() * 60),
-  };
+  if (rememberedClientHeaders?.Authorization) {
+    return { ...rememberedClientHeaders };
+  }
+
+  throw new DeepSeekAuthError(
+    options?.missingTokenMessage ?? 'DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again.',
+  );
 }
 
 export function rememberDeepSeekClientHeaders(headersInit: HeadersInit | undefined): void {
@@ -234,6 +241,12 @@ export async function saveClientHeadersToStorage(): Promise<boolean> {
   if (!rememberedClientHeaders) return false;
   try {
     await chrome.storage.local.set({ [STORAGE_HEADERS_KEY]: rememberedClientHeaders });
+    try {
+      const { upsertAccountFromHeaders } = await import('../cursor-bridge/account-vault');
+      await upsertAccountFromHeaders(rememberedClientHeaders);
+    } catch {
+      // optional multi-account vault
+    }
     return true;
   } catch {
     return false;

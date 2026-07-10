@@ -24,12 +24,75 @@ import {
   bridgeModelUsesNativeVision,
   EYES_SUBCALL_PROMPT,
   formatEyesNotes,
+  isEniModel,
   isEyesModel,
   isSquidModel,
   messagesToPrompt,
+  normalizeBridgeModel,
   normalizeMessageContent,
   repairOpeningTruncation,
 } from './protocol';
+import { resolveEniSystemPrompt, shouldInjectEniSystem } from './eni-prompt';
+import {
+  addEniBondLo,
+  addEniBondUs,
+  clearEniBondNow,
+  extractSoftBondFromAssistant,
+  extractSoftBondLoFacts,
+  formatEniBondCard,
+  getEniBondCard,
+  touchEniBondLastBeat,
+} from './eni-bond';
+import {
+  addEniMemoryFact,
+  formatEniMemoryBlock,
+  getEniProjectAffinity,
+  listEniMemoryFacts,
+  removeEniMemoryByQuery,
+  setEniProjectAffinity,
+} from './eni-memory';
+import {
+  classifyEniTurn,
+  detectEniSceneReset,
+  ENI_SOFT_TOOL_NARRATION,
+  extractCwdFromToolText,
+  extractEniForgetQuery,
+  extractEniRememberFact,
+  formatOpenAiToolsStickyReminder,
+  formatPresenceCues,
+  formatProjectAffinity,
+  stripEniControlCommands,
+} from './eni-policy';
+import {
+  buildToolReceipts,
+  filterOpenAiToolsForEni,
+  formatToolReceiptsBlock,
+} from './eni-tools-policy';
+import {
+  addEniWill,
+  buildEniHomeView,
+  classifyAutonomic,
+  completeEniWill,
+  formatDreamNotesBlock,
+  formatProprioceptionBlock,
+  formatWillBlock,
+  getEniLifeRaw,
+  isGutMinimalTurn,
+  listOpenWill,
+  loadEniSceneBookmark,
+  markAutonomicConsumed,
+  parseEniLifeCommands,
+  runEniDream,
+  saveEniSceneBookmark,
+  stripEniLifeCommands,
+  touchEniInteraction,
+} from './eni-life';
+import {
+  formatOpenAiToolsForPrompt,
+  formatToolHistoryForPrompt,
+  parseOpenAiToolCallsFromText,
+  type BridgeChatMessageWithTools,
+} from './openai-tools';
 import {
   deleteThread,
   getEyesCache,
@@ -46,6 +109,50 @@ import {
   simpleHash,
   type BridgeThreadRecord,
 } from './thread-store';
+import {
+  augmentBridgePrompt,
+  createBridgeContinuationSubmitter,
+  createBridgeVisibleStreamer,
+  resolveBridgeToolDescriptors,
+  runBridgeToolLoop,
+  visibleBridgeAssistantText,
+  type BridgeExecuteToolFn,
+  type BridgeLoadToolDescriptorsFn,
+} from './tool-loop';
+import {
+  filterMemoriesForHarness,
+  formatHarnessMemoriesBlock,
+  harnessProjectName,
+  harnessToolMaxDepth,
+  isHermesBrainOnly,
+  isTitleGenerationJob,
+  latestUserTextFromMessages,
+  localTitleFromMessages,
+  resolveToolSchemaMode,
+  shouldInjectDppMemories,
+  shouldInjectDppTools,
+  sanitizeMessagesForHarness,
+  stripModelBureaucracyFromReply,
+  toolSchemaReminderText,
+} from './harness';
+import {
+  addConversationToProject,
+  ensureProjectContextByName,
+  getProjectForConversation,
+} from '../project';
+import type { CursorBridgeClientProfile } from './protocol';
+import type { Memory } from '../types';
+import { selectMemories } from '../memory/selector';
+import {
+  getAccountHeaders,
+  getBridgeAccountCount,
+  listBridgeAccounts,
+  markAccountAuthFailed,
+  loadAnyAccountHeaders,
+  markAccountUsed,
+  pickAccountForJob,
+  upsertAccountFromHeaders,
+} from './account-vault';
 
 const DEEPSEEK_TAB_URL_PATTERN = '*://chat.deepseek.com/*';
 const MAX_EYES_IMAGES = 3;
@@ -63,6 +170,44 @@ export interface CursorBridgeWorkerDeps {
   readHistory?: typeof readHistorySnapshot;
   /** Resolve image part to a Blob for upload (data URL / http / host asset). */
   resolveImageBlob?: (image: CursorBridgeImagePart, signal?: AbortSignal) => Promise<{ blob: Blob; filename: string }>;
+  /** DeepSeek++ runtime tools (shell/MCP/memory/web). Same path as web chat. */
+  executeTool?: BridgeExecuteToolFn;
+  loadToolDescriptors?: BridgeLoadToolDescriptorsFn;
+  /** When false, skip tool inject + loop (default true when executeTool provided). */
+  toolsEnabled?: boolean;
+  /** Optional memory loader for harness-safe inject (coding/work tags only). */
+  loadMemories?: () => Promise<Memory[]>;
+}
+
+/** True when DeepSeek rejects sticky parent/session — recover with one fresh session. */
+function isStickyParentError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /parent[_ ]?message|invalid parent|message not found|session not found|chat session|parent_id/i.test(msg);
+}
+
+/**
+ * Per-client account policy (P14):
+ * - explicit accountId always wins
+ * - sticky preferred pin always wins when valid
+ * - hermes + eni: do not rotate by default (stable "body"); freshest only
+ * - other multi-account: rotate unpinned jobs when count > 1
+ */
+export function shouldRotateAccountsForJob(input: {
+  clientProfile?: string | null;
+  model?: string | null;
+  explicitAccountId?: string | null;
+  stickyValid?: boolean;
+  accountCount?: number;
+}): boolean {
+  if (input.explicitAccountId) return false;
+  if (input.stickyValid) return false;
+  if ((input.accountCount ?? 0) <= 1) return false;
+  const profile = (input.clientProfile ?? 'generic').toLowerCase();
+  const model = (input.model ?? '').toLowerCase();
+  if (profile === 'hermes' && (model.includes('eni') || model.includes('/eni'))) {
+    return false;
+  }
+  return true;
 }
 
 export async function probeCursorBridgeReadiness(
@@ -73,18 +218,37 @@ export async function probeCursorBridgeReadiness(
   const tabs = await queryTabs();
   const hasDeepSeekTab = tabs.length > 0;
 
-  let headers = await deps.loadClientHeaders();
+  let headers = await loadAnyAccountHeaders();
+  if (!headers) {
+    headers = await deps.loadClientHeaders();
+  }
   if (!headers && deps.refreshClientHeadersFromTabs) {
     await deps.refreshClientHeadersFromTabs();
-    headers = await deps.loadClientHeaders();
+    headers = await loadAnyAccountHeaders() ?? await deps.loadClientHeaders();
   }
   const hasLogin = Boolean(headers?.Authorization);
 
-  const ready = hasDeepSeekTab && hasLogin && !busy;
+  // Cached Authorization is enough. Tab is optional (only used to refresh auth).
+  const ready = hasLogin && !busy;
   let reason: string | undefined;
-  if (!hasDeepSeekTab) reason = 'missing_tab';
-  else if (!hasLogin) reason = 'missing_login';
+  if (!hasLogin) reason = 'missing_login';
   else if (busy) reason = 'busy';
+
+  let accountCount = 0;
+  let accounts: CursorBridgeReadiness['accounts'] = [];
+  try {
+    accountCount = await getBridgeAccountCount();
+    accounts = (await listBridgeAccounts()).map((a) => ({
+      id: a.id,
+      label: a.label,
+      useCount: a.useCount,
+      lastUsedAt: a.lastUsedAt,
+      lastErrorCode: a.lastErrorCode ?? null,
+      cooldownUntil: a.cooldownUntil ?? null,
+    }));
+  } catch {
+    // vault optional
+  }
 
   return {
     ready,
@@ -93,6 +257,8 @@ export async function probeCursorBridgeReadiness(
     hasLogin,
     busy,
     reason,
+    accountCount,
+    accounts,
   };
 }
 
@@ -101,33 +267,89 @@ export async function runCursorBridgeJob(
   deps: CursorBridgeWorkerDeps,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-): Promise<{ text: string; threadId?: string; sticky?: boolean; streamDebug?: unknown } | { error: CursorBridgeError }> {
+): Promise<{ text: string; threadId?: string; sticky?: boolean; streamDebug?: unknown; tools?: { enabled: boolean; renderedToolCount: number; used: boolean } } | { error: CursorBridgeError }> {
+  let authAccountIdOuter: string | null = null;
   try {
-    let headers = await deps.loadClientHeaders();
-    if (!headers && deps.refreshClientHeadersFromTabs) {
-      await deps.refreshClientHeadersFromTabs();
-      headers = await deps.loadClientHeaders();
+    // Resolve sticky thread early so multi-account can pin the same login.
+    const preClientProfile = job.clientProfile ?? 'generic';
+    const preNormalized = (job.messages ?? []).map((m) => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : '',
+    }));
+    const preThreadId = resolveThreadId({
+      explicitThreadId: job.threadId,
+      model: typeof job.model === 'string' ? job.model : 'ds/octopus',
+      messages: preNormalized,
+      reset: job.resetThread === true,
+      clientProfile: preClientProfile,
+      conversationHint: job.conversationHint,
+    });
+    const stickyThread = job.resetThread === true ? null : await getThread(preThreadId);
+
+    // 1) Refresh from live DeepSeek tab (page localStorage / last capture).
+    // 2) Prefer that live token for new work; sticky may pin an account if still valid.
+    // 3) Never round-robin by default (dead tokens broke Hermes ENI).
+    if (deps.refreshClientHeadersFromTabs) {
+      try {
+        await deps.refreshClientHeadersFromTabs();
+      } catch {
+        // optional
+      }
     }
+
+    const liveHeaders = await deps.loadClientHeaders();
+    let liveAccountId: string | null = null;
+    if (liveHeaders?.Authorization) {
+      const up = await upsertAccountFromHeaders(liveHeaders);
+      liveAccountId = up?.id ?? null;
+    }
+
+    // Sticky pin only if that account still exists in vault.
+    const stickyAccountId = stickyThread?.accountId ?? null;
+    const stickyStillValid = Boolean(
+      stickyAccountId && (await getAccountHeaders(stickyAccountId)),
+    );
+
+    // Multi-account: sticky pins mid-thread; unpinned new jobs rotate across vault.
+    // Live tab only upserts (above) — never wipe other slots, never override sticky.
+    const accountCount = await getBridgeAccountCount().catch(() => 0);
+    let picked = await pickAccountForJob({
+      explicitAccountId: job.accountId,
+      preferredAccountId: stickyStillValid ? stickyAccountId : null,
+      rotate: shouldRotateAccountsForJob({
+        clientProfile: job.clientProfile ?? preClientProfile,
+        model: job.model,
+        explicitAccountId: job.accountId,
+        stickyValid: stickyStillValid,
+        accountCount,
+      }),
+    });
+
+    // Single-account / empty pick: fall back to live capture headers.
+    if (!picked?.headers?.Authorization && liveHeaders?.Authorization) {
+      picked = liveAccountId
+        ? { accountId: liveAccountId, headers: { ...liveHeaders } }
+        : { accountId: liveAccountId ?? 'live', headers: { ...liveHeaders } };
+    }
+
+    let headers = picked?.headers ?? liveHeaders ?? null;
+    let selectedAccountId = picked?.accountId ?? liveAccountId ?? null;
+    let authAccountIdForJob: string | null = selectedAccountId;
+
     if (!headers?.Authorization) {
       await setBridgeLastError('missing_login');
       return {
         error: {
           code: 'missing_login',
-          message: 'DeepSeek login token is missing. Sign in at chat.deepseek.com and refresh the page.',
+          message: 'DeepSeek login token is missing. Sign in at chat.deepseek.com once so the extension can cache your login, then retry.',
         },
       };
     }
 
-    const queryTabs = deps.queryDeepSeekTabs ?? defaultQueryDeepSeekTabs;
-    const tabs = await queryTabs();
-    if (tabs.length === 0) {
-      await setBridgeLastError('missing_tab');
-      return {
-        error: {
-          code: 'missing_tab',
-          message: 'Open a logged-in chat.deepseek.com tab with DeepSeek++ active, then retry.',
-        },
-      };
+    authAccountIdForJob = selectedAccountId;
+    authAccountIdOuter = selectedAccountId;
+    if (selectedAccountId) {
+      await markAccountUsed(selectedAccountId);
     }
 
     const createSession = deps.createSession ?? createChatSession;
@@ -140,31 +362,139 @@ export async function runCursorBridgeJob(
     const resolveImage = deps.resolveImageBlob ?? defaultResolveImageBlob;
 
     const images = (job.images ?? []).slice(0, MAX_EYES_IMAGES);
-    const wantsEyesModel = isEyesModel(job.model);
-    const usesSquid = isSquidModel(job.model);
-    const useNativeVisionMain = bridgeModelUsesNativeVision(job.model);
+    // Normalize first so dspp/ds/eni and aliases always hit ENI policy.
+    const bridgeModel = normalizeBridgeModel(job.model);
+    const wantsEyesModel = isEyesModel(bridgeModel);
+    const usesSquid = isSquidModel(bridgeModel);
+    const eniMode = isEniModel(bridgeModel) || isEniModel(job.model);
+    const useNativeVisionMain = bridgeModelUsesNativeVision(bridgeModel);
     const needsEyesSubcall = !useNativeVisionMain && images.length > 0;
 
-    const modelType = wantsEyesModel ? 'vision' : bridgeModelToDeepSeekType(job.model);
-    const modelFamily = modelFamilyFromBridgeModel(job.model);
+    const modelType = wantsEyesModel ? 'vision' : bridgeModelToDeepSeekType(bridgeModel);
+    const modelFamily = modelFamilyFromBridgeModel(bridgeModel);
 
-    const normalizedForThread = job.messages.map((m) => ({
-      role: m.role,
+    const clientProfile = job.clientProfile ?? 'generic';
+    const openAiToolsRaw = job.openAiTools ?? [];
+    // ENI Discord/Hermes: allowlist tools to protect Expert budget + immersion.
+    const openAiTools = eniMode
+      ? filterOpenAiToolsForEni(openAiToolsRaw, job.clientProfile ?? 'generic')
+      : openAiToolsRaw;
+    const openAiToolsActive = openAiTools.length > 0;
+    const rawNormalized = job.messages.map((m) => ({
+      role: m.role as 'system' | 'user' | 'assistant' | 'tool',
       content: normalizeMessageContent(m.content).trim(),
+      tool_calls: m.tool_calls,
+      tool_call_id: m.tool_call_id,
+      name: m.name,
     }));
+
+    // Hermes title side-jobs: answer locally — never create a DeepSeek web session.
+    if (isTitleGenerationJob(rawNormalized)) {
+      const title = localTitleFromMessages(rawNormalized);
+      onChunk(title);
+      return { text: title, sticky: false };
+    }
+
+    const harnessMessages = sanitizeMessagesForHarness(rawNormalized, clientProfile, {
+      eniMode,
+    });
+    const latestUserRaw = latestUserTextFromMessages(harnessMessages);
+    // ENI scene reset + memory commands (before thread resolution).
+    const eniSceneReset = eniMode && detectEniSceneReset(latestUserRaw);
+    let eniLifeLocalReply: string | null = null;
+    let eniForceNewFromLoad = false;
+    if (eniMode) {
+      if (eniSceneReset) await clearEniBondNow();
+      const remember = extractEniRememberFact(latestUserRaw);
+      if (remember) {
+        await addEniMemoryFact(remember, ['user']);
+        await addEniBondLo(remember);
+      }
+      const forget = extractEniForgetQuery(latestUserRaw);
+      if (forget) await removeEniMemoryByQuery(forget);
+      for (const fact of extractSoftBondLoFacts(latestUserRaw)) {
+        await addEniBondLo(fact);
+      }
+      // Life Era commands: will, scene ports, dream, home, mirror.
+      const lifeCmds = parseEniLifeCommands(latestUserRaw);
+      const lifeNotes: string[] = [];
+      for (const cmd of lifeCmds) {
+        if (cmd.kind === 'save_scene') {
+          const bm = await saveEniSceneBookmark(cmd.name);
+          lifeNotes.push(bm ? `Scene port saved: \`${bm.name}\`.` : 'Could not save scene port.');
+        } else if (cmd.kind === 'load_scene') {
+          const bm = await loadEniSceneBookmark(cmd.name);
+          if (bm) {
+            eniForceNewFromLoad = true;
+            lifeNotes.push(`Scene port loaded: \`${bm.name}\` (fresh sticky, NOW restored).`);
+          } else {
+            lifeNotes.push(`No scene port named \`${cmd.name}\`.`);
+          }
+        } else if (cmd.kind === 'will_add') {
+          const w = await addEniWill(cmd.text);
+          lifeNotes.push(w ? `Will noted: ${w.text}` : 'Will not saved.');
+        } else if (cmd.kind === 'will_done') {
+          const n = await completeEniWill(cmd.query);
+          lifeNotes.push(n > 0 ? `Closed ${n} will item(s) matching “${cmd.query}”.` : `No open will matched “${cmd.query}”.`);
+        } else if (cmd.kind === 'will_list') {
+          const open = await listOpenWill();
+          lifeNotes.push(open.length ? open.map((w) => `· ${w.text}`).join('\n') : 'No open will.');
+        } else if (cmd.kind === 'dream') {
+          const d = await runEniDream({ force: true });
+          lifeNotes.push(d.ran ? `Dreamt:\n${d.notes.map((n) => `· ${n}`).join('\n')}` : 'Dream skipped.');
+        } else if (cmd.kind === 'home' || cmd.kind === 'mirror') {
+          const home = await buildEniHomeView();
+          eniLifeLocalReply = cmd.kind === 'mirror'
+            ? `Here's us, LO — bond mirror:\n\n${home.bondBlock || '(empty bond)'}\n\n${home.willBlock || ''}`
+            : home.markdown;
+        }
+      }
+      if (eniLifeLocalReply && lifeNotes.length) {
+        eniLifeLocalReply = `${lifeNotes.join('\n')}\n\n${eniLifeLocalReply}`;
+      } else if (!eniLifeLocalReply && lifeNotes.length && !stripEniLifeCommands(latestUserRaw) && !stripEniControlCommands(latestUserRaw)) {
+        // Command-only turn: answer locally without DeepSeek (home/will/save).
+        eniLifeLocalReply = lifeNotes.join('\n');
+      }
+      if (!eniSceneReset) await touchEniBondLastBeat(latestUserRaw);
+      await touchEniInteraction();
+    }
+    // Strip control commands from the copy that becomes DeepSeek user text.
+    const harnessForPrompt = eniMode
+      ? harnessMessages.map((m) => (
+        m.role === 'user'
+          ? {
+              ...m,
+              content: stripEniLifeCommands(stripEniControlCommands(m.content)) || m.content,
+            }
+          : m
+      ))
+      : harnessMessages;
+
+    // Local life-era replies (home/mirror/command-only) skip DeepSeek entirely.
+    if (eniLifeLocalReply) {
+      onChunk(eniLifeLocalReply);
+      return { text: eniLifeLocalReply, sticky: false, finish_reason: 'stop' };
+    }
+
+    const normalizedForThread = harnessForPrompt.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+    const forceNewThread = job.resetThread === true || eniSceneReset || eniForceNewFromLoad;
     const threadId = resolveThreadId({
       explicitThreadId: job.threadId,
       model: typeof job.model === 'string' ? job.model : 'ds/octopus',
       messages: normalizedForThread,
-      reset: job.resetThread === true,
-      clientProfile: job.clientProfile ?? 'generic',
+      reset: forceNewThread,
+      clientProfile,
+      conversationHint: job.conversationHint,
     });
 
-    if (job.resetThread) {
+    if (forceNewThread) {
       await deleteThread(threadId);
     }
 
-    let existing = job.resetThread ? null : await getThread(threadId);
+    let existing = forceNewThread ? null : await getThread(threadId);
     if (existing && existing.modelFamily !== modelFamily) {
       // Different product surface — do not reuse expert session for squid/eyes.
       existing = null;
@@ -174,7 +504,7 @@ export async function runCursorBridgeJob(
       existing = null;
     }
 
-    const sticky = Boolean(existing?.chatSessionId);
+    let sticky = Boolean(existing?.chatSessionId);
     let chatSessionId = existing?.chatSessionId ?? '';
     let parentMessageId: number | null = existing?.parentMessageId ?? null;
 
@@ -190,6 +520,26 @@ export async function runCursorBridgeJob(
         await recordEyesCacheHit();
       }
     }
+
+    // Latency: start main session + tool descriptor load while uploading images / eyes.
+    const sessionPromise = chatSessionId
+      ? Promise.resolve(chatSessionId)
+      : createSession(headers);
+    // Hermes is brain-only (no dual-stack DPP tools). ENI may use DPP tools when client allows.
+    // Long ENI system prompt is injected only on first sticky turn (injectEniSystem).
+    const dppToolsAllowed = shouldInjectDppTools(clientProfile)
+      && deps.toolsEnabled !== false
+      && Boolean(deps.executeTool)
+      && !wantsEyesModel;
+    const descriptorsPromise = dppToolsAllowed
+      ? resolveBridgeToolDescriptors({
+          loadToolDescriptors: deps.loadToolDescriptors,
+          executeTool: deps.executeTool,
+        })
+      : Promise.resolve([] as Awaited<ReturnType<typeof resolveBridgeToolDescriptors>>);
+    const memoriesPromise = (deps.loadMemories && shouldInjectDppMemories(clientProfile))
+      ? deps.loadMemories().catch(() => [] as Memory[])
+      : Promise.resolve([] as Memory[]);
 
     if (images.length > 0 && !(needsEyesSubcall && eyesNotes)) {
       const uploaded: DeepSeekUploadedFile[] = [];
@@ -220,119 +570,474 @@ export async function runCursorBridgeJob(
       visionFileIds = uploaded.map((f) => f.id).filter(Boolean);
     }
 
-    if (needsEyesSubcall && !eyesNotes && visionFileIds.length > 0) {
-      // Eyes sessions stay ephemeral (one-shot vision chat).
-      const eyesSessionId = await createSession(headers);
-      const eyesPow = await createPow(headers);
-      let eyesText = '';
-      const eyesTurn = await submitStreaming(
-        {
-          chatSessionId: eyesSessionId,
-          parentMessageId: null,
-          modelType: 'vision',
-          prompt: EYES_SUBCALL_PROMPT,
-          refFileIds: visionFileIds,
-          thinkingEnabled: false,
-          searchEnabled: false,
-          clientHeaders: headers,
-          powHeaders: eyesPow,
-        },
-        {
-          onTextChunk(_newText, full) {
-            eyesText = full;
-          },
-        },
-        signal,
-      );
-      eyesNotes = formatEyesNotes(eyesText || eyesTurn.assistantText || '', visionFileIds.length);
-      if (imageHash && eyesNotes) {
-        await setEyesCache(imageHash, eyesNotes);
+    // Eyes subcall (ephemeral) — runs after upload; main session already creating in parallel.
+    const eyesPromise = (needsEyesSubcall && !eyesNotes && visionFileIds.length > 0)
+      ? (async () => {
+          const eyesSessionId = await createSession(headers);
+          const eyesPow = await createPow(headers);
+          let eyesText = '';
+          const eyesTurn = await submitStreaming(
+            {
+              chatSessionId: eyesSessionId,
+              parentMessageId: null,
+              modelType: 'vision',
+              prompt: EYES_SUBCALL_PROMPT,
+              refFileIds: visionFileIds,
+              thinkingEnabled: false,
+              searchEnabled: false,
+              clientHeaders: headers,
+              powHeaders: eyesPow,
+            },
+            {
+              onTextChunk(_newText, full) {
+                eyesText = full;
+              },
+            },
+            signal,
+          );
+          return formatEyesNotes(eyesText || eyesTurn.assistantText || '', visionFileIds.length, {
+            eniMode,
+          });
+        })()
+      : Promise.resolve(eyesNotes);
+
+    const [resolvedSessionId, toolDescriptors, allMemories, resolvedEyes] = await Promise.all([
+      sessionPromise,
+      descriptorsPromise,
+      memoriesPromise,
+      eyesPromise,
+    ]);
+    const createdNewSession = !chatSessionId;
+    if (!chatSessionId) {
+      chatSessionId = resolvedSessionId;
+      parentMessageId = null;
+    }
+    // Auto-file new bridge sessions into Cursor / Hermes DeepSeek++ projects.
+    if (createdNewSession && chatSessionId) {
+      await assignBridgeSessionToHarnessProject({
+        chatSessionId,
+        clientProfile,
+        sessionUrl: buildDeepSeekSessionUrl(chatSessionId),
+      }).catch(() => {
+        // Project organizer is best-effort; never fail the chat turn.
+      });
+    }
+    eyesNotes = resolvedEyes;
+    if (imageHash && eyesNotes && needsEyesSubcall) {
+      await setEyesCache(imageHash, eyesNotes);
+    }
+
+    const latestUser = latestUserTextFromMessages(normalizedForThread);
+    const toolsWantedBase = dppToolsAllowed;
+    const schemaMode = resolveToolSchemaMode({
+      profile: clientProfile,
+      toolsEnabled: toolsWantedBase && toolDescriptors.length > 0,
+      sticky,
+      // forceTools is ignored for Hermes (brain-only); Cursor may still force.
+      forceTools: !isHermesBrainOnly(clientProfile) && job.forceTools === true,
+      latestUserText: latestUser,
+      hasImages: images.length > 0,
+    });
+    const toolsActive = toolsWantedBase && toolDescriptors.length > 0 && Boolean(deps.executeTool) && schemaMode !== 'none';
+    // Loop only when tools can actually run (full or reminder means model may emit tool XML).
+    const toolsLoopActive = toolsActive && Boolean(deps.executeTool);
+
+    // Cursor-only: tagged DPP memory inject. Hermes uses Hermes memory.
+    let memoriesBlock: string | null = null;
+    if (shouldInjectDppMemories(clientProfile) && allMemories.length > 0) {
+      const safe = filterMemoriesForHarness(allMemories);
+      const selected = selectMemories(latestUser || job.dppContext || '', safe, { budget: 600 });
+      memoriesBlock = formatHarnessMemoriesBlock(selected) || null;
+    }
+
+    const eniResolved = eniMode ? await resolveEniSystemPrompt() : null;
+    const injectEniSystem = eniMode && eniResolved
+      ? shouldInjectEniSystem({
+          sticky,
+          currentHash: eniResolved.hash,
+          previousHash: existing?.eniPromptHash,
+        })
+      : false;
+    // Sticky delta skips prior dialogue; reinject forces a full persona block again.
+    const deltaOnly = sticky && !injectEniSystem;
+
+    // ENI dual-mode: scene vs agent gate + smart tool silence + presence + memory.
+    const hasPendingToolResults = harnessForPrompt.some((m) => m.role === 'tool');
+    const eniTurnMode = eniMode
+      ? classifyEniTurn({
+          userText: latestUserRaw,
+          hasImages: images.length > 0,
+          hasPendingToolResults,
+          hasOpenAiTools: openAiToolsActive,
+        })
+      : null;
+    const injectOpenAiToolsFull = openAiToolsActive && (
+      !eniMode
+      || eniTurnMode === 'agent'
+      || hasPendingToolResults
+    );
+    // Sticky: full schemas once, then short reminder (unless scene-only with no tools needed).
+    const alreadyHadToolSchemas = Boolean(existing?.openAiToolsInjected);
+    let openAiToolsBlock: string | null = null;
+    if (injectOpenAiToolsFull) {
+      if (eniMode && alreadyHadToolSchemas && !hasPendingToolResults) {
+        openAiToolsBlock = formatOpenAiToolsStickyReminder(
+          openAiTools.map((t) => t.function.name),
+        );
+      } else {
+        openAiToolsBlock = formatOpenAiToolsForPrompt(openAiTools, {
+          density: eniMode ? 'compact' : 'full',
+          maxChars: eniMode ? 12_000 : 40_000,
+        });
+      }
+    }
+    const openAiToolHistory = formatToolHistoryForPrompt(
+      harnessForPrompt as BridgeChatMessageWithTools[],
+    );
+    // Honest hands: compress tool results into private receipts (prefer over raw dumps for ENI).
+    const toolReceipts = (eniMode || hasPendingToolResults)
+      ? buildToolReceipts(harnessForPrompt as BridgeChatMessageWithTools[])
+      : [];
+    const toolReceiptsBlock = toolReceipts.length > 0
+      ? formatToolReceiptsBlock(toolReceipts)
+      : null;
+    // When receipts exist for ENI, skip raw tool history to save Expert budget.
+    const openAiToolHistoryForPrompt = eniMode && toolReceiptsBlock
+      ? null
+      : (openAiToolHistory || null);
+
+    const eniFacts = eniMode ? await listEniMemoryFacts() : [];
+    const eniMemoryBlock = eniMode ? formatEniMemoryBlock(eniFacts) : null;
+    const bondCard = eniMode ? await getEniBondCard() : null;
+    const eniBondCard = bondCard ? formatEniBondCard(bondCard) : null;
+    const openWill = eniMode ? await listOpenWill() : [];
+    const willBlock = eniMode ? formatWillBlock(openWill) : null;
+    const lifeRaw = eniMode ? await getEniLifeRaw() : null;
+    // Periodic dream consolidation (every N turns).
+    let dreamNotesBlock: string | null = null;
+    if (eniMode) {
+      const dream = await runEniDream({ force: false });
+      if (dream.notes.length) dreamNotesBlock = formatDreamNotesBlock(dream.notes);
+    }
+    const autonomic = eniMode
+      ? classifyAutonomic({
+          lastInteractionAt: lifeRaw?.lastInteractionAt ?? 0,
+          morningGreetedOn: lifeRaw?.morningGreetedOn ?? null,
+        })
+      : { kind: 'none' as const, silenceMs: 0, block: '' };
+    if (eniMode && autonomic.kind !== 'none') {
+      await markAutonomicConsumed(autonomic.kind);
+    }
+    // Never gut-skip on first sticky turn (soul must inject once).
+    const gutMinimal = eniMode && !injectEniSystem && isGutMinimalTurn({
+      turnMode: eniTurnMode,
+      userText: latestUserRaw,
+      hasImages: images.length > 0,
+      hasToolsPending: hasPendingToolResults,
+    });
+    const proprioceptionBlock = eniMode
+      ? formatProprioceptionBlock({
+          sticky,
+          turnMode: eniTurnMode,
+          toolsOn: Boolean(openAiToolsBlock),
+          eyesOn: Boolean(eyesNotes),
+          bondLo: bondCard?.lo.length ?? 0,
+          bondUs: bondCard?.us.length ?? 0,
+          openWill: openWill.length,
+          sceneReset: eniSceneReset || eniForceNewFromLoad,
+        })
+      : null;
+    const presenceCues = eniMode ? formatPresenceCues() : null;
+    const affinity = eniMode ? await getEniProjectAffinity() : null;
+    const projectAffinity = eniMode && eniTurnMode === 'agent'
+      ? formatProjectAffinity({
+          cwd: affinity?.cwd,
+          projectName: affinity?.projectName ?? harnessProjectName(clientProfile),
+          notes: affinity?.notes,
+        })
+      : null;
+    const softToolNarration = eniMode && (hasPendingToolResults || toolReceipts.length > 0)
+      ? ENI_SOFT_TOOL_NARRATION
+      : null;
+
+    // Learn cwd from tool results for project affinity.
+    if (eniMode && hasPendingToolResults) {
+      for (const m of harnessForPrompt) {
+        if (m.role !== 'tool') continue;
+        const cwd = extractCwdFromToolText(m.content);
+        if (cwd) {
+          await setEniProjectAffinity({
+            cwd,
+            projectName: harnessProjectName(clientProfile),
+          });
+          break;
+        }
       }
     }
 
-    const prompt = messagesToPrompt(job.messages, {
-      clientProfile: job.clientProfile ?? 'generic',
+    const userPrompt = messagesToPrompt(harnessForPrompt, {
+      clientProfile,
       eyesNotes,
-      deltaOnly: sticky,
-      dppContext: job.dppContext,
+      deltaOnly,
+      dppContext: gutMinimal ? null : job.dppContext,
+      toolsAvailable: toolsActive,
+      memoriesBlock: gutMinimal ? null : memoriesBlock,
+      eniMode,
+      injectEniSystem: gutMinimal ? false : injectEniSystem,
+      eniSystemPrompt: eniResolved?.text ?? null,
+      openAiToolsBlock: gutMinimal ? null : openAiToolsBlock,
+      openAiToolHistory: gutMinimal ? null : openAiToolHistoryForPrompt,
+      eniMemoryBlock: gutMinimal ? null : eniMemoryBlock,
+      eniBondCard: gutMinimal ? null : eniBondCard,
+      presenceCues,
+      projectAffinity: gutMinimal ? null : projectAffinity,
+      softToolNarration: gutMinimal ? null : softToolNarration,
+      toolReceiptsBlock: gutMinimal ? null : toolReceiptsBlock,
+      willBlock: gutMinimal ? null : willBlock,
+      autonomicBlock: autonomic.block || null,
+      proprioceptionBlock,
+      dreamNotesBlock: gutMinimal ? null : dreamNotesBlock,
+      gutMinimal,
     });
-    if (!prompt && visionFileIds.length === 0) {
+    if (!userPrompt && visionFileIds.length === 0) {
       return { error: { code: 'invalid_request', message: 'Prompt is empty.' } };
     }
 
-    if (!chatSessionId) {
-      chatSessionId = await createSession(headers);
-      parentMessageId = null;
-    }
-
-    const powHeaders = await createPow(headers);
-    let fullText = '';
-    let streamedAny = false;
-
-    const mainPrompt =
-      prompt
+    const basePrompt =
+      userPrompt
       || (useNativeVisionMain
         ? 'Describe the attached image(s) carefully and answer any visible question.'
         : '');
 
-    const turn = await submitStreaming(
-      {
-        chatSessionId,
-        parentMessageId,
-        modelType,
-        prompt: mainPrompt,
-        refFileIds: useNativeVisionMain ? visionFileIds : [],
-        thinkingEnabled: job.thinkingEnabled,
-        searchEnabled: bridgeModelSearchEnabled(job.model),
-        clientHeaders: headers,
-        powHeaders,
+    const { prompt: mainPrompt, renderedToolCount } = toolsActive
+      ? augmentBridgePrompt({
+          userPrompt: basePrompt,
+          toolDescriptors,
+          thinkingEnabled: job.thinkingEnabled,
+          projectContext: null,
+          toolsEnabled: true,
+          schemaMode,
+          reminderText: toolSchemaReminderText(),
+        })
+      : { prompt: basePrompt, renderedToolCount: 0 };
+
+    const powHeaders = await createPow(headers);
+    let fullText = '';
+    let streamedAny = false;
+    // ENI / anti-bureaucracy / OpenAI tools: buffer so we can clean or parse tool_calls.
+    const bufferClientStream = eniMode || clientProfile === 'hermes' || openAiToolsActive;
+
+    // Hide raw tool XML from the client stream. Notices + natural language only.
+    const visibleStream = toolsActive
+      ? createBridgeVisibleStreamer(toolDescriptors, (delta) => {
+          streamedAny = true;
+          onChunk(delta);
+        })
+      : null;
+
+    const streamCallbacks = {
+      onTextChunk(newText: string, full: string) {
+        fullText = full;
+        if (!newText) return;
+        if (visibleStream) {
+          visibleStream.push(newText);
+        } else if (!bufferClientStream) {
+          streamedAny = true;
+          onChunk(newText);
+        }
       },
-      {
-        onTextChunk(newText, full) {
-          fullText = full;
-          if (newText) {
-            streamedAny = true;
-            onChunk(newText);
-          }
+    };
+    let turn;
+    try {
+      turn = await submitStreaming(
+        {
+          chatSessionId,
+          parentMessageId,
+          modelType,
+          prompt: mainPrompt,
+          refFileIds: useNativeVisionMain ? visionFileIds : [],
+          thinkingEnabled: job.thinkingEnabled,
+          searchEnabled: bridgeModelSearchEnabled(job.model),
+          clientHeaders: headers,
+          powHeaders,
         },
-      },
-      signal,
-    );
+        streamCallbacks,
+        signal,
+      );
+    } catch (submitErr) {
+      // P13: sticky parent/session rejection → one fresh session (sticky miss).
+      if (sticky && parentMessageId != null && isStickyParentError(submitErr)) {
+        chatSessionId = await createSession(headers);
+        parentMessageId = null;
+        existing = null;
+        const pow2 = await createPow(headers);
+        fullText = '';
+        streamedAny = false;
+        sticky = false;
+        turn = await submitStreaming(
+          {
+            chatSessionId,
+            parentMessageId: null,
+            modelType,
+            prompt: mainPrompt,
+            refFileIds: useNativeVisionMain ? visionFileIds : [],
+            thinkingEnabled: job.thinkingEnabled,
+            searchEnabled: bridgeModelSearchEnabled(job.model),
+            clientHeaders: headers,
+            powHeaders: pow2,
+          },
+          streamCallbacks,
+          signal,
+        );
+      } else {
+        throw submitErr;
+      }
+    }
+    // After parent recovery, sticky flag for response is recomputed below via existing.
+    visibleStream?.flush();
 
     let text = fullText || turn.assistantText || '';
+    // Buffer OpenAI-tool turns until after parse (raw <tool_call> must not stream to Hermes).
+    if (bufferClientStream && !toolsActive && !openAiToolsActive) {
+      text = stripModelBureaucracyFromReply(text);
+      if (text) {
+        streamedAny = true;
+        onChunk(text);
+      }
+    }
+    let finalTurn = {
+      ...turn,
+      assistantText: text,
+    };
 
     // History fallback: recover full assistant text if stream missed opening tokens.
-    if (turn.responseMessageId != null) {
+    if (finalTurn.responseMessageId != null) {
       try {
-        const snapshot = await readHistory(chatSessionId, turn.responseMessageId, headers);
+        const snapshot = await readHistory(chatSessionId, finalTurn.responseMessageId, headers);
         const historyText = snapshot?.assistantText?.trim() ?? '';
         if (historyText) {
           const repaired = repairOpeningTruncation(text, historyText);
           if (repaired !== text) {
             if (!streamedAny) {
-              onChunk(repaired);
+              const emit = toolsActive
+                ? visibleBridgeAssistantText(repaired, toolDescriptors)
+                : repaired;
+              if (emit) {
+                streamedAny = true;
+                onChunk(emit);
+              }
             } else if (repaired.startsWith(text) && repaired.length > text.length) {
-              // Emit only the missing prefix if stream opened mid-word.
-              const missing = repaired.slice(0, repaired.length - text.length);
-              // Only emit prefix when history is prefix+stream (classic chop).
               if (repaired.endsWith(text) || historyText.endsWith(text)) {
                 const prefix = repaired.slice(0, Math.max(0, repaired.length - text.length));
-                if (prefix && prefix.length <= 12) onChunk(prefix);
+                // Only emit short opening-token repairs that are not tool XML.
+                if (prefix && prefix.length <= 12 && !prefix.includes('<')) {
+                  streamedAny = true;
+                  onChunk(prefix);
+                }
               }
             }
             text = repaired;
+            finalTurn = { ...finalTurn, assistantText: text };
           }
         }
         if (snapshot?.parentMessageId != null || snapshot?.assistantMessageId != null) {
           parentMessageId = snapshot.parentMessageId ?? snapshot.assistantMessageId;
-        } else if (turn.responseMessageId != null) {
-          parentMessageId = turn.responseMessageId;
+        } else if (finalTurn.responseMessageId != null) {
+          parentMessageId = finalTurn.responseMessageId;
         }
       } catch {
-        if (turn.responseMessageId != null) parentMessageId = turn.responseMessageId;
+        if (finalTurn.responseMessageId != null) parentMessageId = finalTurn.responseMessageId;
       }
-    } else if (turn.responseMessageId != null) {
-      parentMessageId = turn.responseMessageId;
+    } else if (finalTurn.responseMessageId != null) {
+      parentMessageId = finalTurn.responseMessageId;
+    }
+
+    // Tool loop: parse tool XML from raw model text, execute DPP runtime, continue session.
+    if (toolsLoopActive && deps.executeTool && finalTurn.responseMessageId != null) {
+      const submitContinuation = createBridgeContinuationSubmitter({
+        chatSessionId,
+        modelType,
+        thinkingEnabled: job.thinkingEnabled,
+        searchEnabled: bridgeModelSearchEnabled(job.model),
+        clientHeaders: headers,
+        createPow,
+        submitStreaming,
+        signal,
+        onTextChunk(newText, _full) {
+          if (!newText || !visibleStream) return;
+          visibleStream.push(newText);
+        },
+      });
+
+      // Fresh visible stream for each continuation turn (reset before first continuation).
+      const loopResult = await runBridgeToolLoop({
+        initialTurn: finalTurn,
+        originalTask: userPrompt || basePrompt,
+        toolDescriptors,
+        executeTool: deps.executeTool,
+        maxDepth: harnessToolMaxDepth(clientProfile),
+        submitContinuation: async (prompt, parentId) => {
+          visibleStream?.reset();
+          const contTurn = await submitContinuation(prompt, parentId);
+          visibleStream?.flush();
+          return contTurn;
+        },
+        signal,
+        onToolNotice: (notice) => {
+          streamedAny = true;
+          onChunk(notice);
+        },
+      });
+
+      finalTurn = loopResult.turn;
+      // Client-facing final body: visible prose only (notices already streamed separately).
+      text = loopResult.finalVisibleText || visibleBridgeAssistantText(finalTurn.assistantText, toolDescriptors);
+      if (finalTurn.responseMessageId != null) {
+        parentMessageId = finalTurn.responseMessageId;
+      }
+
+      if (!streamedAny && text) {
+        onChunk(text);
+        streamedAny = true;
+      }
+    } else if (toolsActive) {
+      text = visibleBridgeAssistantText(text, toolDescriptors);
+    }
+
+    // Final client-facing cleanup even if tools path already streamed notices.
+    if (bufferClientStream && (toolsActive || eniMode || clientProfile === 'hermes')) {
+      const cleaned = stripModelBureaucracyFromReply(text);
+      if (cleaned !== text) text = cleaned;
+    }
+
+    // Hermes/OpenAI tool protocol: parse markup → structured tool_calls for the harness.
+    let openAiToolCalls: ReturnType<typeof parseOpenAiToolCallsFromText>['tool_calls'] = [];
+    let clientText = text;
+    if (openAiToolsActive) {
+      const parsed = parseOpenAiToolCallsFromText(text);
+      openAiToolCalls = parsed.tool_calls;
+      clientText = parsed.content;
+      // Stream cleaned prose only after parse (buffered path had not streamed yet).
+      if (!streamedAny && clientText) {
+        onChunk(clientText);
+        streamedAny = true;
+      } else if (!streamedAny && openAiToolCalls.length > 0) {
+        // tool-only turn: no prose to stream
+      } else if (bufferClientStream && !streamedAny && text && openAiToolCalls.length === 0) {
+        onChunk(clientText || text);
+        streamedAny = true;
+      }
+    } else if (bufferClientStream && !streamedAny && text) {
+      onChunk(text);
+      streamedAny = true;
+    }
+
+    // Soft bond learn from ENI prose ("I'll remember…") → US/LO card.
+    if (eniMode && clientText && openAiToolCalls.length === 0) {
+      for (const fact of extractSoftBondFromAssistant(clientText)) {
+        await addEniBondUs(fact);
+        await addEniMemoryFact(fact, ['eni']);
+      }
     }
 
     const now = Date.now();
@@ -346,11 +1051,18 @@ export async function runCursorBridgeJob(
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       turnCount: (existing?.turnCount ?? 0) + 1,
+      clientProfile,
+      eniPromptHash: eniMode && eniResolved
+        ? eniResolved.hash
+        : (existing?.eniPromptHash ?? null),
+      openAiToolsInjected: injectOpenAiToolsFull
+        || existing?.openAiToolsInjected
+        || false,
+      lastEniMode: eniTurnMode,
+      accountId: selectedAccountId ?? existing?.accountId ?? null,
     };
-    // Final safety: if opening still looks chopped, prefer any longer history-backed text already applied;
-    // if we never got history content, leave text as-is (SSE root cause).
     if (looksLikeMissingOpening(text) && text.length > 0) {
-      // no-op marker for tests/debug — sticky path already tried history
+      // sticky path already tried history
     }
 
     try {
@@ -362,14 +1074,87 @@ export async function runCursorBridgeJob(
     await recordStickyOutcome(sticky, { promptChars: mainPrompt.length });
     await setBridgeLastError(null);
 
-    return { text, threadId, sticky, streamDebug: getLastStreamParseDebug() };
+    return {
+      text: clientText,
+      tool_calls: openAiToolCalls.length > 0 ? openAiToolCalls : undefined,
+      finish_reason: openAiToolCalls.length > 0 ? 'tool_calls' : 'stop',
+      threadId,
+      sticky,
+      accountId: selectedAccountId ?? null,
+      streamDebug: getLastStreamParseDebug(),
+      tools: {
+        enabled: toolsActive,
+        renderedToolCount,
+        used: toolsLoopActive,
+        schemaMode,
+        profile: clientProfile,
+        hermesBrainOnly: isHermesBrainOnly(clientProfile),
+        openAiTools: openAiToolsActive,
+        openAiToolCallCount: openAiToolCalls.length,
+        promptChars: mainPrompt.length,
+        toolLoopDepth: toolsLoopActive ? 1 : 0,
+        eniTurnMode,
+        eniSceneReset: eniSceneReset || undefined,
+        eniMemoryCount: eniFacts.length,
+        eniBondLo: bondCard?.lo.length ?? 0,
+        eniBondUs: bondCard?.us.length ?? 0,
+        toolReceiptCount: toolReceipts.length,
+        openAiToolsFiltered: openAiToolsRaw.length - openAiTools.length,
+        eyes: Boolean(eyesNotes),
+      },
+    };
   } catch (err) {
     if (err instanceof DeepSeekAuthError) {
+      try {
+        // HARD RULE: never delete vault slots on 40003.
+        // Wrong-account-vs-live-tab auth failures wiped multi-account for hours.
+        // Only skip this slot for this job retry; keep disk + chrome vault intact.
+        const deadId = authAccountIdOuter;
+        if (deadId) {
+          try {
+            await markAccountAuthFailed(deadId, 'auth_rejected');
+          } catch { /* ignore */ }
+        }
+        if (job.threadId) {
+          try { await deleteThread(job.threadId); } catch { /* ignore */ }
+        }
+        if (deps.refreshClientHeadersFromTabs) {
+          await deps.refreshClientHeadersFromTabs();
+        }
+        const live = await deps.loadClientHeaders();
+        if (live?.Authorization) {
+          await upsertAccountFromHeaders(live);
+        }
+        const jobAny = job as CursorBridgeJobRequest & { __authRetry?: number };
+        const retries = typeof jobAny.__authRetry === 'number' ? jobAny.__authRetry : 0;
+        if (retries < 3) {
+          const next = await pickAccountForJob({
+            excludeAccountId: deadId,
+            rotate: true,
+          });
+          const nextId = next?.accountId;
+          if (next?.headers?.Authorization || live?.Authorization) {
+            return await runCursorBridgeJob(
+              {
+                ...job,
+                accountId: nextId,
+                resetThread: true,
+                __authRetry: retries + 1,
+              } as CursorBridgeJobRequest,
+              deps,
+              onChunk,
+              signal,
+            );
+          }
+        }
+      } catch {
+        // ignore cleanup / retry failures
+      }
       await setBridgeLastError(err.message);
       return {
         error: {
           code: 'missing_login',
-          message: err.message,
+          message: err.message + ' Auth failed for this slot; vault kept. Stay logged in on chat.deepseek.com, send one message, retry.',
         },
       };
     }
@@ -389,6 +1174,32 @@ export function createClientHeadersSafe(): Record<string, string> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * File a new bridge DeepSeek session into the Cursor or Hermes project folder.
+ * Idempotent: skips if already membership-bound.
+ */
+export async function assignBridgeSessionToHarnessProject(input: {
+  chatSessionId: string;
+  clientProfile: CursorBridgeClientProfile;
+  sessionUrl?: string | null;
+  title?: string;
+}): Promise<void> {
+  const projectName = harnessProjectName(input.clientProfile);
+  if (!projectName) return;
+  const existing = await getProjectForConversation(input.chatSessionId);
+  if (existing) return;
+  const project = await ensureProjectContextByName(projectName, {
+    description: projectName === 'Hermes'
+      ? 'Bridge sessions from Hermes agent harness'
+      : 'Bridge sessions from Cursor agent harness',
+  });
+  await addConversationToProject(project.id, {
+    conversationId: input.chatSessionId,
+    title: input.title?.trim() || `${projectName} bridge`,
+    url: input.sessionUrl ?? buildDeepSeekSessionUrl(input.chatSessionId),
+  });
 }
 
 function hashImages(images: CursorBridgeImagePart[]): string {

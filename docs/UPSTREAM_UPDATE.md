@@ -275,4 +275,24 @@ git push fork HEAD
 - `docs/goals/browser-origin-cursor-api.md` — long-horizon goal + isolation rules  
 - `docs/goals/octopus-browser-model-platform.md` — model surface (octopus / eyes / squid)  
 - `docs/cursor-bridge-try-it-out.md` — operator smoke steps  
-- `docs/decisions/2026-07-09-browser-origin-cursor-api.md` — decision record  
+- `docs/decisions/2026-07-09-browser-origin-cursor-api.md` — decision record
+
+---
+
+## Bridge checklist after merge (P21)
+
+After any upstream merge that might touch extension/host entrypoints:
+
+1. `npx vitest run tests/cursor-bridge-*.test.ts`
+2. `npm run build` (or `npm run build:chrome` if that is the project script)
+3. Reinstall host if `packages/cursor-bridge-host/**` changed:
+   ```bash
+   node scripts/install-cursor-bridge-host.mjs --extension-id chhlagfdfeanaefgbdbgmdlpgaoahhbi
+   ```
+4. Reload unpacked extension: `dist/chrome-mv3`
+5. `curl -s http://127.0.0.1:8787/v1/health` — expect `ready`, `accountCount`, `lastJob`, `queueDepth`
+6. `node scripts/bridge-smoke.mjs --quick`
+7. Confirm host vault file still exists:
+   `~/Library/Application Support/DeepSeek++/CursorBridgeHost/account-vault.json`
+
+Do **not** reintroduce ds2api or dual worktrees during merge conflict resolution.
