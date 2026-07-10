@@ -3,6 +3,8 @@ import {
   extractResponseUsageStatsFromParsed,
   extractResponseTextForTokenSpeed,
   extractResponseTextFromParsed,
+  normalizeSseNewlines,
+  ResponseTextAssembler,
   isStreamFinishedFromParsed,
   parseSSEChunk,
   parseSSEData,
@@ -500,20 +502,22 @@ async function readCompletionStream(response: Response): Promise<ModelTurn> {
   const decoder = new TextDecoder();
   let buffer = '';
   const summary: ModelTurn = { assistantText: '', responseMessageId: null, requestMessageId: null, finished: false };
+  const assembler = new ResponseTextAssembler();
+  lastStreamParseDebug = { events: [], finalText: '', rawEvents: [] };
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+    buffer = normalizeSseNewlines(buffer + decoder.decode(value, { stream: true }));
     const boundary = buffer.lastIndexOf('\n\n');
     if (boundary === -1) continue;
 
-    consumeSSEText(buffer.slice(0, boundary + 2), summary);
+    consumeSSEText(buffer.slice(0, boundary + 2), summary, { assembler });
     buffer = buffer.slice(boundary + 2);
   }
 
-  if (buffer.trim()) consumeSSEText(buffer, summary);
+  if (buffer.trim()) consumeSSEText(buffer, summary, { assembler });
   return summary;
 }
 
@@ -526,6 +530,8 @@ async function readCompletionStreamWithCallbacks(
   let buffer = '';
   const summary: ModelTurn = { assistantText: '', responseMessageId: null, requestMessageId: null, finished: false };
   const retainAssistantText = callbacks.retainAssistantText !== false;
+  const assembler = new ResponseTextAssembler();
+  lastStreamParseDebug = { events: [], finalText: '', rawEvents: [] };
   const speedTracker = callbacks.onTokenSpeed
     ? createResponseTokenSpeedTracker((progress) => callbacks.onTokenSpeed?.({
       ...progress,
@@ -546,21 +552,21 @@ async function readCompletionStreamWithCallbacks(
       const { done, value } = await reader.read();
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
+      buffer = normalizeSseNewlines(buffer + decoder.decode(value, { stream: true }));
       const boundary = buffer.lastIndexOf('\n\n');
       if (boundary === -1) continue;
 
       const complete = buffer.slice(0, boundary + 2);
       buffer = buffer.slice(boundary + 2);
 
-      const newText = consumeSSEText(complete, summary, { retainAssistantText, onParsed });
+      const newText = consumeSSEText(complete, summary, { retainAssistantText, onParsed, assembler });
       if (newText && callbacks.onTextChunk) {
         callbacks.onTextChunk(newText, summary.assistantText);
       }
     }
 
     if (buffer.trim()) {
-      const newText = consumeSSEText(buffer, summary, { retainAssistantText, onParsed });
+      const newText = consumeSSEText(buffer, summary, { retainAssistantText, onParsed, assembler });
       if (newText && callbacks.onTextChunk) {
         callbacks.onTextChunk(newText, summary.assistantText);
       }
@@ -573,30 +579,86 @@ async function readCompletionStreamWithCallbacks(
   return summary;
 }
 
+
+/** Last stream parse debug (bridge diagnostics only). */
+export let lastStreamParseDebug: {
+  events: Array<{ op?: string; path?: string; sample?: string; delta?: string; extracted?: string | null; raw?: string }>;
+  finalText: string;
+  rawEvents: string[];
+} = { events: [], finalText: '', rawEvents: [] };
+
+export function getLastStreamParseDebug() {
+  return lastStreamParseDebug;
+}
+
 function consumeSSEText(
   text: string,
   summary: ModelTurn,
   options: {
     retainAssistantText?: boolean;
     onParsed?: (parsed: unknown, event: ReturnType<typeof parseSSEChunk>[number]) => void;
+    assembler?: ResponseTextAssembler;
   } = {},
 ): string {
   const retainAssistantText = options.retainAssistantText !== false;
+  const assembler = options.assembler;
   const appendedText: string[] = [];
   const events = parseSSEChunk(text);
   for (const event of events) {
     const parsed = parseSSEData(event.data);
     if (!parsed) continue;
+    if (lastStreamParseDebug.rawEvents.length < 50) {
+      lastStreamParseDebug.rawEvents.push(event.data.slice(0, 500));
+    }
     collectMessageIds(parsed, summary);
     options.onParsed?.(parsed, event);
 
-    const eventText = extractResponseTextFromParsed(parsed);
-    if (eventText) {
-      appendedText.push(eventText);
-      if (retainAssistantText) summary.assistantText += eventText;
+    const record = parsed as Record<string, unknown>;
+    const path = typeof record.p === 'string' ? record.p : undefined;
+    const op = typeof record.o === 'string' ? record.o : undefined;
+    let sample: string | undefined;
+    if (typeof record.v === 'string') sample = record.v.slice(0, 80);
+    else if (record.v != null) {
+      try { sample = JSON.stringify(record.v).slice(0, 120); } catch { sample = '[unserializable]'; }
+    }
+
+    if (assembler) {
+      const extracted = extractResponseTextFromParsed(parsed);
+      const delta = assembler.apply(parsed);
+      if (lastStreamParseDebug.events.length < 40) {
+        lastStreamParseDebug.events.push({
+          op,
+          path,
+          sample,
+          delta: delta || undefined,
+          extracted: extracted,
+        });
+      }
+      if (delta) {
+        appendedText.push(delta);
+        if (retainAssistantText) summary.assistantText = assembler.text;
+      } else if (retainAssistantText) {
+        summary.assistantText = assembler.text;
+      }
+    } else {
+      const eventText = extractResponseTextFromParsed(parsed);
+      if (lastStreamParseDebug.events.length < 40) {
+        lastStreamParseDebug.events.push({
+          op,
+          path,
+          sample,
+          delta: eventText || undefined,
+          extracted: eventText,
+        });
+      }
+      if (eventText) {
+        appendedText.push(eventText);
+        if (retainAssistantText) summary.assistantText += eventText;
+      }
     }
     if (isStreamFinishedFromParsed(parsed)) summary.finished = true;
   }
+  lastStreamParseDebug.finalText = assembler?.text ?? summary.assistantText;
   return appendedText.join('');
 }
 

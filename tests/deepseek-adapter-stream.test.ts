@@ -329,6 +329,54 @@ describe('DeepSeek web adapter streaming', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1][0])).toBe('https://chat.deepseek.com/api/v0/file/fetch_files?file_ids=file-image-1');
   });
+  it('keeps opening text when BATCH creates relative fragments with initial content', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+      'data: {"p":"response","o":"BATCH","v":[{"p":"fragments","o":"APPEND","v":[{"content":"Multi"}]},{"p":"fragments/-1/content","o":"APPEND","v":"-turn"}]}',
+      'data: {"p":"response/fragments/-1/content","o":"APPEND","v":" bridges"}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const chunks: string[] = [];
+    const turn = await submitPromptStreaming(createSubmitInput(), {
+      onTextChunk(text) {
+        chunks.push(text);
+      },
+    });
+
+    expect(chunks.join('')).toBe('Multi-turn bridges');
+    expect(turn.assistantText).toBe('Multi-turn bridges');
+  });
+
+  it('emits only the suffix when DeepSeek SETs cumulative fragment content', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+      'data: {"p":"response/fragments/-1/content","o":"SET","v":"There"}',
+      'data: {"p":"response/fragments/-1/content","o":"SET","v":"There are three"}',
+      'data: {"p":"response/fragments/-1/content","o":"APPEND","v":" failure modes"}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const chunks: string[] = [];
+    const turn = await submitPromptStreaming(createSubmitInput(), {
+      onTextChunk(text) {
+        chunks.push(text);
+      },
+    });
+
+    expect(chunks.join('')).toBe('There are three failure modes');
+    expect(turn.assistantText).toBe('There are three failure modes');
+  });
+
+  it('reads opening text from response snapshot objects', async () => {
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+      'data: {"v":{"response":{"fragments":[{"content":"Sticky "}]}}}',
+      'data: {"p":"response/fragments/-1/content","o":"APPEND","v":"parent ids"}',
+      'data: {"p":"response/status","v":"FINISHED"}',
+    ].join('\n\n'))));
+
+    const turn = await submitPromptStreaming(createSubmitInput(), {});
+    expect(turn.assistantText).toBe('Sticky parent ids');
+  });
+
 });
 
 function createSubmitInput() {

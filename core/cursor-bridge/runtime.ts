@@ -8,6 +8,7 @@ import {
   type CursorBridgeReadiness,
   isCursorBridgeEnvelope,
 } from './protocol';
+import { getBridgeStatusSnapshot } from './thread-store';
 import { probeCursorBridgeReadiness, runCursorBridgeJob, type CursorBridgeWorkerDeps } from './worker';
 
 const RECONNECT_MS = 2_000;
@@ -122,6 +123,18 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
     if (!isCursorBridgeEnvelope(raw)) return;
     const message = raw as CursorBridgeHostToExtension;
 
+    if (message.type === 'reload_extension') {
+      post({ type: 'pong', requestId: message.requestId });
+      setTimeout(() => {
+        try {
+          chrome.runtime.reload();
+        } catch (err) {
+          options.onLog?.(`reload failed: ${String(err)}`);
+        }
+      }, 100);
+      return;
+    }
+
     if (message.type === 'ping' || message.type === 'get_readiness') {
       const readiness = await probeCursorBridgeReadiness(options.deps, busy);
       post({
@@ -134,6 +147,12 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
 
     if (message.type === 'abort_job') {
       if (activeAbort) activeAbort.abort();
+      return;
+    }
+
+    if (message.type === 'get_bridge_status') {
+      const status = await getBridgeStatusSnapshot();
+      post({ type: 'job_done', requestId: message.requestId, status } as CursorBridgeExtensionToHost);
       return;
     }
 
@@ -193,7 +212,7 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
         return;
       }
 
-      post({ type: 'job_done', requestId, jobId: job.id, text: result.text, threadId: result.threadId, sticky: result.sticky });
+      post({ type: 'job_done', requestId, jobId: job.id, text: result.text, threadId: result.threadId, sticky: result.sticky, streamDebug: (result as { streamDebug?: unknown }).streamDebug });
     } finally {
       busy = false;
       activeAbort = null;

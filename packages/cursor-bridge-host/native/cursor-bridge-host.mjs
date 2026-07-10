@@ -9,6 +9,9 @@
  * Hard rule: this process never calls chat.deepseek.com itself.
  */
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const PORT = Number(process.env.CURSOR_BRIDGE_PORT || 8787);
@@ -175,6 +178,18 @@ function handleExtensionMessage(msg) {
       return;
     }
     if (msg.type === 'job_done' || msg.type === 'job_error' || msg.type === 'readiness' || msg.type === 'pong') {
+      if (msg.type === 'job_done' && msg.streamDebug) {
+        try {
+          const debugPath = path.join(os.homedir(), '.cursor-bridge-last-stream.json');
+          fs.writeFileSync(debugPath, JSON.stringify({
+            at: new Date().toISOString(),
+            textPreview: typeof msg.text === 'string' ? msg.text.slice(0, 200) : null,
+            streamDebug: msg.streamDebug,
+          }, null, 2));
+        } catch (err) {
+          process.stderr.write(`[cursor-bridge] stream debug write failed: ${err}\n`);
+        }
+      }
       pending.delete(msg.requestId);
       entry.resolve(msg);
     }
@@ -751,6 +766,31 @@ function createServer() {
           'access-control-allow-origin': '*',
         });
         res.end(asset.buffer);
+        return;
+      }
+
+      
+      if (req.method === 'GET' && (url.pathname === '/v1/debug/last-stream' || url.pathname === '/debug/last-stream')) {
+        const requestId = randomUUID();
+        const p = waitForJob(requestId, null, 8000);
+        try {
+          await writeNativeMessage({ type: 'get_bridge_status', requestId });
+          const result = await p;
+          sendJson(res, 200, result?.status || result || { error: 'no status' });
+        } catch (err) {
+          sendJson(res, 503, { error: String(err) });
+        }
+        return;
+      }
+
+      if (req.method === 'POST' && (url.pathname === '/v1/admin/reload-extension' || url.pathname === '/admin/reload-extension')) {
+        const requestId = randomUUID();
+        try {
+          await writeNativeMessage({ type: 'reload_extension', requestId });
+          sendJson(res, 200, { ok: true, message: 'reload requested' });
+        } catch (err) {
+          sendJson(res, 503, { ok: false, error: String(err) });
+        }
         return;
       }
 

@@ -3,63 +3,49 @@
 **Updated:** 2026-07-10  
 **Worktree:** `/Users/kyin/Projects/deepseek-pp-platform`  
 **Branch:** `local/platform-p5-p9`  
-**HEAD:** (see git log)  
-**Phase:** FREEZE complete (P5–P8 + useful P10–P13/P15/P18)
+**Phase:** First-token SSE root-cause fix (needs extension hard-reload)
 
-## Goal (executed)
+## First-token fix (this pass)
 
-Ship daily-driver bridge runway: land P0–P4, first-token mitigation, harness sticky without headers, live smokes, diagnostics/queue/context pack/smoke script — browser-origin only, no gimmicks.
+### Root cause (DeepSeek++ SSE stack)
 
-## Done
+Not Cursor. Not CPA. Shared path in:
 
-| Phase | Result |
-|---|---|
-| **P5** land git | Committed `ae456b3` + follow-up; pushed `fork` (`local/platform-p0-p4`, `local/platform-p5-p9`, `main`, checkpoint) |
-| **P6** first-token | `repairOpeningTruncation` + richer history content extract + opening heuristic; **live still often chops first chars** when history lacks full text — residual DeepSeek SSE issue |
-| **P7** sticky no-header | Fingerprint includes `clientProfile+family+firstUser`; host returns `X-DPP-Thread-Id`; live **SAME thread** across turns without header |
-| **P8** multimodal | Auto-eyes 1×1 PNG live OK (vision notes → expert) |
-| **P10** diagnostics | Health: `uptimeMs`, `queueDepth`, `activeJobAgeMs`, `lastJob`; About sticky hits + copy diagnostics |
-| **P11** cancel/stream | Queue timing + job meta; stream path unchanged (no regression in smoke) |
-| **P12** sticky lifecycle | `MAX_THREAD_TURNS=80`; sticky hit/miss counters |
-| **P13** context pack | `dpp_context` / `dppContext` body field → prompt inject |
-| **P15** queue honesty | `queueDepth` + `activeJobAgeMs` on health |
-| **P18** smoke script | `npm run smoke:bridge` / `scripts/bridge-smoke.mjs` — **PASS** live |
+- `core/interceptor/sse-parser.ts`
+- `core/deepseek/adapter.ts`
 
-## Live evidence (this session)
+DeepSeek SSE often uses **CRLF** (`\r\n`). We only split on bare `\n\n`, so early events never framed correctly. Multiple `data:` JSON lines could collapse into one invalid parse → **opening tokens dropped**, later APPENDs survived (`-turn…`, ` are three…`, `icky…`).
 
-- Health OK with `contextPack`, queueDepth 0  
-- Smoke script PASS  
-- Sticky no-header: `fp-cursor-octopus-…` same T1/T2  
-- Image auto-eyes: OK (~134 chars description of test pixel)  
-- Squid: OK  
-- First-token: still often mid-word (` are three…`, `-turn…`) — **known residual**
+### Fix shipped
 
-## Blocked / residual
+1. Normalize CRLF → LF before framing  
+2. One SSEEvent per JSON `data:` line when multiple land in one block  
+3. `ResponseTextAssembler` for SET (prefix-delta) vs APPEND  
+4. Relative `fragments` BATCH create extraction  
+5. Fixture tests: `tests/sse-crlf-framing.test.ts`, assembler tests  
 
-1. **First-token chop** not fully eliminated live (history API may not return full assistant text for repair). Needs deeper SSE capture or DeepSeek-side investigation.  
-2. **Extension SW may be stale** until you hard-reload unpacked `dist/chrome-mv3` — host reinstalled; SW may still run old worker until reload.  
-3. **P9a memory inject** skipped (you rarely use DS++ memory in harness path).  
-4. **P14/P16–P20** partially covered or deferred (no gimmicks).
+### Verification
 
-## When you return
+- Unit: **46 passed** including CRLF + Multi-turn fixtures  
+- Live: **still chopped until hard-reload** (SW did not pick up new `background.js`; no `~/.cursor-bridge-last-stream.json`)
 
-1. **Hard reload** extension from:  
+### When you return
+
+1. Hard-reload unpacked extension:  
    `/Users/kyin/Projects/deepseek-pp-platform/dist/chrome-mv3`
-2. Keep logged-in `chat.deepseek.com` open  
-3. `curl -s http://127.0.0.1:8787/v1/health | python3 -m json.tool`  
-4. `npm run smoke:bridge` (from platform worktree)  
-5. In Cursor: model `ds/octopus` via CPA — multi-turn should sticky via first-message fingerprint  
-6. Optional: `dpp_context` field for small project pack  
+2. Then either:
+   - `curl -s -X POST http://127.0.0.1:8787/v1/admin/reload-extension` (future reloads)
+   - or just re-test
+3. Check opening:
+   ```bash
+   curl -s http://127.0.0.1:8787/v1/chat/completions \
+     -H 'Authorization: Bearer local-bridge-key' \
+     -H 'Content-Type: application/json' \
+     -d '{"model":"ds/octopus","stream":false,"messages":[{"role":"user","content":"Start with the exact word Multi-turn then one sentence about SSE. No greeting."}]}' \
+     | python3 -c "import sys,json; t=json.load(sys.stdin)['choices'][0]['message']['content']; print(repr(t[:80])); print('OK' if t.startswith('Multi') else 'CHOPPED')"
+   ```
+4. Optional debug dump after a turn: `~/.cursor-bridge-last-stream.json`
 
-## Evidence commands
+## Prior runway
 
-```bash
-cd /Users/kyin/Projects/deepseek-pp-platform
-./node_modules/.bin/vitest run tests/cursor-bridge-*.test.ts  # 26 passed
-npm run build:chrome
-npm run smoke:bridge
-```
-
-## Rejected (correctly not built)
-
-Chat folders · multi-agent · jshandler completions · official API · model rename churn
+P5–P8 + P10/12/13/15/18 landed earlier on this branch.

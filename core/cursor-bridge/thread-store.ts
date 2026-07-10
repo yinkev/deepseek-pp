@@ -28,6 +28,7 @@ export interface BridgeThreadStoreSnapshot {
   eyesCacheHits: number;
   lastPromptChars: number | null;
   lastSticky: 'hit' | 'miss' | null;
+  lastStreamDebug: unknown | null;
 }
 
 const STORAGE_KEY = 'cursorBridgeThreadStore';
@@ -50,6 +51,7 @@ const memory: BridgeThreadStoreSnapshot = {
   eyesCacheHits: 0,
   lastPromptChars: null,
   lastSticky: null,
+  lastStreamDebug: null,
 };
 
 let loaded = false;
@@ -169,6 +171,12 @@ export async function setBridgeLastError(message: string | null): Promise<void> 
   await persist();
 }
 
+export async function setLastStreamDebug(debug: unknown): Promise<void> {
+  const store = await loadBridgeThreadStore();
+  store.lastStreamDebug = debug;
+  await persist();
+}
+
 export async function getEyesCache(imageHash: string): Promise<string | null> {
   const store = await loadBridgeThreadStore();
   const entry = store.eyesCache[imageHash];
@@ -199,6 +207,7 @@ export async function getBridgeStatusSnapshot(): Promise<{
   eyesCacheHits: number;
   lastPromptChars: number | null;
   lastSticky: 'hit' | 'miss' | null;
+  lastStreamDebug: unknown | null;
 }> {
   const store = await loadBridgeThreadStore();
   const last = store.lastThreadId ? store.threads[store.lastThreadId] : null;
@@ -214,6 +223,7 @@ export async function getBridgeStatusSnapshot(): Promise<{
     eyesCacheHits: store.eyesCacheHits ?? 0,
     lastPromptChars: store.lastPromptChars ?? null,
     lastSticky: store.lastSticky ?? null,
+    lastStreamDebug: store.lastStreamDebug ?? null,
   };
 }
 
@@ -257,5 +267,6 @@ export function __resetBridgeThreadStoreForTests(): void {
   memory.eyesCacheHits = 0;
   memory.lastPromptChars = null;
   memory.lastSticky = null;
+  memory.lastStreamDebug = null;
   loaded = true;
 }

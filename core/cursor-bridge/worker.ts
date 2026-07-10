@@ -6,6 +6,7 @@ import {
   createPowHeadersForPath,
   DEEPSEEK_FILE_UPLOAD_PATH,
   DeepSeekAuthError,
+  getLastStreamParseDebug,
   readHistorySnapshot,
   submitPromptStreaming,
   uploadDeepSeekFile,
@@ -41,6 +42,7 @@ import {
   resolveThreadId,
   setBridgeLastError,
   setEyesCache,
+  setLastStreamDebug,
   simpleHash,
   type BridgeThreadRecord,
 } from './thread-store';
@@ -99,7 +101,7 @@ export async function runCursorBridgeJob(
   deps: CursorBridgeWorkerDeps,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-): Promise<{ text: string; threadId?: string; sticky?: boolean } | { error: CursorBridgeError }> {
+): Promise<{ text: string; threadId?: string; sticky?: boolean; streamDebug?: unknown } | { error: CursorBridgeError }> {
   try {
     let headers = await deps.loadClientHeaders();
     if (!headers && deps.refreshClientHeadersFromTabs) {
@@ -351,11 +353,16 @@ export async function runCursorBridgeJob(
       // no-op marker for tests/debug — sticky path already tried history
     }
 
+    try {
+      await setLastStreamDebug(getLastStreamParseDebug());
+    } catch {
+      // ignore debug store failures
+    }
     await putThread(record);
     await recordStickyOutcome(sticky, { promptChars: mainPrompt.length });
     await setBridgeLastError(null);
 
-    return { text, threadId, sticky };
+    return { text, threadId, sticky, streamDebug: getLastStreamParseDebug() };
   } catch (err) {
     if (err instanceof DeepSeekAuthError) {
       await setBridgeLastError(err.message);
