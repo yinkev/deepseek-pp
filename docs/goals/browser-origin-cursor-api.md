@@ -84,6 +84,9 @@ Agents **continue phases without re-asking** unless a stop condition hits. Phase
 
 ### Merge workflow
 
+**Full runbook (stash vs merge, checkpoints, nuclear replay, main reset):**  
+[`docs/UPSTREAM_UPDATE.md`](../UPSTREAM_UPDATE.md)
+
 ```bash
 cd /Users/kyin/Projects/deepseek-pp
 git fetch origin
