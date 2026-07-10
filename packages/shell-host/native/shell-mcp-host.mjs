@@ -1005,10 +1005,6 @@ function collectLocalSkillResources(rootPath, directory, skillBody, startingCont
     includedFiles.push({ path: candidate.path, bytes, content });
   }
 
-  if (omittedFiles.length > 0) {
-    warnings.push(`${omittedFiles.length} local supporting file(s) were omitted.`);
-  }
-
   return { includedFiles, omittedFiles, scriptFiles, warnings: dedupeStrings(warnings) };
 }
 

@@ -176,9 +176,10 @@ export const en = {
       referencedMode: 'Referenced folder',
       warningOverflow: '{count} more warnings',
       renamedBadge: 'Renamed',
-      resourceCount: '{count} resources',
+      resourceCount: '{count} bundled',
       scriptCount: '{count} scripts',
-      omittedCount: '{count} omitted',
+      omittedCount: '{count} on demand',
+      omittedExplanation: '{count} supporting files were not bundled into context because a count or size limit was reached. They were not deleted and remain available in the local Skill folder for on-demand reads through Shell MCP.',
       renamedNotice: '{count} Skills were renamed automatically because of naming conflicts.',
       meta: {
         skill: 'Skill',

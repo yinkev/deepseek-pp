@@ -266,10 +266,14 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
 function SourceSummary({ preview }: { preview: LocalSkillPreview }) {
   const { t } = useI18n();
   const { source } = preview;
+  const omittedCount = preview.skills.reduce((sum, skill) => sum + skill.omittedFiles.length, 0);
+  const sourceWarningSet = new Set(preview.warnings);
   const warnings = [
     ...preview.warnings,
-    ...preview.skills.flatMap((skill) => skill.warnings.map((warning) => `${skill.importName}: ${warning}`)),
-  ];
+    ...preview.skills.flatMap((skill) => skill.warnings
+      .filter((warning) => !sourceWarningSet.has(warning) && !isGenericOmissionWarning(warning))
+      .map((warning) => `${skill.importName}: ${warning}`)),
+  ].filter((warning) => !isGenericOmissionWarning(warning));
 
   return (
     <div className="ds-surface-panel rounded-xl p-3 space-y-2">
@@ -285,6 +289,11 @@ function SourceSummary({ preview }: { preview: LocalSkillPreview }) {
         <Meta label={t('sidepanel.localSkillImport.meta.skill')} value={String(preview.skills.length)} />
         <Meta label={t('sidepanel.localSkillImport.meta.mode')} value={t('sidepanel.localSkillImport.referencedMode')} />
       </div>
+      {omittedCount > 0 && (
+        <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed" style={{ color: 'var(--ds-info)', background: 'var(--ds-info-bg)' }}>
+          {t('sidepanel.localSkillImport.omittedExplanation', { count: omittedCount })}
+        </div>
+      )}
       {warnings.length > 0 && (
         <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed" style={{ color: 'var(--ds-warning)', background: 'var(--ds-warning-bg)' }}>
           {warnings.slice(0, 4).map((warning) => (
@@ -340,13 +349,22 @@ function PreviewSkillRow({ skill, checked, onToggle }: {
               <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.scriptCount', { count: skill.scriptFiles.length })}</span>
             )}
             {skill.omittedFiles.length > 0 && (
-              <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.omittedCount', { count: skill.omittedFiles.length })}</span>
+              <span
+                className="ds-tag px-1.5 py-0.5 rounded-full"
+                title={t('sidepanel.localSkillImport.omittedExplanation', { count: skill.omittedFiles.length })}
+              >
+                {t('sidepanel.localSkillImport.omittedCount', { count: skill.omittedFiles.length })}
+              </span>
             )}
           </div>
         </div>
       </div>
     </label>
   );
+}
+
+function isGenericOmissionWarning(warning: string): boolean {
+  return /^\d+ local supporting file\(s\) were omitted\.$/.test(warning.trim());
 }
 
 function StatusMessage({ state, message, result }: {

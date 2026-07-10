@@ -7,6 +7,7 @@ import {
   type PromptInjectionSettings,
 } from '../core/prompt/settings';
 import PromptControlPanel from '../entrypoints/sidepanel/components/PromptControlPanel';
+import LocalSkillImportPanel from '../entrypoints/sidepanel/components/LocalSkillImportPanel';
 import ChatPage from '../entrypoints/sidepanel/pages/ChatPage';
 import SavedPage from '../entrypoints/sidepanel/pages/SavedPage';
 
@@ -173,6 +174,55 @@ describe('sidepanel interactions', () => {
 
     expect(container.textContent).toContain('保存提示词设置失败：tabs permission unavailable');
     expect((memoryToggle as HTMLButtonElement).getAttribute('style')).toContain('var(--ds-blue)');
+  });
+
+  it('explains that non-bundled local Skill resources remain available on demand', async () => {
+    const legacyWarning = '13 local supporting file(s) were omitted.';
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type !== 'PREVIEW_LOCAL_SKILL_SOURCE') return null;
+      return {
+        source: {
+          id: 'local:demo',
+          provider: 'local',
+          rootPath: '/Users/me/.codex/skills/demo',
+          displayName: 'demo',
+          directoryName: 'demo',
+          skillPaths: ['SKILL.md'],
+          importedSkillNames: ['demo'],
+          importedAt: 1,
+          updatedAt: 1,
+          warnings: [legacyWarning],
+        },
+        skills: [{
+          path: 'SKILL.md',
+          name: 'demo',
+          importName: 'demo',
+          description: 'Demo Skill',
+          bytes: 64000,
+          bodyBytes: 6000,
+          includedFiles: Array.from({ length: 16 }, (_, index) => ({ path: `references/${index + 1}.md`, bytes: 100 })),
+          omittedFiles: Array.from({ length: 13 }, (_, index) => ({ path: `references/${index + 17}.md`, bytes: 100 })),
+          scriptFiles: [],
+          warnings: [legacyWarning],
+          nameChanged: false,
+        }],
+        warnings: [legacyWarning],
+        truncated: false,
+      };
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(LocalSkillImportPanel, {
+      onImported: vi.fn(),
+      onCancel: vi.fn(),
+    }));
+    await enterText('/Users/me/.codex/skills/my-skill', '/Users/me/.codex/skills/demo');
+    await clickButton('预览');
+    await flushPromises();
+
+    expect(container.textContent).toContain('按需读取 13');
+    expect(container.textContent).toContain('文件没有被删除');
+    expect(container.textContent).not.toContain(legacyWarning);
   });
 
   it('persists web model mode from sidepanel chat controls', async () => {

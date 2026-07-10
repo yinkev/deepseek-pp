@@ -176,9 +176,10 @@ export const zhCN = {
       referencedMode: '引用文件夹',
       warningOverflow: '还有 {count} 条警告',
       renamedBadge: '已改名',
-      resourceCount: '资源 {count}',
+      resourceCount: '已内嵌 {count}',
       scriptCount: '脚本 {count}',
-      omittedCount: '省略 {count}',
+      omittedCount: '按需读取 {count}',
+      omittedExplanation: '另有 {count} 个支持文件因数量或大小上限未嵌入上下文。文件没有被删除，仍保留在本地 Skill 目录，可通过 Shell MCP 按需读取。',
       renamedNotice: '有 {count} 个 Skill 因命名冲突自动加后缀。',
       meta: {
         skill: 'Skill',

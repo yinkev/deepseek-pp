@@ -71,7 +71,16 @@ describe('MCP execution policy', () => {
                 name: 'sample_tool',
                 title: 'Sample Tool',
                 description: 'Sample MCP tool.',
-                inputSchema: { type: 'object', properties: {} },
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    group: {
+                      type: 'string',
+                      enum: ['playwright', 'filesystem'],
+                    },
+                  },
+                  required: ['group'],
+                },
               }],
             }
           : { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {} } },
@@ -96,6 +105,10 @@ describe('MCP execution policy', () => {
 
     expect(cache.health.status).toBe('ready');
     expect(cache.descriptors.map((descriptor) => descriptor.name)).toEqual(['sample_tool']);
+    expect(cache.descriptors[0].inputSchema.properties?.group).toEqual({
+      type: 'string',
+      enum: ['playwright', 'filesystem'],
+    });
     expect(requests.map((request) => request.method)).toEqual([
       'initialize',
       'notifications/initialized',

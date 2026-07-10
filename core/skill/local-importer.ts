@@ -445,7 +445,7 @@ function buildLocalImportedInstructions(input: {
     parsed.lastUpdated ? `- Upstream updated: ${parsed.lastUpdated}` : '',
     `- Bundled supporting files: ${resources.length}`,
     scriptFiles.length > 0 ? `- Local executable/script files: ${scriptFiles.length}` : '',
-    omittedFiles.length > 0 ? `- Omitted supporting files: ${omittedFiles.length}` : '',
+    omittedFiles.length > 0 ? `- Supporting files available on demand: ${omittedFiles.length}` : '',
   ].filter(Boolean).join('\n');
 
   const executionBoundary = [
@@ -485,9 +485,9 @@ function buildLocalImportedInstructions(input: {
   ].join('\n\n');
 
   const omitted = omittedFiles.length === 0 ? '' : [
-    '## Omitted Supporting Files',
+    '## Supporting Files Available on Demand',
     '',
-    'These files were not bundled into the prompt because of count, size, or type limits. Inspect the local directory when needed.',
+    'These files remain in the referenced local Skill directory and were not bundled into the prompt because of count or size limits. Read them with Shell MCP when the upstream instructions need them.',
     '',
     ...omittedFiles.map((file) => `- ${relativeToSkillDirectory(file.path, directory)} (${file.bytes} bytes)`),
   ].join('\n');

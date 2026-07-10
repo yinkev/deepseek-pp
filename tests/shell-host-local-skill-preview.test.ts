@@ -34,6 +34,20 @@ describe('shell native host local_skill_preview', () => {
       expect.objectContaining({ path: 'nested/scripts/run.py' }),
     ]);
   });
+
+  it('returns excess supporting files as structured on-demand resources without a generic warning', async () => {
+    const root = createLargeResourceSkillFixture();
+    const response = await callNativeHost('local_skill_preview', { rootPath: root });
+
+    expect(response.error).toBeUndefined();
+    const data = response.result?.structuredContent?.data;
+    const skill = data.skills[0];
+    expect(skill.includedFiles).toHaveLength(16);
+    expect(skill.omittedFiles).toHaveLength(13);
+    expect(skill.omittedFiles[0]).toMatchObject({ path: 'references/17.md' });
+    expect(data.warnings).not.toContain('13 local supporting file(s) were omitted.');
+    expect(existsSync(join(root, 'references/29.md'))).toBe(true);
+  });
 });
 
 describe('shell native host local_folder_pick', () => {
@@ -161,6 +175,25 @@ function createNestedSkillFixture(): string {
   writeFileSync(join(root, 'nested/references/child.md'), 'Child reference.');
   writeFileSync(join(root, 'nested/scripts/run.py'), 'print("child")\n');
 
+  return root;
+}
+
+function createLargeResourceSkillFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), 'deepseek-pp-local-skill-large-'));
+  tempRoots.push(root);
+  mkdirSync(join(root, 'references'), { recursive: true });
+  writeFileSync(join(root, 'SKILL.md'), [
+    '---',
+    'name: large-resource-skill',
+    'description: Large resource Skill',
+    '---',
+    '',
+    'Use supporting references when needed.',
+  ].join('\n'));
+  for (let index = 1; index <= 29; index += 1) {
+    const filename = String(index).padStart(2, '0') + '.md';
+    writeFileSync(join(root, 'references', filename), `Reference ${index}.`);
+  }
   return root;
 }
 

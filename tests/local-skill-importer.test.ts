@@ -180,6 +180,22 @@ describe('local Skill importer', () => {
     expect(imported.instructions).not.toContain('### nested/references/child.md');
   });
 
+  it('describes non-bundled local resources as available on demand', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+
+    const result = await importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills/demo',
+      selectedPaths: ['SKILL.md'],
+    });
+
+    const imported = result.imported[0];
+    expect(imported.instructions).toContain('Supporting files available on demand: 1');
+    expect(imported.instructions).toContain('## Supporting Files Available on Demand');
+    expect(imported.instructions).toContain('Read them with Shell MCP when the upstream instructions need them.');
+    expect(imported.instructions).toContain('- references/extended-guide.md (2048 bytes)');
+    expect(imported.instructions).not.toContain('## Omitted Supporting Files');
+  });
+
   it('imports a BOM-prefixed SKILL.md without losing the frontmatter name (issue #296)', async () => {
     // Editors on Windows commonly save SKILL.md with a UTF-8 BOM. Previously
     // the BOM defeated the `^---` frontmatter fence, `name:` was dropped, and
@@ -398,6 +414,26 @@ function createNestedLocalSkillToolResult() {
             warnings: [],
           },
         ],
+      },
+    },
+  };
+}
+
+function createLocalSkillWithOnDemandResourceToolResult() {
+  const result = createLocalSkillToolResult();
+  return {
+    ...result,
+    output: {
+      ...result.output,
+      data: {
+        ...result.output.data,
+        skills: [{
+          ...result.output.data.skills[0],
+          omittedFiles: [{
+            path: 'references/extended-guide.md',
+            bytes: 2048,
+          }],
+        }],
       },
     },
   };
