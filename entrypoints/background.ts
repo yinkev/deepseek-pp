@@ -209,6 +209,8 @@ import {
   loadClientHeadersFromStorage,
   uploadDeepSeekFile,
 } from '../core/deepseek/adapter';
+// Thin hook: browser-origin Cursor API bridge (isolated package; survives upstream merges).
+import { startCursorBridgeRuntime } from '../core/cursor-bridge';
 import {
   submitOfficialDeepSeekStreaming,
   type OfficialDeepSeekMessage,
@@ -307,6 +309,14 @@ export default defineBackground(() => {
   ensureAutomationWakeAlarm().catch((error) => reportBackgroundStartupError('automation_alarm_create_failed', error));
   reconcileInterruptedChatLoopOnWake().catch((error) => reportBackgroundStartupError('chat_loop_reconcile_failed', error));
   scanDueAutomationsFromWake().catch((error) => reportBackgroundStartupError('automation_startup_scan_failed', error));
+  // Local Cursor bridge: native host OpenAI surface → extension → DeepSeek web path.
+  startCursorBridgeRuntime({
+    deps: {
+      loadClientHeaders: () => loadClientHeadersFromStorage(),
+      refreshClientHeadersFromTabs: () => refreshClientHeadersFromDeepSeekTabs(),
+    },
+    onLog: (message) => reportBackgroundStartupError('cursor_bridge', message),
+  });
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleMessage(message, sender)

@@ -1,0 +1,20 @@
+{
+  "name": "deepseek-pp-cursor-bridge-host",
+  "version": "1.0.9",
+  "description": "Native Messaging + localhost OpenAI bridge host for DeepSeek++ browser-origin Cursor API",
+  "type": "module",
+  "private": true,
+  "license": "Apache-2.0",
+  "bin": {
+    "deepseek-pp-cursor-bridge-host": "bin/deepseek-pp-cursor-bridge-host.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "native/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  }
+}

@@ -112,22 +112,22 @@ If conflicts explode: re-apply portable packages on a fresh branch from new `ori
 
 ### Phase 1 — design freeze
 
-- [ ] Choose transport: Native Messaging host HTTP vs extension-local only (default: **native host HTTP** on localhost; extension as worker)
-- [ ] Define job schema: request id, messages, model, stream flag, error codes
-- [ ] Define readiness: tab present, logged in, extension alive
+- [x] Choose transport: Native Messaging host HTTP vs extension-local only (default: **native host HTTP** on localhost; extension as worker)
+- [x] Define job schema: request id, messages, model, stream flag, error codes
+- [x] Define readiness: tab present, logged in, extension alive
 
 ### Phase 2 — vertical slice
 
-- [ ] `/v1/models` readiness-aware
-- [ ] Non-stream completion browser-origin
-- [ ] Stream completion
-- [ ] CLIProxyAPI provider row (disabled until healthy)
+- [x] `/v1/models` readiness-aware
+- [x] Non-stream completion browser-origin
+- [x] Stream completion
+- [x] CLIProxyAPI provider row (disabled until healthy) — documented in docs/cursor-bridge-try-it-out.md
 
 ### Phase 3 — hardening
 
-- [ ] Missing-tab / missing-login errors
-- [ ] Concurrency policy (single flight vs queue)
-- [ ] No synthetic probe prompts in docs/scripts
+- [x] Missing-tab / missing-login errors
+- [x] Concurrency policy (single flight vs queue) — single-flight busy 503
+- [x] No synthetic probe prompts in docs/scripts
 - [ ] Upstream merge dry-run documented with evidence
 
 ## Non-goals reminder
@@ -139,7 +139,7 @@ This is **not** “add API base URL settings that point sidepanel chat at a side
 | Path | Role |
 |---|---|
 | `/Users/kyin/Projects/deepseek-pp` | **Only** working tree for this goal |
-| `packages/cursor-bridge-host`, `core/cursor-bridge` | Future isolated bridge code (not yet implemented) |
+| `packages/cursor-bridge-host`, `core/cursor-bridge` | Implemented isolated bridge packages |
 | `/Users/kyin/cliproxyapi` | CLIProxyAPI runtime; DeepSeekWeb/:8327 removed from live config |
 | `packages/shell-host` | Existing native messaging pattern to learn from — not for headless DeepSeek web |
 
