@@ -671,6 +671,7 @@ async function handleMessage(
 
     case 'IMPORT_LOCAL_SKILL_SOURCE': {
       const result = await importLocalSkillSource(message.payload as LocalSkillImportRequest);
+      if (!result.ok) return result;
       await broadcastStateUpdate(sender.tab?.id);
       return result;
     }

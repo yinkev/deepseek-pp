@@ -399,6 +399,16 @@ export interface GitHubSkillImportResult {
   warnings: string[];
 }
 
+export type LocalSkillImportBlockCode =
+  | 'shell_host_update_required'
+  | 'shell_reader_unavailable'
+  | 'shell_discovery_failed';
+
+export interface LocalSkillImportBlock {
+  code: LocalSkillImportBlockCode;
+  detail?: string;
+}
+
 export interface LocalSkillPreviewItem {
   path: string;
   name: string;
@@ -412,6 +422,7 @@ export interface LocalSkillPreviewItem {
   omittedFiles: RemoteSkillFile[];
   scriptFiles: RemoteSkillFile[];
   warnings: string[];
+  importBlock?: LocalSkillImportBlock;
   nameChanged: boolean;
   existingSkillName?: string;
   existingSourceId?: string;
@@ -427,6 +438,7 @@ export interface LocalSkillPreview {
 export interface LocalSkillImportRequest {
   rootPath: string;
   selectedPaths: string[];
+  selectedImportNames?: Record<string, string>;
 }
 
 export interface LocalSkillImportResult {
@@ -437,6 +449,14 @@ export interface LocalSkillImportResult {
   renamed: number;
   warnings: string[];
 }
+
+export interface LocalSkillImportFailure {
+  ok: false;
+  error: string;
+  importBlock: LocalSkillImportBlock;
+}
+
+export type LocalSkillImportResponse = LocalSkillImportResult | LocalSkillImportFailure;
 
 export interface GitHubSkillUpdatePreview {
   source: GitHubSkillSource;

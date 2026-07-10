@@ -8,13 +8,15 @@ vi.mock('../core/mcp/store', () => ({
 
 vi.mock('../core/mcp/discovery', () => ({
   executeMcpToolCall: vi.fn(),
+  getMcpToolDescriptors: vi.fn(),
   refreshMcpServerDiscovery: vi.fn(),
 }));
 
-import { executeMcpToolCall, refreshMcpServerDiscovery } from '../core/mcp/discovery';
+import { executeMcpToolCall, getMcpToolDescriptors, refreshMcpServerDiscovery } from '../core/mcp/discovery';
 import { getAllMcpServers, updateMcpServer } from '../core/mcp/store';
-import type { McpServerConfig } from '../core/mcp/types';
+import type { McpServerConfig, McpToolCacheEntry } from '../core/mcp/types';
 import { importLocalSkillSource, pickLocalSkillFolder, previewLocalSkillSource } from '../core/skill/local-importer';
+import type { LocalSkillImportResponse, LocalSkillImportResult } from '../core/types';
 
 const SKILL_STORAGE_KEY = 'deepseek_pp_skills';
 
@@ -44,6 +46,7 @@ beforeEach(() => {
     allowlist: patch.allowlist ?? shellServer.allowlist,
   }));
   vi.mocked(refreshMcpServerDiscovery).mockResolvedValue({} as never);
+  vi.mocked(getMcpToolDescriptors).mockResolvedValue([]);
   vi.mocked(executeMcpToolCall).mockResolvedValue(createLocalSkillToolResult());
 });
 
@@ -141,6 +144,7 @@ describe('local Skill importer', () => {
       rootPath: '/Users/me/.codex/skills/demo',
       selectedPaths: ['SKILL.md'],
     });
+    expectImportSuccess(result);
 
     expect(result.imported).toHaveLength(1);
     expect(result.imported[0].remote).toMatchObject({
@@ -165,6 +169,7 @@ describe('local Skill importer', () => {
       rootPath: '/Users/me/.codex/skills',
       selectedPaths: ['nested/SKILL.md'],
     });
+    expectImportSuccess(result);
 
     const imported = result.imported[0];
     expect(imported.remote).toMatchObject({
@@ -178,6 +183,148 @@ describe('local Skill importer', () => {
     expect(imported.instructions).toContain('### references/child.md');
     expect(imported.instructions).not.toContain('- nested/scripts/run.py');
     expect(imported.instructions).not.toContain('### nested/references/child.md');
+  });
+
+  it('describes non-bundled local resources as available on demand', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+    const discovery = createShellDiscovery(['local_file_read'], true, null, 'auto');
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(discovery);
+    vi.mocked(getMcpToolDescriptors).mockResolvedValueOnce(discovery.descriptors);
+
+    const result = await importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills/demo',
+      selectedPaths: ['SKILL.md'],
+    });
+    expectImportSuccess(result);
+
+    const imported = result.imported[0];
+    expect(imported.instructions).toContain('Supporting files available on demand: 1');
+    expect(imported.instructions).toContain('## Supporting Files Available on Demand');
+    expect(imported.instructions).toContain('Read them with Shell MCP when the upstream instructions need them.');
+    expect(imported.instructions).toContain('- references/extended-guide.md (2048 bytes)');
+    expect(imported.instructions).not.toContain('## Omitted Supporting Files');
+  });
+
+  it('keeps preview available but blocks affected Skills on stale Shell Hosts', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(createShellDiscovery(['local_skill_preview', 'shell_exec']));
+
+    const preview = await previewLocalSkillSource('/Users/me/.codex/skills/demo');
+
+    expect(preview.skills[0].importBlock).toEqual({
+      code: 'shell_host_update_required',
+    });
+  });
+
+  it('rejects on-demand imports when local_file_read is disabled by policy', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(createShellDiscovery(['local_file_read'], false, null, 'auto'));
+
+    await expect(importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills/demo',
+      selectedPaths: ['SKILL.md'],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('not available to chat'),
+      importBlock: {
+        code: 'shell_reader_unavailable',
+      },
+    });
+  });
+
+  it('rejects manual readers that are not injected into the chat prompt', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(createShellDiscovery(['local_file_read']));
+
+    await expect(importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills/demo',
+      selectedPaths: ['SKILL.md'],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('execution mode to Auto'),
+      importBlock: {
+        code: 'shell_reader_unavailable',
+      },
+    });
+  });
+
+  it('accepts an enabled auto shell_exec fallback on older Shell Hosts', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+    const discovery = createShellDiscovery(['local_skill_preview', 'shell_exec'], true, null, 'auto');
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(discovery);
+    vi.mocked(getMcpToolDescriptors).mockResolvedValueOnce(
+      discovery.descriptors.filter((descriptor) => descriptor.name === 'shell_exec'),
+    );
+
+    await expect(previewLocalSkillSource('/Users/me/.codex/skills/demo')).resolves.toMatchObject({
+      skills: [expect.objectContaining({
+        omittedFiles: [expect.any(Object)],
+        importBlock: undefined,
+      })],
+    });
+  });
+
+  it('surfaces Shell discovery failures while checking on-demand resource support', async () => {
+    vi.mocked(executeMcpToolCall).mockResolvedValueOnce(createLocalSkillWithOnDemandResourceToolResult());
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(createShellDiscovery([], true, 'native host disconnected'));
+
+    await expect(importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills/demo',
+      selectedPaths: ['SKILL.md'],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('native host disconnected'),
+      importBlock: {
+        code: 'shell_discovery_failed',
+        detail: 'native host disconnected',
+      },
+    });
+  });
+
+  it('allows safe selections when a sibling Skill needs an unavailable reader', async () => {
+    vi.mocked(executeMcpToolCall)
+      .mockResolvedValueOnce(createMixedLocalSkillToolResult())
+      .mockResolvedValueOnce(createSafeLocalSkillToolResult());
+    vi.mocked(refreshMcpServerDiscovery).mockResolvedValueOnce(
+      createShellDiscovery(['local_skill_preview', 'shell_exec']),
+    );
+
+    const preview = await previewLocalSkillSource('/Users/me/.codex/skills/demo');
+
+    expect(preview.skills).toEqual([
+      expect.objectContaining({
+        path: 'SKILL.md',
+        importName: 'demo-local',
+        importBlock: {
+          code: 'shell_host_update_required',
+        },
+      }),
+      expect.objectContaining({
+        path: 'safe/SKILL.md',
+        importName: 'demo-local-2',
+        importBlock: undefined,
+      }),
+    ]);
+
+    const result = await importLocalSkillSource({
+      rootPath: '/Users/me/.codex/skills/demo',
+      selectedPaths: ['safe/SKILL.md'],
+      selectedImportNames: {
+        'safe/SKILL.md': preview.skills[1].importName,
+      },
+    });
+    expectImportSuccess(result);
+
+    expect(result.imported).toEqual([
+      expect.objectContaining({ name: preview.skills[1].importName }),
+    ]);
+    expect(refreshMcpServerDiscovery).toHaveBeenCalledTimes(1);
+    expect(executeMcpToolCall).toHaveBeenLastCalledWith(expect.objectContaining({
+      payload: {
+        rootPath: '/Users/me/.codex/skills/demo',
+        selectedPaths: ['safe/SKILL.md'],
+      },
+    }));
   });
 
   it('imports a BOM-prefixed SKILL.md without losing the frontmatter name (issue #296)', async () => {
@@ -226,6 +373,7 @@ describe('local Skill importer', () => {
       rootPath: 'D:\\skills\\ref-material-writing',
       selectedPaths: ['SKILL.md'],
     });
+    expectImportSuccess(result);
 
     expect(result.imported).toHaveLength(1);
     expect(result.imported[0].name).toBe('ref-material-writing');
@@ -268,11 +416,19 @@ describe('local Skill importer', () => {
       rootPath: 'D:\\写作助手',
       selectedPaths: ['SKILL.md'],
     });
+    expectImportSuccess(result);
 
     expect(result.imported).toHaveLength(1);
     expect(result.imported[0].name).toMatch(/^skill-[a-z0-9]{2,8}$/);
   });
 });
+
+function expectImportSuccess(
+  response: LocalSkillImportResponse,
+): asserts response is LocalSkillImportResult {
+  expect(response.ok).toBe(true);
+  if (!response.ok) throw new Error(response.error);
+}
 
 function createShellServer(toolNames: string[]): McpServerConfig {
   return {
@@ -399,6 +555,116 @@ function createNestedLocalSkillToolResult() {
           },
         ],
       },
+    },
+  };
+}
+
+function createLocalSkillWithOnDemandResourceToolResult() {
+  const result = createLocalSkillToolResult();
+  return {
+    ...result,
+    output: {
+      ...result.output,
+      data: {
+        ...result.output.data,
+        skills: [{
+          ...result.output.data.skills[0],
+          omittedFiles: [{
+            path: 'references/extended-guide.md',
+            bytes: 2048,
+          }],
+        }],
+      },
+    },
+  };
+}
+
+function createMixedLocalSkillToolResult() {
+  const result = createLocalSkillWithOnDemandResourceToolResult();
+  const safeContent = [
+    '---',
+    'name: demo-local',
+    'description: Safe local Skill',
+    '---',
+    '',
+    '# Safe',
+  ].join('\n');
+  return {
+    ...result,
+    output: {
+      ...result.output,
+      data: {
+        ...result.output.data,
+        skills: [
+          ...result.output.data.skills,
+          {
+            path: 'safe/SKILL.md',
+            directory: 'safe',
+            directoryPath: '/Users/me/.codex/skills/demo/safe',
+            content: safeContent,
+            bodyBytes: safeContent.length,
+            includedFiles: [],
+            omittedFiles: [],
+            scriptFiles: [],
+            warnings: [],
+          },
+        ],
+      },
+    },
+  };
+}
+
+function createSafeLocalSkillToolResult() {
+  const result = createMixedLocalSkillToolResult();
+  return {
+    ...result,
+    output: {
+      ...result.output,
+      data: {
+        ...result.output.data,
+        skills: result.output.data.skills.filter((skill) => skill.path === 'safe/SKILL.md'),
+      },
+    },
+  };
+}
+
+function createShellDiscovery(
+  toolNames: string[],
+  enabled = true,
+  error: string | null = null,
+  mode: 'auto' | 'manual' = 'manual',
+): McpToolCacheEntry {
+  const now = Date.now();
+  return {
+    serverId: 'shell-local',
+    descriptors: toolNames.map((name) => ({
+      id: `mcp:shell-local:${name}`,
+      provider: {
+        kind: 'mcp' as const,
+        id: 'shell-local',
+        displayName: SHELL_MCP_SERVER_NAME,
+        transport: 'native_messaging' as const,
+      },
+      name,
+      invocationName: name,
+      title: name,
+      description: name,
+      inputSchema: { type: 'object', properties: {} },
+      execution: {
+        enabled,
+        mode,
+        risk: 'low' as const,
+      },
+    })),
+    refreshedAt: now,
+    expiresAt: now + 60_000,
+    health: {
+      serverId: 'shell-local',
+      status: error ? 'error' : 'ready',
+      checkedAt: now,
+      latencyMs: 1,
+      toolCount: toolNames.length,
+      error,
     },
   };
 }

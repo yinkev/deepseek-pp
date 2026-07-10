@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type {
   LocalSkillImportResult,
+  LocalSkillImportBlock,
   LocalSkillPreview,
   LocalSkillPreviewItem,
 } from '../../../core/types';
@@ -26,10 +27,21 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
   const previewRequestIdRef = useRef(0);
 
   const selectedCount = selectedPaths.size;
-  const allSelected = preview ? preview.skills.length > 0 && selectedCount === preview.skills.length : false;
+  const selectablePaths = useMemo(() => new Set(
+    preview?.skills
+      .filter((skill) => !skill.importBlock)
+      .map((skill) => skill.path) ?? [],
+  ), [preview]);
+  const allSelected = selectablePaths.size > 0 &&
+    [...selectablePaths].every((path) => selectedPaths.has(path));
   const canPreview = rootPath.trim().length > 0 && state !== 'previewing' && state !== 'importing' && !picking;
   const canPick = state !== 'previewing' && state !== 'importing' && !picking;
-  const canImport = Boolean(preview) && selectedCount > 0 && state !== 'importing' && state !== 'previewing' && !picking;
+  const canImport = Boolean(preview) &&
+    selectedCount > 0 &&
+    [...selectedPaths].every((path) => selectablePaths.has(path)) &&
+    state !== 'importing' &&
+    state !== 'previewing' &&
+    !picking;
 
   const selectedBytes = useMemo(() => {
     if (!preview) return 0;
@@ -56,7 +68,11 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
       if (requestId !== previewRequestIdRef.current || latestPathRef.current.trim() !== requestedPath) return;
       const nextPreview = response as LocalSkillPreview;
       setPreview(nextPreview);
-      setSelectedPaths(new Set(nextPreview.skills.map((skill) => skill.path)));
+      setSelectedPaths(new Set(
+        nextPreview.skills
+          .filter((skill) => !skill.importBlock)
+          .map((skill) => skill.path),
+      ));
       setState('ready');
     } catch (error) {
       if (requestId !== previewRequestIdRef.current || latestPathRef.current.trim() !== requestedPath) return;
@@ -107,9 +123,18 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
         payload: {
           rootPath: rootPath.trim(),
           selectedPaths: [...selectedPaths],
+          selectedImportNames: Object.fromEntries(
+            preview.skills
+              .filter((skill) => selectedPaths.has(skill.path))
+              .map((skill) => [skill.path, skill.importName]),
+          ),
         },
       });
-      if (response?.ok === false) throw new Error(response.error ?? t('sidepanel.localSkillImport.importFailed'));
+      if (response?.ok === false) {
+        const importBlock = readLocalSkillImportBlock(response.importBlock);
+        if (importBlock) throw new Error(formatImportBlockMessage(importBlock, t));
+        throw new Error(response.error ?? t('sidepanel.localSkillImport.importFailed'));
+      }
       const importResult = response as LocalSkillImportResult;
       setResult(importResult);
       setState('success');
@@ -122,6 +147,7 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
   };
 
   const togglePath = (path: string) => {
+    if (!selectablePaths.has(path)) return;
     setSelectedPaths((current) => {
       const next = new Set(current);
       if (next.has(path)) next.delete(path);
@@ -132,7 +158,7 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
 
   const toggleAll = () => {
     if (!preview) return;
-    setSelectedPaths(allSelected ? new Set() : new Set(preview.skills.map((skill) => skill.path)));
+    setSelectedPaths(allSelected ? new Set() : new Set(selectablePaths));
   };
 
   return (
@@ -266,10 +292,17 @@ export default function LocalSkillImportPanel({ onImported, onCancel }: Props) {
 function SourceSummary({ preview }: { preview: LocalSkillPreview }) {
   const { t } = useI18n();
   const { source } = preview;
+  const omittedCount = preview.skills.reduce((sum, skill) => sum + skill.omittedFiles.length, 0);
+  const unavailableOmittedCount = preview.skills
+    .filter((skill) => skill.importBlock)
+    .reduce((sum, skill) => sum + skill.omittedFiles.length, 0);
+  const sourceWarningSet = new Set(preview.warnings);
   const warnings = [
     ...preview.warnings,
-    ...preview.skills.flatMap((skill) => skill.warnings.map((warning) => `${skill.importName}: ${warning}`)),
-  ];
+    ...preview.skills.flatMap((skill) => skill.warnings
+      .filter((warning) => !sourceWarningSet.has(warning) && !isGenericOmissionWarning(warning))
+      .map((warning) => `${skill.importName}: ${warning}`)),
+  ].filter((warning) => !isGenericOmissionWarning(warning));
 
   return (
     <div className="ds-surface-panel rounded-xl p-3 space-y-2">
@@ -285,6 +318,16 @@ function SourceSummary({ preview }: { preview: LocalSkillPreview }) {
         <Meta label={t('sidepanel.localSkillImport.meta.skill')} value={String(preview.skills.length)} />
         <Meta label={t('sidepanel.localSkillImport.meta.mode')} value={t('sidepanel.localSkillImport.referencedMode')} />
       </div>
+      {omittedCount > 0 && (
+        <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed" style={{ color: 'var(--ds-info)', background: 'var(--ds-info-bg)' }}>
+          {t(
+            unavailableOmittedCount > 0
+              ? 'sidepanel.localSkillImport.omittedUnavailableExplanation'
+              : 'sidepanel.localSkillImport.omittedExplanation',
+            { count: omittedCount },
+          )}
+        </div>
+      )}
       {warnings.length > 0 && (
         <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed" style={{ color: 'var(--ds-warning)', background: 'var(--ds-warning-bg)' }}>
           {warnings.slice(0, 4).map((warning) => (
@@ -303,13 +346,18 @@ function PreviewSkillRow({ skill, checked, onToggle }: {
   onToggle: () => void;
 }) {
   const { t } = useI18n();
+  const blocked = Boolean(skill.importBlock);
+  const blockInstructions = skill.importBlock
+    ? getImportBlockInstructions(skill.importBlock, t)
+    : '';
 
   return (
-    <label className="ds-card rounded-xl p-3 block cursor-pointer">
+    <label className={`ds-card rounded-xl p-3 block ${blocked ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'}`}>
       <div className="flex items-start gap-3">
         <input
           type="checkbox"
           checked={checked}
+          disabled={blocked}
           onChange={onToggle}
           className="mt-1 w-4 h-4"
         />
@@ -340,13 +388,86 @@ function PreviewSkillRow({ skill, checked, onToggle }: {
               <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.scriptCount', { count: skill.scriptFiles.length })}</span>
             )}
             {skill.omittedFiles.length > 0 && (
-              <span className="ds-tag px-1.5 py-0.5 rounded-full">{t('sidepanel.localSkillImport.omittedCount', { count: skill.omittedFiles.length })}</span>
+              <span
+                className="ds-tag px-1.5 py-0.5 rounded-full"
+                title={t(
+                  blocked
+                    ? 'sidepanel.localSkillImport.omittedUnavailableExplanation'
+                    : 'sidepanel.localSkillImport.omittedExplanation',
+                  { count: skill.omittedFiles.length },
+                )}
+              >
+                {t(
+                  blocked
+                    ? 'sidepanel.localSkillImport.notBundledCount'
+                    : 'sidepanel.localSkillImport.omittedCount',
+                  { count: skill.omittedFiles.length },
+                )}
+              </span>
             )}
           </div>
+          {skill.importBlock && (
+            <div className="mt-2 rounded-lg px-2.5 py-2 text-[10px] leading-relaxed" style={{ color: 'var(--ds-warning)', background: 'var(--ds-warning-bg)' }}>
+              <div className="font-medium">{t('sidepanel.localSkillImport.readerUnavailable')}</div>
+              <div className="mt-0.5">{blockInstructions}</div>
+              {skill.importBlock.detail && (
+                <div className="mt-0.5 opacity-80">
+                  {t('sidepanel.localSkillImport.readerTechnicalDetail', { detail: skill.importBlock.detail })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </label>
   );
+}
+
+function getImportBlockInstructions(
+  block: LocalSkillImportBlock,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  switch (block.code) {
+    case 'shell_host_update_required':
+      return t('sidepanel.localSkillImport.readerActions.updateHost');
+    case 'shell_reader_unavailable':
+      return t('sidepanel.localSkillImport.readerActions.enableReader');
+    case 'shell_discovery_failed':
+      return t('sidepanel.localSkillImport.readerActions.checkConnection');
+  }
+}
+
+function formatImportBlockMessage(
+  block: LocalSkillImportBlock,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  return [
+    t('sidepanel.localSkillImport.readerUnavailable'),
+    getImportBlockInstructions(block, t),
+    block.detail
+      ? t('sidepanel.localSkillImport.readerTechnicalDetail', { detail: block.detail })
+      : '',
+  ].filter(Boolean).join(' ');
+}
+
+function readLocalSkillImportBlock(value: unknown): LocalSkillImportBlock | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as { code?: unknown; detail?: unknown };
+  if (
+    candidate.code !== 'shell_host_update_required' &&
+    candidate.code !== 'shell_reader_unavailable' &&
+    candidate.code !== 'shell_discovery_failed'
+  ) return null;
+  return {
+    code: candidate.code,
+    ...(typeof candidate.detail === 'string' && candidate.detail
+      ? { detail: candidate.detail }
+      : {}),
+  };
+}
+
+function isGenericOmissionWarning(warning: string): boolean {
+  return /^\d+ local supporting file\(s\) were omitted\.$/.test(warning.trim());
 }
 
 function StatusMessage({ state, message, result }: {

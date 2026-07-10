@@ -7,6 +7,7 @@ import {
   type PromptInjectionSettings,
 } from '../core/prompt/settings';
 import PromptControlPanel from '../entrypoints/sidepanel/components/PromptControlPanel';
+import LocalSkillImportPanel from '../entrypoints/sidepanel/components/LocalSkillImportPanel';
 import ChatPage from '../entrypoints/sidepanel/pages/ChatPage';
 import SavedPage from '../entrypoints/sidepanel/pages/SavedPage';
 
@@ -173,6 +174,219 @@ describe('sidepanel interactions', () => {
 
     expect(container.textContent).toContain('保存提示词设置失败：tabs permission unavailable');
     expect((memoryToggle as HTMLButtonElement).getAttribute('style')).toContain('var(--ds-blue)');
+  });
+
+  it('explains that non-bundled local Skill resources remain available on demand', async () => {
+    const legacyWarning = '13 local supporting file(s) were omitted.';
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type !== 'PREVIEW_LOCAL_SKILL_SOURCE') return null;
+      return {
+        source: {
+          id: 'local:demo',
+          provider: 'local',
+          rootPath: '/Users/me/.codex/skills/demo',
+          displayName: 'demo',
+          directoryName: 'demo',
+          skillPaths: ['SKILL.md'],
+          importedSkillNames: ['demo'],
+          importedAt: 1,
+          updatedAt: 1,
+          warnings: [legacyWarning],
+        },
+        skills: [{
+          path: 'SKILL.md',
+          name: 'demo',
+          importName: 'demo',
+          description: 'Demo Skill',
+          bytes: 64000,
+          bodyBytes: 6000,
+          includedFiles: Array.from({ length: 16 }, (_, index) => ({ path: `references/${index + 1}.md`, bytes: 100 })),
+          omittedFiles: Array.from({ length: 13 }, (_, index) => ({ path: `references/${index + 17}.md`, bytes: 100 })),
+          scriptFiles: [],
+          warnings: [legacyWarning],
+          nameChanged: false,
+        }],
+        warnings: [legacyWarning],
+        truncated: false,
+      };
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(LocalSkillImportPanel, {
+      onImported: vi.fn(),
+      onCancel: vi.fn(),
+    }));
+    await enterText('/Users/me/.codex/skills/my-skill', '/Users/me/.codex/skills/demo');
+    await clickButton('预览');
+    await flushPromises();
+
+    expect(container.textContent).toContain('按需读取 13');
+    expect(container.textContent).toContain('文件没有被删除');
+    expect(container.textContent).not.toContain(legacyWarning);
+  });
+
+  it('keeps safe local Skills selectable when a sibling needs an unavailable reader', async () => {
+    const source = {
+      id: 'local:demo',
+      provider: 'local' as const,
+      rootPath: '/Users/me/.codex/skills/demo',
+      displayName: 'demo',
+      directoryName: 'demo',
+      skillPaths: ['blocked/SKILL.md', 'safe/SKILL.md'],
+      importedSkillNames: ['blocked', 'safe'],
+      importedAt: 1,
+      updatedAt: 1,
+      warnings: [],
+    };
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'PREVIEW_LOCAL_SKILL_SOURCE') {
+        return {
+          source,
+          skills: [
+            {
+              path: 'blocked/SKILL.md',
+              name: 'blocked',
+              importName: 'blocked',
+              description: 'Needs an on-demand reader',
+              bytes: 64000,
+              bodyBytes: 6000,
+              includedFiles: Array.from({ length: 16 }, (_, index) => ({ path: `blocked/references/${index + 1}.md`, bytes: 100 })),
+              omittedFiles: [{ path: 'blocked/references/17.md', bytes: 100 }],
+              scriptFiles: [],
+              warnings: [],
+              importBlock: {
+                code: 'shell_reader_unavailable',
+              },
+              nameChanged: false,
+            },
+            {
+              path: 'safe/SKILL.md',
+              name: 'safe',
+              importName: 'safe',
+              description: 'Safe to import',
+              bytes: 1000,
+              bodyBytes: 1000,
+              includedFiles: [],
+              omittedFiles: [],
+              scriptFiles: [],
+              warnings: [],
+              nameChanged: false,
+            },
+          ],
+          warnings: [],
+          truncated: false,
+        };
+      }
+      if (message.type === 'IMPORT_LOCAL_SKILL_SOURCE') {
+        return {
+          ok: true,
+          source,
+          imported: [],
+          replaced: 0,
+          renamed: 0,
+          warnings: [],
+        };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(LocalSkillImportPanel, {
+      onImported: vi.fn(),
+      onCancel: vi.fn(),
+    }));
+    await enterText('/Users/me/.codex/skills/my-skill', '/Users/me/.codex/skills/demo');
+    await clickButton('预览');
+    await flushPromises();
+
+    const checkboxes = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]).toMatchObject({ checked: false, disabled: true });
+    expect(checkboxes[1]).toMatchObject({ checked: true, disabled: false });
+    expect(container.textContent).toContain('按需读取器不可用');
+    expect(container.textContent).toContain('当前无法按需读取');
+    expect(container.textContent).toContain('请将 Shell Local 执行模式设为“自动”');
+    expect(container.textContent).not.toContain('Shell MCP on-demand file reading is not available to chat.');
+    expect(container.textContent).toContain('未内嵌 1');
+    expect(container.textContent).not.toContain('按需读取 1');
+
+    await clickButton('导入选中 Skill');
+    await flushPromises();
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'IMPORT_LOCAL_SKILL_SOURCE',
+      payload: {
+        rootPath: '/Users/me/.codex/skills/demo',
+        selectedPaths: ['safe/SKILL.md'],
+        selectedImportNames: {
+          'safe/SKILL.md': 'safe',
+        },
+      },
+    });
+  });
+
+  it('localizes reader failures detected again at import time', async () => {
+    const source = {
+      id: 'local:demo',
+      provider: 'local' as const,
+      rootPath: '/Users/me/.codex/skills/demo',
+      displayName: 'demo',
+      directoryName: 'demo',
+      skillPaths: ['SKILL.md'],
+      importedSkillNames: ['demo'],
+      importedAt: 1,
+      updatedAt: 1,
+      warnings: [],
+    };
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'PREVIEW_LOCAL_SKILL_SOURCE') {
+        return {
+          source,
+          skills: [{
+            path: 'SKILL.md',
+            name: 'demo',
+            importName: 'demo',
+            description: 'Reader was available during preview',
+            bytes: 64000,
+            bodyBytes: 6000,
+            includedFiles: [],
+            omittedFiles: [{ path: 'references/large.md', bytes: 58000 }],
+            scriptFiles: [],
+            warnings: [],
+            nameChanged: false,
+          }],
+          warnings: [],
+          truncated: false,
+        };
+      }
+      if (message.type === 'IMPORT_LOCAL_SKILL_SOURCE') {
+        return {
+          ok: false,
+          error: 'Shell MCP on-demand file reading is not available to chat.',
+          importBlock: {
+            code: 'shell_reader_unavailable',
+          },
+        };
+      }
+      return null;
+    });
+    const onImported = vi.fn();
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(LocalSkillImportPanel, {
+      onImported,
+      onCancel: vi.fn(),
+    }));
+    await enterText('/Users/me/.codex/skills/my-skill', '/Users/me/.codex/skills/demo');
+    await clickButton('预览');
+    await flushPromises();
+    await clickButton('导入选中 Skill');
+    await flushPromises();
+
+    expect(container.textContent).toContain('按需读取器不可用');
+    expect(container.textContent).toContain('请将 Shell Local 执行模式设为“自动”');
+    expect(container.textContent).not.toContain('Shell MCP on-demand file reading is not available to chat.');
+    expect(onImported).not.toHaveBeenCalled();
   });
 
   it('persists web model mode from sidepanel chat controls', async () => {

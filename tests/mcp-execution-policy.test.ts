@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCP_PROTOCOL_VERSION } from '../core/mcp';
-import { executeMcpToolCall, refreshMcpServerDiscovery } from '../core/mcp/discovery';
-import { createMcpServer, saveMcpToolCache } from '../core/mcp/store';
+import { executeMcpToolCall, getMcpToolDescriptors, refreshMcpServerDiscovery } from '../core/mcp/discovery';
+import { createMcpServer, saveMcpToolCache, updateMcpServer } from '../core/mcp/store';
+import { renderToolSchemas } from '../core/prompt/augmentation';
 import type { McpServerConfig, ToolCall, ToolDescriptor } from '../core/types';
 
 let storage: Record<string, unknown>;
@@ -71,7 +72,16 @@ describe('MCP execution policy', () => {
                 name: 'sample_tool',
                 title: 'Sample Tool',
                 description: 'Sample MCP tool.',
-                inputSchema: { type: 'object', properties: {} },
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    group: {
+                      type: 'string',
+                      enum: ['playwright', 'filesystem'],
+                    },
+                  },
+                  required: ['group'],
+                },
               }],
             }
           : { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {} } },
@@ -96,6 +106,12 @@ describe('MCP execution policy', () => {
 
     expect(cache.health.status).toBe('ready');
     expect(cache.descriptors.map((descriptor) => descriptor.name)).toEqual(['sample_tool']);
+    expect(cache.descriptors[0].inputSchema.properties?.group).toEqual({
+      type: 'string',
+      enum: ['playwright', 'filesystem'],
+    });
+    const persistedDescriptors = await getMcpToolDescriptors({ includeDisabled: true });
+    expect(renderToolSchemas(persistedDescriptors)).toContain('"enum":["playwright","filesystem"]');
     expect(requests.map((request) => request.method)).toEqual([
       'initialize',
       'notifications/initialized',
@@ -175,6 +191,59 @@ describe('MCP execution policy', () => {
     expect(requests[1].headers.get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
     expect(requests[2].headers.get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
   });
+
+  it('exposes only policy-enabled auto MCP tools to the prompt runtime', async () => {
+    const server = await createMcpServer({
+      displayName: 'Policy MCP',
+      enabled: true,
+      transport: {
+        kind: 'native_messaging',
+        nativeHost: 'com.example.policy',
+      },
+      allowlist: {
+        mode: 'allow',
+        toolNames: ['local_file_read'],
+      },
+      execution: {
+        enabled: true,
+        mode: 'auto',
+      },
+    });
+    const descriptors = [
+      createMcpDescriptor(server, 'local_file_read'),
+      createMcpDescriptor(server, 'shell_exec'),
+    ];
+    await saveMcpToolCache({
+      serverId: server.id,
+      descriptors,
+      refreshedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      health: {
+        serverId: server.id,
+        status: 'ready',
+        checkedAt: Date.now(),
+        latencyMs: 1,
+        toolCount: descriptors.length,
+        error: null,
+      },
+    });
+
+    await expect(getMcpToolDescriptors()).resolves.toEqual([
+      expect.objectContaining({ name: 'local_file_read' }),
+    ]);
+
+    await updateMcpServer(server.id, {
+      allowlist: { mode: 'deny', toolNames: ['local_file_read'] },
+    });
+    await expect(getMcpToolDescriptors()).resolves.toEqual([
+      expect.objectContaining({ name: 'shell_exec' }),
+    ]);
+
+    await updateMcpServer(server.id, {
+      execution: { enabled: true, mode: 'manual' },
+    });
+    await expect(getMcpToolDescriptors()).resolves.toEqual([]);
+  });
 });
 
 function createMcpCall(serverId: string, descriptor?: ToolDescriptor): ToolCall {
@@ -193,19 +262,19 @@ function createMcpCall(serverId: string, descriptor?: ToolDescriptor): ToolCall 
   };
 }
 
-function createMcpDescriptor(server: McpServerConfig): ToolDescriptor {
+function createMcpDescriptor(server: McpServerConfig, name = 'sample_tool'): ToolDescriptor {
   return {
-    id: `mcp:${server.id}:sample_tool`,
+    id: `mcp:${server.id}:${name}`,
     provider: {
       kind: 'mcp',
       id: server.id,
       displayName: server.displayName,
       transport: server.transport.kind,
     },
-    name: 'sample_tool',
-    invocationName: `mcp_${server.id}_sample_tool`,
-    title: 'Sample Tool',
-    description: 'Sample MCP tool.',
+    name,
+    invocationName: `mcp_${server.id}_${name}`,
+    title: name,
+    description: `${name} MCP tool.`,
     inputSchema: {
       type: 'object',
       properties: {},
