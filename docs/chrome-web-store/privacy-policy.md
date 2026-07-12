@@ -1,6 +1,6 @@
 # DeepSeek++ Privacy Policy
 
-Effective date: 2026-07-08
+Effective date: 2026-07-11
 
 DeepSeek++ is a browser extension that enhances DeepSeek chat workflows with user-controlled floating chat on normal web pages, memory, skills, project context, saved items, prompt presets, MCP tools, side-panel Vision image attachments, multimodal media analysis, browser control tools, inline tool execution, local exports, downloadable artifacts, optional sync, automation, and optional side-panel chat.
 
@@ -15,7 +15,7 @@ DeepSeek++ has one purpose: to enhance DeepSeek chat workflows with user-control
 DeepSeek++ may handle the following data only when needed for its user-facing features:
 
 - DeepSeek conversation content, including prompts, model responses, and tool-call text shown on `chat.deepseek.com`.
-- User-created extension data, including memories, skills, project context, project files or source notes, saved snippets, bookmarks, prompt presets, MCP server settings, automation tasks, theme settings, background settings, pet settings, and tool execution history.
+- User-created extension data, including memories, skills, local Skill supporting files selected by the user, project context, project files or source notes, saved snippets, bookmarks, prompt presets, MCP server settings, automation tasks, theme settings, background settings, pet settings, and tool execution history.
 - Optional DeepSeek API Key, when the user configures official API chat in the side panel.
 - Optional OpenAI and Gemini API keys, model names, and request URLs, when the user configures multimodal image or video analysis.
 - Optional sync settings, including WebDAV server URL, username, password, remote path, Google Drive or OneDrive OAuth app credentials, sync authorization tokens, provider selection, and sync state, when the user configures sync.
@@ -44,7 +44,7 @@ DeepSeek++ uses handled data only to provide its disclosed features:
 - Run automation tasks created by the user.
 - Export the user's DeepSeek conversation history, individual messages, saved items, or generated artifacts into local files when the user starts an export or download.
 - Sync memories, custom skills, and presets to a user-configured WebDAV server, Google Drive app data area, or OneDrive app folder when sync is enabled.
-- Connect to user-configured MCP endpoints or Native Messaging hosts when the user tests or executes those tools.
+- Connect to user-configured MCP endpoints or Native Messaging hosts when the user tests or executes those tools, including reading supporting files from a local Skill folder selected by the user when that Skill requires them.
 - Control a selected browser tab through Chrome's debugger API when the user enables Browser Control and the AI calls an enabled `browser_*` tool.
 
 The extension does not use handled data for advertising, user profiling for advertising, credit decisions, or unrelated analytics.

@@ -29,7 +29,7 @@
   <a href="#feature-overview">Feature Overview</a> ·
   <a href="#use-cases">Use Cases</a> ·
   <a href="#installation">Installation</a> ·
-  <a href="#109-release-highlights">1.0.9 Highlights</a>
+  <a href="#1100-release-highlights">1.10.0 Highlights</a>
 </p>
 
 ## Product Positioning
@@ -46,7 +46,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - [Feature Overview](#feature-overview)
 - [Use Cases](#use-cases)
 - [Core Features](#core-features)
-- [1.0.9 Release Highlights](#109-release-highlights)
+- [1.10.0 Release Highlights](#1100-release-highlights)
 - [Installation](#installation)
 - [Friendly Links](#friendly-links)
 
@@ -299,7 +299,27 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
   <img src="assets/screenshot-sidepanel-automation.png" width="300" alt="Automation task side panel">
 </p>
 
-## 1.0.9 Release Highlights
+## 1.10.0 Release Highlights
+
+1.10.0 improves local Skill imports and on-demand resource access, making large Skill file status, reader requirements, and recovery guidance clearer while improving MCP proxy parameter accuracy.
+
+| Area | Main changes |
+|------|--------------|
+| Local Skill resource status | Previews clearly distinguish bundled files from supporting files that remain in the original folder for on-demand reading, avoiding the impression that budget-limited files were lost. |
+| Reader verification | Before import, DeepSeek++ confirms that Shell MCP can actually read on-demand resources and provides clear guidance for updating the Native Host, changing execution mode, or checking the connection. |
+| Mixed-folder imports | If one Skill is blocked by an unavailable reader, other Skills in the same folder that do not need it remain selectable and importable. |
+| MCP parameter constraints | MCP tool parameter options are preserved through discovery, caching, and prompt rendering, improving calls through MCP proxies. |
+| Permission boundary | This update adds no new browser permissions; on-demand resources remain in the local Skill folder selected by the user. |
+
+Thanks to [@zhangweildlh](https://github.com/zhangweildlh) for reporting the local Skill resource wording issue and providing reproduction material.
+
+<details>
+<summary>Show historical release highlights (1.0.9 - 0.2.0)</summary>
+
+<details>
+<summary>Show 1.0.9 release highlights</summary>
+
+### 1.0.9 Release Highlights
 
 1.0.9 extends side-panel chat to normal web pages and fixes automation login/session recovery in background runs, focusing on smoother cross-page use and more reliable scheduled tasks.
 
@@ -311,8 +331,7 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
 | Automation session recovery | Automation result links and history snapshots resolve to the right DeepSeek session from the background environment, making task results easier to open and trace. |
 | Regression coverage | Release validation continues to cover compile, tests, automation contracts, MCP/Shell/PoW smoke checks, multi-browser builds, and release asset checks. |
 
-<details>
-<summary>Show historical release highlights (1.0.8 - 0.2.0)</summary>
+</details>
 
 <details>
 <summary>Show 1.0.8 release highlights</summary>
