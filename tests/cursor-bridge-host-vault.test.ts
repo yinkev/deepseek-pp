@@ -11,6 +11,7 @@ import {
   listAccountsPublic,
   mergeReadinessAccounts,
   tokenFingerprint,
+// @ts-expect-error The native host module is JavaScript and is exercised directly here.
 } from '../packages/cursor-bridge-host/native/account-vault.mjs';
 
 describe('host account vault', () => {

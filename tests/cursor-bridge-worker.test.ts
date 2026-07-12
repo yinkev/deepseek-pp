@@ -7,6 +7,7 @@ import {
 } from '../core/cursor-bridge';
 import { getProjectContextState, getProjectForConversation } from '../core/project';
 import { DEFAULT_TOOL_DESCRIPTORS } from '../core/tool';
+import type { DeepSeekFileUploadInput } from '../core/deepseek/adapter';
 
 let projectStorage: Record<string, unknown>;
 
@@ -108,7 +109,7 @@ describe('cursor-bridge worker', () => {
     const createSession = vi.fn(async () => 'session-eyes');
     const createPow = vi.fn(async () => ({ 'X-DS-PoW-Response': 'pow' }));
     const createUploadPow = vi.fn(async () => ({ 'X-DS-PoW-Response': 'upload-pow' }));
-    const uploadFile = vi.fn(async () => ({
+    const uploadFile = vi.fn(async (_input: DeepSeekFileUploadInput) => ({
       id: 'file-1',
       fileName: 'image.png',
       fileSize: 12,

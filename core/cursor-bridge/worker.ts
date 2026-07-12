@@ -267,7 +267,35 @@ export async function runCursorBridgeJob(
   deps: CursorBridgeWorkerDeps,
   onChunk: (text: string) => void,
   signal?: AbortSignal,
-): Promise<{ text: string; threadId?: string; sticky?: boolean; streamDebug?: unknown; tools?: { enabled: boolean; renderedToolCount: number; used: boolean } } | { error: CursorBridgeError }> {
+): Promise<{
+  text: string;
+  threadId?: string;
+  sticky?: boolean;
+  accountId?: string | null;
+  streamDebug?: unknown;
+  tool_calls?: import('./openai-tools').OpenAiToolCall[];
+  finish_reason?: 'stop' | 'tool_calls';
+  tools?: {
+    enabled: boolean;
+    renderedToolCount: number;
+    used: boolean;
+    schemaMode: import('./harness').ToolSchemaMode;
+    profile: CursorBridgeClientProfile;
+    hermesBrainOnly: boolean;
+    openAiTools: boolean;
+    openAiToolCallCount: number;
+    promptChars: number;
+    toolLoopDepth: number;
+    eniTurnMode: import('./eni-policy').EniTurnMode | null;
+    eniSceneReset?: boolean;
+    eniMemoryCount: number;
+    eniBondLo: number;
+    eniBondUs: number;
+    toolReceiptCount: number;
+    openAiToolsFiltered: number;
+    eyes: boolean;
+  };
+} | { error: CursorBridgeError }> {
   let authAccountIdOuter: string | null = null;
   try {
     // Resolve sticky thread early so multi-account can pin the same login.
@@ -554,7 +582,7 @@ export async function runCursorBridgeJob(
             },
           };
         }
-        const uploadPowHeaders = await createUploadPow(headers);
+        const uploadPowHeaders = await createUploadPow(headers, DEEPSEEK_FILE_UPLOAD_PATH);
         const file = await uploadFile(
           {
             file: blob,

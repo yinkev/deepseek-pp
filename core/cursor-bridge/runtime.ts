@@ -137,7 +137,18 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
     const message = raw as CursorBridgeHostToExtension;
 
     if (message.type === 'reload_extension') {
-      post({ type: 'pong', requestId: message.requestId });
+      post({
+        type: 'pong',
+        requestId: message.requestId,
+        readiness: {
+          ready: false,
+          extensionAlive: true,
+          hasDeepSeekTab: false,
+          hasLogin: false,
+          busy,
+          reason: 'reloading',
+        },
+      });
       setTimeout(() => {
         try {
           chrome.runtime.reload();
@@ -261,11 +272,11 @@ export function startCursorBridgeRuntime(options: CursorBridgeRuntimeOptions): {
         text: result.text,
         threadId: result.threadId,
         sticky: result.sticky,
-        accountId: (result as { accountId?: string | null }).accountId ?? null,
-        streamDebug: (result as { streamDebug?: unknown }).streamDebug,
-        tool_calls: (result as { tool_calls?: unknown }).tool_calls,
-        finish_reason: (result as { finish_reason?: 'stop' | 'tool_calls' }).finish_reason,
-        tools: (result as { tools?: unknown }).tools,
+        accountId: result.accountId ?? null,
+        streamDebug: result.streamDebug,
+        tool_calls: result.tool_calls,
+        finish_reason: result.finish_reason,
+        tools: result.tools,
       });
     } finally {
       busy = false;

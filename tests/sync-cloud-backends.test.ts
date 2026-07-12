@@ -10,6 +10,8 @@ import { createGDriveBackend } from '../core/sync/gdrive-client';
 import { createOneDriveBackend } from '../core/sync/onedrive-client';
 import type { LocaleMessageKey, MessageParams } from '../core/i18n';
 
+type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 // chrome.identity is read lazily via getRedirectUri(); stub it so imports work.
 beforeEach(() => {
   vi.stubGlobal('chrome', {
@@ -90,7 +92,7 @@ describe('oauth token management', () => {
   it('retries once with a fresh token on 401', async () => {
     // First access token fetch, then the 401, then the refreshed token fetch.
     let tokenCall = 0;
-    const fetchImpl = vi.fn<typeof fetch>(async (input: string | URL | Request) => {
+    const fetchImpl = vi.fn<FetchMock>(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url === REFRESH_URL) {
         tokenCall += 1;
@@ -123,7 +125,7 @@ describe('Google Drive backend', () => {
   });
 
   it('get returns null when the file is absent', async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input: string | URL | Request) => {
+    const fetchImpl = vi.fn<FetchMock>(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.includes('/oauth2.googleapis.com/token')) {
         return jsonResponse({ access_token: 'atok', expires_in: 3600 });
@@ -145,7 +147,7 @@ describe('Google Drive backend', () => {
 
   it('put creates a file when absent, updates when present', async () => {
     let listHasFile = false;
-    const fetchImpl = vi.fn<typeof fetch>(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = vi.fn<FetchMock>(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.includes('/oauth2.googleapis.com/token')) {
         return jsonResponse({ access_token: 'atok', expires_in: 3600 });
@@ -191,7 +193,7 @@ describe('OneDrive backend', () => {
 
   it('get returns null on 404, content otherwise', async () => {
     let missing = true;
-    const fetchImpl = vi.fn<typeof fetch>(async (input: string | URL | Request) => {
+    const fetchImpl = vi.fn<FetchMock>(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.includes('login.microsoftonline.com')) {
         return jsonResponse({ access_token: 'atok', expires_in: 3600 });
@@ -207,7 +209,7 @@ describe('OneDrive backend', () => {
   });
 
   it('put issues a PUT to the app-root content endpoint', async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = vi.fn<FetchMock>(async (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url.includes('login.microsoftonline.com')) {
         return jsonResponse({ access_token: 'atok', expires_in: 3600 });

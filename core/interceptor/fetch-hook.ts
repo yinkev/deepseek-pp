@@ -125,7 +125,7 @@ export interface RequestBodyModification {
 function hookFetch() {
   originalFetch = window.fetch;
 
-  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit) {
+  window.fetch = (async function (this: Window, input: RequestInfo | URL, init?: RequestInit) {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 
     // Capture Bearer on any DeepSeek API call (settings/history/session), not only completion.
@@ -158,7 +158,7 @@ function hookFetch() {
     });
     const requestInit = modified ? { ...init, body: modified.body } : init;
     return interceptFetchResponse(originalFetch.call(this, input, requestInit), requestContext);
-  };
+  }) as typeof window.fetch;
 }
 
 function hookXHR() {

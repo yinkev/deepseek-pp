@@ -8,6 +8,8 @@ import {
 } from '../core/deepseek/adapter';
 import type { ResponseTokenSpeedPayload } from '../core/interceptor/token-speed';
 
+type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 vi.mock('../core/deepseek/pow', () => ({
   solvePowChallengeLocally: vi.fn(async () => ({
     algorithm: 'sha256',
@@ -26,7 +28,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('can stream chunks without retaining the full assistant text', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"v":"Hello "}',
       'data: {"v":"world"}',
       'data: {"p":"response/status","v":"FINISHED"}',
@@ -51,7 +53,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('retains full assistant text by default', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"v":"Hello "}',
       'data: {"v":"world"}',
     ].join('\n\n'))));
@@ -68,7 +70,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('keeps the opening fragment when DeepSeek SETs content before APPENDing', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"p":"response/fragments/-1/content","o":"SET","v":"Real talk"}',
       'data: {"p":"response/fragments/-1/content","o":"APPEND","v":": yes"}',
       'data: {"p":"response/status","v":"FINISHED"}',
@@ -86,7 +88,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('keeps opening text from relative BATCH fragment paths', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"p":"response","o":"BATCH","v":[{"p":"fragments/-1/content","o":"SET","v":"This"}]}',
       'data: {"p":"response/fragments/-1/content","o":"APPEND","v":" is hard"}',
       'data: {"p":"response/status","v":"FINISHED"}',
@@ -106,7 +108,7 @@ describe('DeepSeek web adapter streaming', () => {
   it('emits token speed progress for bypass streaming requests', async () => {
     let now = 0;
     vi.spyOn(performance, 'now').mockImplementation(() => now);
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'event: ready\ndata: {"request_message_id":1,"response_message_id":2,"model_type":"vision"}',
       'data: {"v":{"response":{"message_id":2,"inserted_at":1000,"accumulated_token_usage":0}}}',
       'data: {"p":"response/fragments/-1/content","v":"Hello "}',
@@ -140,7 +142,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('creates PoW headers for the requested DeepSeek target path', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
+    const fetchMock = vi.fn<FetchMock>(async () => jsonResponse({
       data: {
         biz_code: 0,
         biz_data: {
@@ -171,7 +173,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('uploads images through the official DeepSeek file endpoint', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
+    const fetchMock = vi.fn<FetchMock>(async () => jsonResponse({
       data: {
         biz_code: 0,
         biz_data: {
@@ -218,7 +220,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('accepts successful image uploads while DeepSeek reports audit_result unknown', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
+    const fetchMock = vi.fn<FetchMock>(async () => jsonResponse({
       data: {
         biz_code: 0,
         biz_data: {
@@ -250,7 +252,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('rejects image uploads when DeepSeek reports explicit audit rejection', async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({
+    const fetchMock = vi.fn<FetchMock>(async () => jsonResponse({
       data: {
         biz_code: 0,
         biz_data: {
@@ -276,7 +278,7 @@ describe('DeepSeek web adapter streaming', () => {
 
   it('waits for uploaded images to finish processing before returning', async () => {
     vi.useFakeTimers();
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+    const fetchMock = vi.fn<FetchMock>(async (input) => {
       const url = String(input);
       if (url.includes('/api/v0/file/upload_file')) {
         return jsonResponse({
@@ -330,7 +332,7 @@ describe('DeepSeek web adapter streaming', () => {
     expect(String(fetchMock.mock.calls[1][0])).toBe('https://chat.deepseek.com/api/v0/file/fetch_files?file_ids=file-image-1');
   });
   it('keeps opening text when BATCH creates relative fragments with initial content', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"p":"response","o":"BATCH","v":[{"p":"fragments","o":"APPEND","v":[{"content":"Multi"}]},{"p":"fragments/-1/content","o":"APPEND","v":"-turn"}]}',
       'data: {"p":"response/fragments/-1/content","o":"APPEND","v":" bridges"}',
       'data: {"p":"response/status","v":"FINISHED"}',
@@ -348,7 +350,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('emits only the suffix when DeepSeek SETs cumulative fragment content', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"p":"response/fragments/-1/content","o":"SET","v":"There"}',
       'data: {"p":"response/fragments/-1/content","o":"SET","v":"There are three"}',
       'data: {"p":"response/fragments/-1/content","o":"APPEND","v":" failure modes"}',
@@ -367,7 +369,7 @@ describe('DeepSeek web adapter streaming', () => {
   });
 
   it('reads opening text from response snapshot objects', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => createSseResponse([
+    vi.stubGlobal('fetch', vi.fn<FetchMock>(async () => createSseResponse([
       'data: {"v":{"response":{"fragments":[{"content":"Sticky "}]}}}',
       'data: {"p":"response/fragments/-1/content","o":"APPEND","v":"parent ids"}',
       'data: {"p":"response/status","v":"FINISHED"}',
