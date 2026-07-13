@@ -155,11 +155,13 @@ function truncateMessage(message: PersistedChatMessage, characters: number): Per
   const reasoningText = reasoningCharacters > 0
     ? message.reasoningText?.slice(0, reasoningCharacters)
     : undefined;
-  return {
+  const truncated = {
     ...message,
     text,
-    ...(reasoningText ? { reasoningText } : { reasoningText: undefined }),
   };
+  if (reasoningText) truncated.reasoningText = reasoningText;
+  else delete truncated.reasoningText;
+  return truncated;
 }
 
 function trimmedString(value: unknown): string | null {
