@@ -659,6 +659,13 @@ describe('sidepanel interactions', () => {
       },
     });
     expect(container.querySelector('.ds-chat-attachment')).toBeNull();
+    const sentImage = container.querySelector('.ds-chat-message-attachment img') as HTMLImageElement | null;
+    expect(sentImage?.src).toBe('blob:preview');
+    expect(sentImage?.alt).toBe('eyes.png');
+    expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:preview');
+
+    await act(async () => root?.unmount());
+    root = null;
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview');
   });
 });

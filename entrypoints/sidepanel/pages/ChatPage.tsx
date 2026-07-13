@@ -222,6 +222,7 @@ export default function ChatPage() {
 
   useEffect(() => () => {
     imageAttachmentsRef.current.forEach(revokeVisionAttachmentPreview);
+    revokeChatMessageAttachmentPreviews(messagesRef.current);
   }, []);
 
   useEffect(() => {
@@ -376,6 +377,14 @@ export default function ChatPage() {
     const providerAttachments = imageAttachments
       .map((attachment) => attachment.providerAttachment)
       .filter((attachment): attachment is ProviderAttachment => Boolean(attachment));
+    const sentImageAttachments = imageAttachments
+      .filter((attachment) => attachment.status === 'ready')
+      .map((attachment) => ({
+        kind: 'image' as const,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        previewUrl: attachment.previewUrl,
+      }));
     const transcript = messagesRef.current.map((message) => ({
       role: message.role,
       content: message.text,
@@ -387,13 +396,15 @@ export default function ChatPage() {
         text,
         providerId: activeChatModel?.providerId,
         modelId: activeChatModel?.modelId,
+        ...(sentImageAttachments.length > 0 ? { attachments: sentImageAttachments } : {}),
       }];
       messagesRef.current = next;
       return next;
     });
     setMsgSeq((n) => n + 1);
     setInputText('');
-    clearImageAttachments();
+    imageAttachmentsRef.current = [];
+    setImageAttachments([]);
     setIsStreaming(true);
     setError(null);
 
@@ -431,6 +442,7 @@ export default function ChatPage() {
     }
     chrome.runtime.sendMessage({ type: 'CHAT_NEW_SESSION' }).catch(() => {});
     logicalConversationIdRef.current = createLogicalConversationId();
+    revokeChatMessageAttachmentPreviews(messagesRef.current);
     messagesRef.current = [];
     setMessages([]);
     setError(null);
@@ -1076,6 +1088,12 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 function revokeVisionAttachmentPreview(attachment: VisionImageAttachment) {
   URL.revokeObjectURL(attachment.previewUrl);
+}
+
+function revokeChatMessageAttachmentPreviews(messages: ChatMessageType[]) {
+  messages.forEach((message) => {
+    message.attachments?.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
+  });
 }
 
 function createVisionAttachmentId(): string {

@@ -1019,6 +1019,9 @@ input[type='range'] {
 }
 
 .ds-chat-message-user {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   max-width: min(86%, 420px);
   border-radius: 2px 14px 14px 14px;
   background: var(--ds-surface);
@@ -1026,6 +1029,29 @@ input[type='range'] {
   padding: 8px 12px;
   box-shadow: var(--ds-shadow-sm);
   border: 1px solid var(--ds-border);
+}
+
+.ds-chat-message-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 6px;
+  width: min(220px, 100%);
+  align-self: flex-end;
+}
+
+.ds-chat-message-attachment {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--ds-border);
+  border-radius: 10px;
+  background: var(--ds-bg);
+}
+
+.ds-chat-message-attachment img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
 }
 
 .ds-chat-message-assistant {

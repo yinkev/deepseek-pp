@@ -636,6 +636,14 @@ export interface ChatMessage {
   reasoningText?: string;
   providerId?: 'deepseek-web' | 'qwen-web';
   modelId?: string;
+  attachments?: ChatMessageAttachment[];
+}
+
+export interface ChatMessageAttachment {
+  kind: 'image';
+  name: string;
+  mimeType: string;
+  previewUrl: string;
 }
 
 export interface ChatStreamChunk {

@@ -21,7 +21,22 @@ export default function ChatMessage({ message, isStreaming }: ChatMessageProps) 
         }`}
       >
         {isUser ? (
-          <span className="whitespace-pre-wrap">{message.text}</span>
+          <>
+            {message.attachments && message.attachments.length > 0 && (
+              <div className="ds-chat-message-attachments">
+                {message.attachments.map((attachment) => (
+                  <figure
+                    key={`${attachment.kind}-${attachment.previewUrl}`}
+                    className="ds-chat-message-attachment"
+                    title={attachment.name}
+                  >
+                    <img src={attachment.previewUrl} alt={attachment.name} />
+                  </figure>
+                ))}
+              </div>
+            )}
+            <span className="whitespace-pre-wrap">{message.text}</span>
+          </>
         ) : (
           <>
             {message.reasoningText && (
