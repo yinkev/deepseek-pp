@@ -139,6 +139,36 @@ describe('Qwen web transport', () => {
     });
   });
 
+  it('accepts the top-level id emitted on Qwen choice events', async () => {
+    const fetchImpl = vi.fn<FetchMock>()
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'chat-vision-2' } }))
+      .mockResolvedValueOnce(sseResponse([
+        'data: {"id":"vision-response-2","choices":[{"delta":{"phase":"thinking_summary","status":"finished","extra":{"summary_thought":{"content":["Checked the second image"]}}}}]}',
+        'data: {"id":"vision-response-2","choices":[{"delta":{"phase":"answer","content":"The task is complete.","status":"finished"}}]}',
+      ]));
+    const transport = createQwenWebTransport({
+      fetchImpl,
+      loadAuth: async () => ({ authorization: 'Bearer test-token', version: '0.2.63' }),
+      randomUUID: sequenceUuid('request-1', 'user-1', 'response-1'),
+      now: () => 123_000,
+    });
+
+    const session = await transport.createSession('qwen3.7-plus');
+
+    await expect(transport.streamTurn({
+      session,
+      modelId: 'qwen3.7-plus',
+      prompt: 'Describe the second image',
+      thinkingEnabled: true,
+      files: [{ id: 'image-2', type: 'image' }],
+    }, {})).resolves.toEqual({
+      assistantText: 'The task is complete.',
+      thinkingText: 'Checked the second image',
+      responseId: 'vision-response-2',
+      finished: true,
+    });
+  });
+
   it('surfaces missing authentication and daily rate limits without retrying', async () => {
     const unauthenticated = createQwenWebTransport({
       fetchImpl: vi.fn<FetchMock>(),

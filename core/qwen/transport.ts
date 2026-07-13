@@ -231,14 +231,15 @@ async function readQwenCompletionStream(
         continue;
       }
       const record = readRecord(value);
+      const choices = Array.isArray(record.choices) ? record.choices : [];
       const created = readRecord(record['response.created']);
       responseId = responseId
         ?? readString(created.response_id)
         ?? readString(created.id)
         ?? readString(record.response_id)
+        ?? (choices.length > 0 ? readString(record.id) : null)
         ?? readCreatedResponseId(record);
 
-      const choices = Array.isArray(record.choices) ? record.choices : [];
       const firstChoice = readRecord(choices[0]);
       const delta = readRecord(firstChoice.delta);
       const phase = readString(delta.phase) ?? '';
