@@ -139,6 +139,53 @@ describe('Qwen web transport', () => {
     }, {})).rejects.toEqual(expect.objectContaining({ code: 'rate_limited' }));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  it('stops and closes the Qwen stream as soon as the finished phase arrives', async () => {
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls > 1) throw new Error('read after Qwen finished');
+        controller.enqueue(new TextEncoder().encode([
+          'data: {"response.created":{"response_id":"response-finished"}}',
+          '',
+          'data: {"choices":[{"delta":{"phase":"answer","content":"Done","status":"finished"}}]}',
+          '',
+          '',
+        ].join('\n')));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 });
+    const fetchImpl = vi.fn<FetchMock>()
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'chat-1' } }))
+      .mockResolvedValueOnce(new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+    const transport = createQwenWebTransport({
+      fetchImpl,
+      loadAuth: async () => ({ authorization: 'Bearer token', version: '0.2.63' }),
+      randomUUID: sequenceUuid('request-1', 'user-1', 'response-1'),
+      now: () => 123_000,
+    });
+
+    const session = await transport.createSession('qwen3.7-plus');
+    await expect(transport.streamTurn({
+      session,
+      modelId: 'qwen3.7-plus',
+      prompt: 'finish',
+      thinkingEnabled: true,
+    }, {})).resolves.toMatchObject({
+      assistantText: 'Done',
+      responseId: 'response-finished',
+      finished: true,
+    });
+    expect(pulls).toBe(1);
+    expect(cancelled).toBe(true);
+  });
 });
 
 function jsonResponse(body: unknown): Response {

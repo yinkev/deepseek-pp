@@ -261,17 +261,23 @@ async function readQwenCompletionStream(
   };
 
   try {
-    while (true) {
+    while (!finished) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() ?? '';
-      for (const part of parts) consumeEvent(part);
+      for (const part of parts) {
+        consumeEvent(part);
+        if (finished) break;
+      }
     }
-    buffer += decoder.decode();
-    if (buffer.trim()) consumeEvent(buffer);
+    if (!finished) {
+      buffer += decoder.decode();
+      if (buffer.trim()) consumeEvent(buffer);
+    }
   } finally {
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 
