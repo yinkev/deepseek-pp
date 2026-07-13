@@ -24,7 +24,7 @@ export interface ToolContinuationLoopInput<TTurn, TCursor extends string | numbe
   maxDepth: number;
   getAssistantText: (turn: TTurn) => string;
   getParentCursor: (turn: TTurn) => TCursor | null;
-  extractToolCalls: (assistantText: string) => ToolCall[];
+  extractToolCalls: (assistantText: string, turn: TTurn) => ToolCall[];
   executeToolCall: (call: ToolCall, parentCursor: TCursor) => Promise<ToolExecutionRecord>;
   buildContinuationPrompt: (executions: ToolExecutionRecord[]) => string;
   submitContinuation: (prompt: string, parentCursor: TCursor) => Promise<TTurn>;
@@ -40,7 +40,7 @@ export async function runToolContinuationLoop<TTurn, TCursor extends string | nu
   for (let depth = 0; depth < input.maxDepth; depth++) {
     if (parentCursor === null) break;
 
-    const calls = input.extractToolCalls(input.getAssistantText(turn));
+    const calls = input.extractToolCalls(input.getAssistantText(turn), turn);
     if (calls.length === 0) break;
 
     const stepExecutions: ToolExecutionRecord[] = [];

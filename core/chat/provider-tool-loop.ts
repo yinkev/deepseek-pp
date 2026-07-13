@@ -18,6 +18,12 @@ import type {
   ProviderSession,
   ProviderTurn,
 } from './provider';
+import {
+  parseJsonToolEnvelope,
+  renderJsonToolEnvelopePrompt,
+  renderJsonToolEnvelopeRepairPrompt,
+  type ProviderToolProtocol,
+} from './tool-protocol';
 
 export interface RunProviderToolLoopInput {
   adapter: ChatProviderAdapter;
@@ -26,6 +32,7 @@ export interface RunProviderToolLoopInput {
   prompt: string;
   originalTask: string;
   thinkingEnabled: boolean;
+  toolProtocol?: ProviderToolProtocol;
   attachments?: ProviderAttachment[];
   toolDescriptors: readonly ToolDescriptor[];
   executeTool: (call: ToolCall) => Promise<ToolResult>;
@@ -49,19 +56,14 @@ export async function runProviderToolLoop(
     prompt: string,
     session: ProviderSession,
     attachments?: ProviderAttachment[],
-  ) => streamVisibleProviderTurn({
-    ...input,
-    prompt,
-    session,
-    attachments,
-  });
+  ) => streamParsedProviderTurn(input, prompt, session, attachments);
   const initialTurn = await streamTurn(input.prompt, input.session, input.attachments);
   const loop = await runToolContinuationLoop({
     initialTurn,
     maxDepth: input.maxDepth ?? 20,
-    getAssistantText: (turn) => turn.assistantText,
-    getParentCursor: (turn) => turn.session.parentCursor,
-    extractToolCalls: (text) => extractToolCalls(text, { descriptors: input.toolDescriptors }),
+    getAssistantText: (entry) => entry.turn.assistantText,
+    getParentCursor: (entry) => entry.turn.session.parentCursor,
+    extractToolCalls: (_text, entry) => entry.calls,
     async executeToolCall(call) {
       if (input.signal?.aborted) {
         return createToolExecutionRecord(call, {
@@ -82,26 +84,26 @@ export async function runProviderToolLoop(
     buildContinuationPrompt: (executions) => buildProviderContinuationPrompt(
       executions,
       input.originalTask,
+      input.toolProtocol,
     ),
     submitContinuation: (prompt, parentCursor) => streamTurn(prompt, {
-      conversationId: initialTurn.session.conversationId,
+      conversationId: initialTurn.turn.session.conversationId,
       parentCursor,
     }),
   });
 
   return {
-    turn: loop.turn,
-    session: loop.turn.session,
+    turn: loop.turn.turn,
+    session: loop.turn.turn.session,
     executions: loop.executions,
-    finalVisibleText: stripToolCalls(loop.turn.assistantText, {
-      descriptors: input.toolDescriptors,
-    }).trim(),
+    finalVisibleText: loop.turn.visibleText,
   };
 }
 
 export function buildProviderContinuationPrompt(
   executions: readonly ToolExecutionRecord[],
   originalTask: string,
+  toolProtocol: ProviderToolProtocol = 'direct-xml',
 ): string {
   const results = executions.map((execution) => ({
     tool: execution.name,
@@ -120,7 +122,9 @@ export function buildProviderContinuationPrompt(
     '[/TOOL_RESULTS]',
     '',
     `Original task: ${clampText(originalTask, 8000) ?? ''}`,
-    'Continue from the real tool results. Answer naturally without exposing tool XML unless another tool is required.',
+    toolProtocol === 'json-envelope'
+      ? 'Continue from the real tool results. Request another listed tool if needed; otherwise return the natural final answer.'
+      : 'Continue from the real tool results. Answer naturally without exposing tool XML unless another tool is required.',
   ].join('\n');
 }
 
@@ -152,4 +156,68 @@ async function streamVisibleProviderTurn(
   });
   emitGrowth(accumulator.flush());
   return turn;
+}
+
+interface ParsedProviderTurn {
+  turn: ProviderTurn;
+  calls: ToolCall[];
+  visibleText: string;
+}
+
+async function streamParsedProviderTurn(
+  input: RunProviderToolLoopInput,
+  prompt: string,
+  session: ProviderSession,
+  attachments?: ProviderAttachment[],
+): Promise<ParsedProviderTurn> {
+  if (input.toolProtocol !== 'json-envelope') {
+    const turn = await streamVisibleProviderTurn({ ...input, prompt, session, attachments });
+    return {
+      turn,
+      calls: extractToolCalls(turn.assistantText, { descriptors: input.toolDescriptors }),
+      visibleText: stripToolCalls(turn.assistantText, { descriptors: input.toolDescriptors }).trim(),
+    };
+  }
+
+  const protocolPrompt = renderJsonToolEnvelopePrompt(prompt, input.toolDescriptors);
+  let turn = await streamBufferedProviderTurn(input, protocolPrompt, session, attachments);
+  let parsed;
+  try {
+    parsed = parseJsonToolEnvelope(turn.assistantText, input.toolDescriptors);
+  } catch (firstError) {
+    const parentCursor = turn.session.parentCursor;
+    if (parentCursor === null || input.signal?.aborted) throw firstError;
+    const repairPrompt = renderJsonToolEnvelopeRepairPrompt(
+      prompt,
+      input.toolDescriptors,
+      turn.assistantText,
+    );
+    turn = await streamBufferedProviderTurn(input, repairPrompt, {
+      conversationId: turn.session.conversationId,
+      parentCursor,
+    });
+    parsed = parseJsonToolEnvelope(turn.assistantText, input.toolDescriptors);
+  }
+  if (parsed.kind === 'final' && parsed.content) input.onVisibleText?.(parsed.content);
+  return { turn, calls: parsed.calls, visibleText: parsed.content.trim() };
+}
+
+async function streamBufferedProviderTurn(
+  input: RunProviderToolLoopInput,
+  prompt: string,
+  session: ProviderSession,
+  attachments?: ProviderAttachment[],
+): Promise<ProviderTurn> {
+  return input.adapter.streamTurn({
+    model: input.model,
+    session,
+    prompt,
+    thinkingEnabled: input.thinkingEnabled,
+    attachments,
+    signal: input.signal,
+  }, {
+    onThinkingDelta(text, fullText) {
+      input.onThinkingText?.(text, fullText);
+    },
+  });
 }

@@ -23,6 +23,7 @@ import type {
   SystemPromptPreset,
   ToolDescriptor,
 } from '../types';
+import type { ProviderToolProtocol } from './tool-protocol';
 
 export interface CompileSharedAgentPromptInput {
   userPrompt: string;
@@ -35,6 +36,7 @@ export interface CompileSharedAgentPromptInput {
   locale?: SupportedLocale;
   promptSettings?: Partial<PromptInjectionSettings>;
   projectContext?: string | null;
+  toolProtocol?: ProviderToolProtocol;
 }
 
 export interface CompiledSharedAgentPrompt {
@@ -70,7 +72,7 @@ export async function compileSharedAgentPrompt(
     toolDescriptors: input.toolDescriptors,
     locale,
     memoryEnabled: settings.memoryEnabled,
-    systemPromptEnabled: settings.systemPromptEnabled,
+    systemPromptEnabled: settings.systemPromptEnabled && input.toolProtocol !== 'json-envelope',
     forceResponseLanguage: settings.forceResponseLanguage === 'auto'
       ? null
       : settings.forceResponseLanguage,

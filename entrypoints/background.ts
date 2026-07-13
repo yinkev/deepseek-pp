@@ -2733,6 +2733,9 @@ async function handleProviderChatSubmitPrompt(
       ...runtimeDescriptors,
       ...createSandboxToolDescriptors(currentBackgroundLocale),
     ]);
+    const toolProtocol = request.model.providerId === 'qwen-web'
+      ? 'json-envelope' as const
+      : 'direct-xml' as const;
     const compiled = await compileSharedAgentPrompt({
       userPrompt: request.text,
       isFirstProviderTurn: freshSession,
@@ -2741,6 +2744,7 @@ async function handleProviderChatSubmitPrompt(
       skills,
       activePreset,
       toolDescriptors,
+      toolProtocol,
       locale: currentBackgroundLocale,
       promptSettings,
     });
@@ -2755,6 +2759,7 @@ async function handleProviderChatSubmitPrompt(
       prompt,
       originalTask: request.text,
       thinkingEnabled: request.model.providerId === 'qwen-web',
+      toolProtocol,
       attachments: request.attachments.length > 0
         ? request.attachments
         : request.refFileIds.map((id) => ({ id, name: id, mimeType: 'application/octet-stream', providerFileId: id })),

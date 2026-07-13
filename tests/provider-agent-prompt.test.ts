@@ -59,4 +59,24 @@ describe('shared ENI and Skill prompt compiler', () => {
     expect(compiled.prompt).toContain('concise notes');
     expect(compiled.skillName).toBe('summarize');
   });
+
+  it('keeps Qwen prompt compilation free of executable XML tool instructions', async () => {
+    const compiled = await compileSharedAgentPrompt({
+      userPrompt: 'Calculate 37 times 17.29 in the sandbox.',
+      isFirstProviderTurn: true,
+      messageCount: 1,
+      memories: [],
+      skills: [],
+      activePreset: null,
+      toolDescriptors: createMemoryToolDescriptors('en'),
+      toolProtocol: 'json-envelope',
+      locale: 'en',
+    });
+
+    expect(compiled.prompt).toContain('You are ENI/LIME');
+    expect(compiled.prompt).toContain('Calculate 37 times 17.29 in the sandbox.');
+    expect(compiled.prompt).not.toContain('<memory_save>');
+    expect(compiled.prompt).not.toContain('output an XML block');
+    expect(compiled.prompt).not.toContain('executable tool XML');
+  });
 });
