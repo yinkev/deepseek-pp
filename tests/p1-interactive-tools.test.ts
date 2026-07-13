@@ -135,6 +135,19 @@ describe('P1 interactive tool contracts', () => {
     expect(sidepanelNames).not.toContain('memory_import_preview');
   });
 
+  it('keeps sandbox enabled in the composed sidepanel chat catalog', async () => {
+    const { composeSidepanelChatToolDescriptors } = await import('../core/tool/sidepanel');
+    const { createSandboxToolDescriptors } = await import('../core/sandbox');
+    const descriptors = composeSidepanelChatToolDescriptors([
+      ...createMemoryToolDescriptors('en'),
+      ...createArtifactToolDescriptors('en'),
+      ...createSandboxToolDescriptors('en'),
+    ], 'en');
+    const sandbox = descriptors.find((descriptor) => descriptor.name === 'sandbox_run');
+    expect(sandbox).toBeTruthy();
+    expect(sandbox?.execution.enabled).toBe(true);
+  });
+
   it('creates Skill drafts for review-before-save and validates useful instructions', () => {
     const draft = createSkillDraft({
       name: 'My Skill!',

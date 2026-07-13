@@ -107,7 +107,8 @@ import {
   setBrowserControlEnabled,
   type BrowserControlSettings,
 } from '../core/browser-control';
-import { filterSidepanelChatToolDescriptors } from '../core/tool/sidepanel';
+import { composeSidepanelChatToolDescriptors } from '../core/tool/sidepanel';
+import { createStreamingToolTextAccumulator } from '../core/interceptor/streaming-tool-text';
 import {
   addConversationToProject,
   bindPendingProjectConversation,
@@ -2976,10 +2977,10 @@ async function handleProviderChatSubmitPrompt(
       getRuntimeToolDescriptors(currentBackgroundLocale),
       getPromptInjectionSettings(),
     ]);
-    const toolDescriptors = filterSidepanelChatToolDescriptors([
-      ...runtimeDescriptors,
-      ...createSandboxToolDescriptors(currentBackgroundLocale),
-    ]);
+    const toolDescriptors = composeSidepanelChatToolDescriptors(
+      runtimeDescriptors,
+      currentBackgroundLocale,
+    );
     const toolProtocol = request.model.providerId === 'qwen-web'
       ? 'json-envelope' as const
       : 'direct-xml' as const;
@@ -3178,7 +3179,10 @@ async function buildSidepanelPrompt(prompt: string): Promise<{
     cadence: promptSettings.presetCadence,
   });
 
-  const enabledDescriptors = filterSidepanelChatToolDescriptors(toolDescriptors);
+  const enabledDescriptors = composeSidepanelChatToolDescriptors(
+    toolDescriptors,
+    currentBackgroundLocale,
+  );
   const { augmented } = buildPromptAugmentation(prompt, {
     memories: memories.filter((memory) => memory.scope !== 'project'),
     presetContent: shouldInjectPreset ? activePreset?.content ?? null : null,
@@ -3208,6 +3212,14 @@ async function runOfficialApiToolLoop(
   for (let step = 0; step < MAX_STEPS; step++) {
     let accumulated = '';
     let reasoningAccumulated = '';
+    const toolText = createStreamingToolTextAccumulator(toolDescriptors);
+    let visibleLength = 0;
+    const emitVisibleGrowth = (visible: string) => {
+      if (visible.length <= visibleLength) return;
+      const delta = visible.slice(visibleLength);
+      visibleLength = visible.length;
+      if (delta) broadcastChatChunk({ text: delta, done: false, phase: 'answer' }, excludeTabId);
+    };
     const turn = await submitOfficialDeepSeekStreaming({
       apiKey: input.apiKey,
       config: input.config,
@@ -3215,13 +3227,14 @@ async function runOfficialApiToolLoop(
     }, {
       onTextChunk(newText: string, fullText: string) {
         accumulated = fullText;
-        broadcastChatChunk({ text: newText, done: false, phase: 'answer' }, excludeTabId);
+        emitVisibleGrowth(toolText.append(newText));
       },
       onReasoningChunk(newText: string, fullText: string) {
         reasoningAccumulated = fullText;
         broadcastChatChunk({ text: '', reasoningText: newText, done: false, phase: 'reasoning' }, excludeTabId);
       },
     });
+    emitVisibleGrowth(toolText.flush());
 
     const fullText = accumulated || turn.assistantText;
 
@@ -3298,15 +3311,24 @@ async function runSidepanelToolLoop(
 
   for (let step = 0; step < MAX_STEPS; step++) {
     let accumulated = '';
+    const toolText = createStreamingToolTextAccumulator(toolDescriptors);
+    let visibleLength = 0;
+    const emitVisibleGrowth = (visible: string) => {
+      if (visible.length <= visibleLength) return;
+      const delta = visible.slice(visibleLength);
+      visibleLength = visible.length;
+      if (delta) broadcastChatChunk({ text: delta, done: false }, excludeTabId);
+    };
     const turn = await submitPromptStreaming({
       ...currentInput,
       powHeaders: await createPowHeaders(currentInput.clientHeaders),
     }, {
       onTextChunk(newText: string, fullText: string) {
         accumulated = fullText;
-        broadcastChatChunk({ text: newText, done: false }, excludeTabId);
+        emitVisibleGrowth(toolText.append(newText));
       },
     });
+    emitVisibleGrowth(toolText.flush());
 
     chatParentMessageId = turn.responseMessageId;
     const fullText = accumulated || turn.assistantText;
@@ -3319,7 +3341,7 @@ async function runSidepanelToolLoop(
     const toolCalls = extractToolCalls(fullText, { descriptors: toolDescriptors });
 
     if (toolCalls.length === 0) {
-      broadcastChatChunk({ text: fullText, done: true }, excludeTabId);
+      broadcastChatChunk({ text: '', done: true }, excludeTabId);
       return;
     }
 

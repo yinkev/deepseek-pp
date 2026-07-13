@@ -139,9 +139,19 @@ export default function ChatPage() {
   const providerCatalogEnabled = chatModels.length > 0 && activeChatModel !== null;
   const selectedProviderId = activeChatModel?.providerId ?? 'deepseek-web';
   const selectedProviderStatus = providerStatuses?.find((status) => status.providerId === selectedProviderId);
-  const selectedProviderAvailable = providerCatalogEnabled
-    ? selectedProviderStatus?.available !== false
-    : authStatus?.available !== false;
+  // DeepSeek availability is owned by authStatus (session/API key). Catalog status can lag
+  // and falsely show "sign in" even when the web/official path can stream.
+  // Qwen and other providers keep catalog status as the authority.
+  const selectedProviderAvailable = selectedProviderId === 'deepseek-web'
+    ? authStatus?.available === true
+    : providerCatalogEnabled
+      ? selectedProviderStatus?.available !== false
+      : authStatus?.available === true;
+  const showProviderAuthBanner = selectedProviderId === 'deepseek-web'
+    ? authStatus !== null && authStatus.available === false
+    : providerCatalogEnabled
+      ? selectedProviderStatus?.available === false
+      : authStatus !== null && authStatus.available === false;
   const apiControlsEnabled = selectedProviderId === 'deepseek-web' && authStatus?.provider === 'official-api';
   const webControlsEnabled = selectedProviderId === 'deepseek-web' && authStatus?.provider === 'deepseek-web';
   const selectedModelSupportsImages = chatModels.find((model) => (
@@ -884,7 +894,7 @@ export default function ChatPage() {
       <div ref={listRef} className="ds-chat-messages">
         {confirmNode}
 
-        {!selectedProviderAvailable && (
+        {showProviderAuthBanner && (
           <div className="ds-chat-auth-empty">
             <p className="text-sm mb-3" style={{ color: 'var(--ds-text-secondary)' }}>
               {t('sidepanel.chatPage.providerAuthRequired', {

@@ -844,6 +844,144 @@ describe('sidepanel interactions', () => {
     root = null;
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview');
   });
+
+  it('hides DeepSeek sign-in banner while auth is still loading', async () => {
+    let resolveAuth: ((value: { available: boolean; provider: string }) => void) | undefined;
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') {
+        return await new Promise((resolve) => {
+          resolveAuth = resolve;
+        });
+      }
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{
+            ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+            label: 'DeepSeek',
+            supportsImages: true,
+          }],
+          activeModel: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+          statuses: [{ providerId: 'deepseek-web', available: false }],
+        };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    expect(container.textContent).not.toContain('先登录一次');
+    expect(container.textContent).not.toContain('Sign in to');
+
+    resolveAuth?.({ available: true, provider: 'deepseek-web' });
+    await flushPromises();
+    expect(container.textContent).not.toContain('先登录一次');
+  });
+
+  it('prefers DeepSeek authStatus over a stale unavailable catalog status', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{
+            ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+            label: 'DeepSeek',
+            supportsImages: true,
+          }],
+          activeModel: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+          statuses: [{ providerId: 'deepseek-web', available: false }],
+        };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    expect(container.textContent).not.toContain('先登录一次 DeepSeek');
+    expect(container.textContent).not.toContain('Sign in to DeepSeek');
+    expect(container.querySelector('button[aria-label="发送"]')).toBeTruthy();
+  });
+
+  it('shows DeepSeek sign-in banner only when auth is explicitly unavailable', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: false, provider: null };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{
+            ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+            label: 'DeepSeek',
+            supportsImages: true,
+          }],
+          activeModel: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+          statuses: [{ providerId: 'deepseek-web', available: true }],
+        };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    expect(
+      container.textContent?.includes('先登录一次 DeepSeek')
+      || container.textContent?.includes('Sign in to DeepSeek'),
+    ).toBe(true);
+  });
+
+  it('keeps Qwen catalog availability authoritative', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [
+            {
+              ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+              label: 'DeepSeek',
+              supportsImages: true,
+            },
+            {
+              ref: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+              label: 'Qwen 3.7 Plus',
+              supportsImages: true,
+            },
+          ],
+          activeModel: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+          statuses: [
+            { providerId: 'deepseek-web', available: true },
+            { providerId: 'qwen-web', available: false },
+          ],
+        };
+      }
+      if (message.type === 'SET_ACTIVE_CHAT_MODEL') return { ok: true, model: (message.payload as { model: unknown }).model };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    expect(
+      container.textContent?.includes('先登录一次 Qwen')
+      || container.textContent?.includes('Sign in to Qwen')
+      || container.textContent?.includes('先登录一次'),
+    ).toBe(true);
+  });
 });
 
 async function renderElement(element: React.ReactElement) {

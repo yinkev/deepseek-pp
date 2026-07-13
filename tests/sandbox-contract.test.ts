@@ -254,6 +254,20 @@ describe('sandbox compatibility contract', () => {
     expect(normalize).toBeGreaterThan(start);
     expect(dispatch).toBeGreaterThan(normalize);
   });
+
+  it('sidepanel catalog composition and legacy loops include sandbox and suppress tool XML', () => {
+    const background = readFileSync('entrypoints/background.ts', 'utf8');
+    const sidepanel = readFileSync('core/tool/sidepanel.ts', 'utf8');
+    expect(sidepanel).toContain('export function composeSidepanelChatToolDescriptors');
+    expect(sidepanel).toContain('createSandboxToolDescriptors');
+    expect(background).toContain('composeSidepanelChatToolDescriptors');
+    expect(background).toContain('createStreamingToolTextAccumulator');
+    // Provider path and DeepSeek legacy prompt path both use the shared composer.
+    expect(background.match(/composeSidepanelChatToolDescriptors\(/g)?.length).toBeGreaterThanOrEqual(2);
+    // Legacy loops must not rebroadcast fullText on the no-tool path.
+    expect(background).not.toMatch(/toolCalls\.length === 0\) \{\s*broadcastChatChunk\(\{ text: fullText/);
+  });
+
 });
 
 function sandboxCall(name: string, payload: Record<string, unknown>): ToolCall {

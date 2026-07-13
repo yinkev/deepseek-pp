@@ -1,4 +1,6 @@
+import { DEFAULT_LOCALE, type SupportedLocale } from '../i18n';
 import { MEMORY_IMPORT_TOOL_NAMES } from '../memory/import-tool';
+import { createSandboxToolDescriptors } from '../sandbox';
 import { SKILL_CREATOR_TOOL_NAMES } from '../skill/creator-tool';
 import type { ToolDescriptor } from './types';
 
@@ -18,4 +20,18 @@ export function filterSidepanelChatToolDescriptors(
   descriptors: readonly ToolDescriptor[],
 ): ToolDescriptor[] {
   return descriptors.filter(isSidepanelChatToolDescriptor);
+}
+
+/**
+ * Sidepanel chat catalog: runtime descriptors plus sandbox (authorized at execute time).
+ * Sandbox stays out of getRuntimeToolDescriptors / content public catalog.
+ */
+export function composeSidepanelChatToolDescriptors(
+  runtimeDescriptors: readonly ToolDescriptor[],
+  locale: SupportedLocale = DEFAULT_LOCALE,
+): ToolDescriptor[] {
+  return filterSidepanelChatToolDescriptors([
+    ...runtimeDescriptors,
+    ...createSandboxToolDescriptors(locale),
+  ]);
 }

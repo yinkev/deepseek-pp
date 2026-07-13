@@ -83,4 +83,19 @@ describe('createStreamingToolTextAccumulator', () => {
     expect(stream.append('_create > after')).toBe('Before  after');
     expect(stream.flush()).toBe('Before  after');
   });
+
+  it('suppresses sandbox_run tags split across chunks', async () => {
+    const { createSandboxToolDescriptors } = await import('../core/sandbox');
+    const stream = createStreamingToolTextAccumulator(createSandboxToolDescriptors('en'));
+    const payload = JSON.stringify({
+      language: 'javascript',
+      code: 'const xs = [3, 1, 4, 1, 5, 9, 2, 6]; return xs.reduce((a, b) => a + b, 0);',
+    });
+
+    expect(stream.append('Answer prefix <sandbox_')).toBe('Answer prefix ');
+    expect(stream.append('run>' + payload.slice(0, 20))).toBe('Answer prefix ');
+    expect(stream.append(payload.slice(20) + '</sandbox_')).toBe('Answer prefix ');
+    expect(stream.append('run> trailing')).toBe('Answer prefix  trailing');
+    expect(stream.flush()).toBe('Answer prefix  trailing');
+  });
 });
