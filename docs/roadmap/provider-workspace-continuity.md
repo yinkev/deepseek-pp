@@ -1,6 +1,6 @@
 # Roadmap — provider modules and workspace continuity
 
-**Status:** deferred until the approved Qwen provider parity slice is complete  
+**Status:** active; Qwen parity and durable active-conversation foundation delivered
 **Date:** 2026-07-12  
 **Intent:** Keep model providers replaceable without duplicating the user's DeepSeek++ identity or runtime.
 
@@ -9,6 +9,15 @@
 - A **provider module** owns authentication, transport, model metadata, upload constraints, and response/tool encoding.
 - A **DeepSeek++ workspace** owns ENI/LIME, memories, Skills, presets, tools/hands, eyes, and user-visible conversation state.
 - Providers consume workspace context through the provider-neutral chat contract. They do not own or duplicate workspace databases.
+
+## Delivered foundation
+
+- One versioned active logical conversation persists in `chrome.storage.local` under `deepseek_pp_active_chat_conversation`.
+- Reload restoration retains sanitized message text/reasoning, provider/model identity, logical conversation ID, timestamps, and image attachment name/type metadata.
+- The record is bounded to the newest 200 messages and 1,000,000 combined text/reasoning characters.
+- Authentication, provider-native sessions/cursors, provider upload objects, image bytes/data URLs/blob URLs, drafts, and transient stream state are not persisted.
+- New Session replaces the durable record with a fresh logical conversation ID and empty transcript.
+- Restored context continues through a fresh provider-native session and the existing bounded transfer mechanism.
 
 ## Future control
 
@@ -25,8 +34,9 @@ Add a setting named **Share continuity across providers**, defaulting to on.
 - No memory schema migration.
 - No provider-specific copies of ENI, Skills, tools, receipts, or continuation logic.
 - No change to the approved default: one shared ENI/LIME workspace across DeepSeek and Qwen.
-- No durable persistence of the side-panel's combined logical transcript during the parity slice. Closing/reloading the panel currently clears the React-memory view.
 - No sanitized DeepSeek++ transcript export yet. A future export must preserve message provider/model metadata and attachment references without including authentication values.
+- No conversation-history browser yet; the delivered store owns one active logical conversation.
+- No persistence of image thumbnail bytes or provider-native cursor/session state.
 
 ## Qwen account behavior and native capabilities
 
@@ -62,7 +72,7 @@ A local capability audit on Qwen Web build `0.2.72` identified these relevant co
 7. Capture and test each native mode's request payload, output phases, generated artifact identifiers, cancellation behavior, and rate-limit errors before implementation.
 8. Never commit raw capability-audit exports containing cookies, authorization values, account data, or conversation content; store only the sanitized contract.
 
-## Completion criteria for a future slice
+## Completion criteria for the continuity-control slice
 
 1. Switching with continuity on preserves bounded DeepSeek → Qwen → DeepSeek context.
 2. Switching with continuity off does not transfer transcript content.

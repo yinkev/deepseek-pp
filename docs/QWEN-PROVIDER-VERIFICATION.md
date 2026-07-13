@@ -198,8 +198,12 @@ It does **not** require repeated monitoring of qwenRelay's localhost port. Once 
 - No Muse or qwenRelay repository edits.
 - Approved plan restored from the preserved checkpoint and then updated with the final architecture/verification links.
 
-## Known limitation and roadmap
+## Post-closeout lifecycle update
 
-The side-panel transcript is currently memory-only React state. Closing or reloading the panel removes the combined visible transcript, so it cannot be recovered afterward from a DeepSeek++ log. Provider-side histories and cached authentication are separate and can remain available.
+The memory-only transcript limitation recorded during this Qwen parity closeout was addressed by the later durable active-conversation slice. The current side panel persists the logical conversation ID, sanitized message transcript, provider/model metadata, reasoning, and attachment name/type metadata across reloads.
 
-Durable logical-conversation persistence, message-provider metadata persistence, and a sanitized transcript export belong to the future workspace-continuity slice in [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md).
+Live Chrome acceptance passed: a `PERSIST-7319` transcript restored after extension reload, Qwen recalled the canary from the restored transcript, and a confirmed New Session remained empty after another reload.
+
+The first seeded Qwen turn in that acceptance run streamed reasoning but ended with `Qwen stream did not return a response id.` The restored-context follow-up completed successfully. This is recorded as a separate Qwen transport defect; the persistence slice neither diagnosed nor fixed it.
+
+See [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) for its separate TDD, automated, and live evidence. A history browser, sanitized export, and continuity toggle remain deferred in [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md).

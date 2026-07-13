@@ -12,7 +12,8 @@
 | [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) | Approved and completed Qwen provider scope |
 | [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) | Implemented architecture, ownership, and mechanisms |
 | [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) | Automated/live evidence ledger and closeout |
-| [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) | Deferred provider/workspace continuity features |
+| [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) | Durable active-conversation schema, lifecycle, and verification |
+| [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) | Delivered persistence foundation and deferred continuity features |
 | [bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md) | **What we built** (chronological inventory) |
 | [bridge/ARCHITECTURE.md](./bridge/ARCHITECTURE.md) | How host ↔ extension ↔ DeepSeek connect |
 | [bridge/MODELS.md](./bridge/MODELS.md) | Model IDs and behavior |
@@ -89,6 +90,7 @@ core/chat/
   provider.ts               internal provider/session/turn contract
   provider-registry.ts      DeepSeek + Qwen model catalog
   provider-model-store.ts   persisted selected model
+  conversation-store.ts     persisted sanitized active transcript
   agent-prompt.ts           shared ENI/memory/Skill/preset compiler
   conversation-transfer.ts  bounded cross-provider transcript
   provider-tool-loop.ts     shared execution + continuation loop

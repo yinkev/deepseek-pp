@@ -1,19 +1,21 @@
 # Handoff for next agent — DeepSeek++ / ENI / providers / bridge
 
-## Current addendum — Qwen provider completed 2026-07-12
+## Current addendum — providers and durable conversation state, 2026-07-12
 
 **Current repo:** `/Users/kyin/Projects/deepseek-pp` only
-**Current implementation branch:** `feature/qwen-provider`
+**Current implementation branch:** `codex/provider-conversation-persistence`
+**Local main:** Qwen provider fast-forwarded through `15675d5`; not pushed
 **Preserved pre-Qwen work:** `wip/pre-qwen-20260712` at `1936e0c889ec1fc432070ae0ab36f4d4f0a09707`
 **Chrome unpacked path:** `/Users/kyin/Projects/deepseek-pp/dist/chrome-mv3`
 **Push/deploy:** neither performed
 
-Read these Qwen documents before changing the provider system:
+Read these documents before changing the provider system:
 
 1. [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) — approved scope and constraints.
 2. [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) — implemented structure and mechanisms.
 3. [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) — exact automated and live acceptance evidence.
-4. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — explicitly deferred provider/workspace work.
+4. [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) — durable transcript schema, lifecycle, and verification.
+5. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — delivered foundation and explicitly deferred provider/workspace work.
 
 Current provider truth:
 
@@ -24,7 +26,13 @@ Current provider truth:
 - Qwen authentication, chat transport, SSE, and image upload are native under `core/qwen/` and connect directly to `chat.qwen.ai`.
 - qwenRelay is read-only source evidence for required Qwen auth/request values. It is not imported, spawned, called, packaged, or used as a service hop. Do not monitor its port as a substitute for reviewing the actual dependency/request graph.
 - Live acceptance passed for tabless cached auth, ENI, bundled Skill, local sandbox continuation, images, and DeepSeek → Qwen → DeepSeek context.
-- The visible side-panel transcript is currently React-memory-only; closing/reloading the panel destroys that combined view. Durable transcript persistence/export is roadmap work.
+- The active logical transcript now survives side-panel close/reload in `chrome.storage.local` under schema version 1.
+- Persistence owns only sanitized workspace transcript state. It excludes auth, provider-native cursors/sessions, upload objects, image bytes/data URLs/blob URLs, drafts, and transient stream state.
+- Restored image messages show durable filename/type metadata; live thumbnail bytes remain runtime-only.
+- After reload, the restored transcript feeds the existing fresh-session bounded transfer path; it does not pretend to resume a stale provider-native cursor.
+- Live reload acceptance passed with canary `PERSIST-7319`: the transcript restored after extension reload, Qwen recalled the exact canary from that restored transcript, and a confirmed New Session remained empty after another reload.
+- During that acceptance run, the first seeded Qwen turn streamed reasoning but ended with `Qwen stream did not return a response id.` The later restored-context turn completed. Treat the missing response ID as a separate Qwen transport follow-up, not as a persistence failure or a fixed issue.
+- History browsing, sanitized export, and the continuity toggle remain roadmap work.
 
 The remainder of this file is the historical 2026-07-10 DeepSeek bridge baseline. It remains relevant for Cursor/Hermes and DeepSeek regression work, but it must not override the current provider addendum above.
 

@@ -24,6 +24,7 @@ The extension connects directly to the selected provider. Qwen traffic goes from
 flowchart TD
     U["User"] --> UI["DeepSeek++ Side Panel<br/>ChatPage.tsx"]
     UI --> BG["DeepSeek++ Background Orchestrator<br/>background.ts"]
+    UI <--> PERSIST["Durable Active Conversation<br/>conversation-store.ts"]
 
     BG --> SHARED["Shared DeepSeek++ Workspace Runtime"]
     SHARED --> PROMPT["ENI/LIME + Memory + Skills<br/>agent-prompt.ts"]
@@ -52,6 +53,7 @@ There is deliberately no runtime arrow from DeepSeek++ to qwenRelay.
 | Active model store | `core/chat/provider-model-store.ts` | Persist selected `ChatModelRef` in `chrome.storage.local` |
 | Shared prompt compiler | `core/chat/agent-prompt.ts` | ENI/LIME, Bond, memories, presets, `/skill`, locale, and tool descriptors |
 | Conversation transfer | `core/chat/conversation-transfer.ts` | Fresh provider session plus newest bounded visible transcript |
+| Active conversation store | `core/chat/conversation-store.ts` | Versioned, bounded, sanitized restoration of the current logical transcript |
 | Shared tool loop | `core/chat/provider-tool-loop.ts` | Parse tool request, execute local tool, build receipt, continue on opaque cursor |
 | Qwen tool encoding | `core/chat/tool-protocol.ts` | Buffered JSON envelope and one bounded format repair |
 | Qwen auth | `core/qwen/auth.ts` | Capture, normalize, merge, cache, and reload Qwen web authentication metadata |
@@ -251,11 +253,30 @@ It is not:
 
 The correct acceptance check is an architecture, import, package, process-spawn, and request-URL review. A localhost port monitor is not required and is not meaningful once there is no call path in the shipped code.
 
-## Current lifecycle limitation
+## Durable active-conversation lifecycle
 
-The visible side-panel transcript currently lives in React state. Closing or reloading the panel destroys that rendered transcript. This does **not** remove cached Qwen authentication, the selected provider, or provider-side chats, but it means DeepSeek++ cannot export or recover the closed panel's combined cross-provider view today.
+The current logical transcript survives a side-panel close or extension reload through one workspace-owned record:
 
-Durable logical-conversation persistence and a sanitized transcript export are future workspace features, documented in [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md).
+- storage key: `deepseek_pp_active_chat_conversation` in `chrome.storage.local`;
+- schema version: `1`;
+- retained state: logical conversation ID, message role/text/reasoning, message provider/model, timestamps, and image attachment name/type metadata;
+- bounds: newest 200 messages and 1,000,000 combined text/reasoning characters;
+- write policy: 200 ms debounce during message updates, with same-context writes serialized so an older write cannot overtake a confirmed New Session replacement;
+- reset policy: New Session immediately writes a new logical conversation ID with an empty transcript after confirmation.
+
+The panel hydrates this record before enabling Send. Provider-native session IDs and cursors remain ephemeral. Therefore, the first post-reload turn creates a fresh upstream provider session and passes the restored visible transcript through the existing bounded conversation-transfer mechanism.
+
+The persistence boundary intentionally excludes:
+
+- cookies, authorization headers, Baxia values, JWTs, and other authentication material;
+- provider-native parent cursors and chat/session IDs;
+- provider upload objects and temporary STS/OSS values;
+- image bytes, data URLs, and runtime blob preview URLs;
+- composer drafts, upload progress, stream state, and transient errors.
+
+Sent images keep their live thumbnail while the originating panel remains open. After reload, the attachment filename/type remains visible as a compact indicator, but the local thumbnail bytes are not reconstructed.
+
+This slice persists one active logical conversation only. A conversation-history browser, sanitized export, and the **Share continuity across providers** toggle remain in [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md).
 
 ## Operational invariants
 
