@@ -733,6 +733,8 @@ export const zhCN = {
       newSessionTitle: '新建会话',
       newSession: '新建',
       newSessionConfirm: '当前对话内容将被清空，确定新建会话吗？',
+      conversationLoadFailed: '无法恢复已保存的对话：{error}',
+      conversationSaveFailed: '无法在本地保存对话：{error}',
       empty: '输入消息开始对话',
       emptyHelp: '也可以从网页右键发送选中文本，或从保存项插入常用 Prompt。',
       inputPlaceholder: '给 DeepSeek++ 发送消息',

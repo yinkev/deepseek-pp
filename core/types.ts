@@ -643,7 +643,7 @@ export interface ChatMessageAttachment {
   kind: 'image';
   name: string;
   mimeType: string;
-  previewUrl: string;
+  previewUrl?: string;
 }
 
 export interface ChatStreamChunk {

@@ -24,13 +24,24 @@ export default function ChatMessage({ message, isStreaming }: ChatMessageProps) 
           <>
             {message.attachments && message.attachments.length > 0 && (
               <div className="ds-chat-message-attachments">
-                {message.attachments.map((attachment) => (
+                {message.attachments.map((attachment, index) => (
                   <figure
-                    key={`${attachment.kind}-${attachment.previewUrl}`}
+                    key={`${attachment.kind}-${attachment.name}-${index}`}
                     className="ds-chat-message-attachment"
                     title={attachment.name}
                   >
-                    <img src={attachment.previewUrl} alt={attachment.name} />
+                    {attachment.previewUrl ? (
+                      <img src={attachment.previewUrl} alt={attachment.name} />
+                    ) : (
+                      <figcaption className="ds-chat-message-attachment-label">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden="true">
+                          <rect x="3" y="4" width="18" height="16" rx="2" />
+                          <circle cx="8.5" cy="9" r="1.5" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m5 17 4.5-4.5 3 3 2-2L19 18" />
+                        </svg>
+                        <span>{attachment.name}</span>
+                      </figcaption>
+                    )}
                   </figure>
                 ))}
               </div>

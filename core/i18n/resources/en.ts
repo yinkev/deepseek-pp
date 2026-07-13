@@ -733,6 +733,8 @@ export const en = {
       newSessionTitle: 'New session',
       newSession: 'New',
       newSessionConfirm: 'The current conversation will be cleared. Start a new session?',
+      conversationLoadFailed: 'Could not restore the saved conversation: {error}',
+      conversationSaveFailed: 'Could not save the conversation locally: {error}',
       empty: 'Type a message to start chatting',
       emptyHelp: 'You can also send selected webpage text from the context menu or insert a saved prompt.',
       inputPlaceholder: 'Message DeepSeek++',

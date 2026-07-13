@@ -6,6 +6,10 @@ import {
   DEFAULT_PROMPT_INJECTION_SETTINGS,
   type PromptInjectionSettings,
 } from '../core/prompt/settings';
+import {
+  ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+  ACTIVE_CHAT_CONVERSATION_STORAGE_KEY,
+} from '../core/chat/conversation-store';
 import PromptControlPanel from '../entrypoints/sidepanel/components/PromptControlPanel';
 import LocalSkillImportPanel from '../entrypoints/sidepanel/components/LocalSkillImportPanel';
 import ChatPage from '../entrypoints/sidepanel/pages/ChatPage';
@@ -14,6 +18,7 @@ import SavedPage from '../entrypoints/sidepanel/pages/SavedPage';
 let container: HTMLDivElement;
 let root: Root | null;
 let runtimeListeners: Array<(message: unknown) => void>;
+let chromeStorage: Record<string, unknown>;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -21,6 +26,7 @@ beforeEach(() => {
   document.body.append(container);
   root = null;
   runtimeListeners = [];
+  chromeStorage = {};
 });
 
 afterEach(() => {
@@ -28,6 +34,7 @@ afterEach(() => {
     act(() => root?.unmount());
   }
   container.remove();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -475,6 +482,175 @@ describe('sidepanel interactions', () => {
     expect((submit?.payload as { logicalConversationId?: string }).logicalConversationId).toBeTruthy();
   });
 
+  it('restores the durable provider transcript and reuses its logical conversation id', async () => {
+    chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-restored',
+      createdAt: 10,
+      updatedAt: 20,
+      messages: [
+        {
+          role: 'user',
+          text: 'Describe the attached card.',
+          providerId: 'qwen-web',
+          modelId: 'qwen3.7-plus',
+          attachments: [{ kind: 'image', name: 'card.png', mimeType: 'image/png' }],
+        },
+        {
+          role: 'assistant',
+          text: 'It is a Sanji card.',
+          reasoningText: 'I inspected the card artwork.',
+          providerId: 'qwen-web',
+          modelId: 'qwen3.7-plus',
+        },
+      ],
+    };
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{
+            ref: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+            label: 'Qwen 3.7 Plus',
+            supportsImages: true,
+          }],
+          activeModel: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+          statuses: [{ providerId: 'qwen-web', available: true }],
+        };
+      }
+      if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+
+    expect(container.textContent).toContain('Describe the attached card.');
+    expect(container.textContent).toContain('It is a Sanji card.');
+    expect(container.textContent).toContain('I inspected the card artwork.');
+    expect(container.textContent).toContain('card.png');
+    expect(container.querySelector('.ds-chat-message-attachment img')).toBeNull();
+
+    await enterText('给 DeepSeek++ 发送消息', 'Continue after reload.');
+    await clickButtonByLabel('发送');
+
+    const submit = sendMessage.mock.calls.find(([message]) => message.type === 'CHAT_SUBMIT_PROMPT')?.[0];
+    expect(submit).toMatchObject({
+      payload: {
+        logicalConversationId: 'conversation-restored',
+        transcript: [
+          { role: 'user', content: 'Describe the attached card.' },
+          { role: 'assistant', content: 'It is a Sanji card.' },
+        ],
+      },
+    });
+  });
+
+  it('persists streamed provider messages after the debounce', async () => {
+    vi.useFakeTimers();
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{
+            ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+            label: 'DeepSeek',
+            supportsImages: true,
+          }],
+          activeModel: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+          statuses: [{ providerId: 'deepseek-web', available: true }],
+        };
+      }
+      if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    await enterText('给 DeepSeek++ 发送消息', 'Persist this turn.');
+    await clickButtonByLabel('发送');
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        providerId: 'deepseek-web',
+        modelId: 'deepseek-web',
+        reasoningText: 'Checked durable state.',
+        text: 'This turn is durable.',
+        done: false,
+      }));
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        providerId: 'deepseek-web',
+        modelId: 'deepseek-web',
+        done: true,
+      }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toMatchObject({
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      messages: [
+        { role: 'user', text: 'Persist this turn.', providerId: 'deepseek-web', modelId: 'deepseek-web' },
+        {
+          role: 'assistant',
+          text: 'This turn is durable.',
+          reasoningText: 'Checked durable state.',
+          providerId: 'deepseek-web',
+          modelId: 'deepseek-web',
+        },
+      ],
+    });
+  });
+
+  it('replaces the durable transcript when a new session is confirmed', async () => {
+    chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-old',
+      createdAt: 10,
+      updatedAt: 20,
+      messages: [{ role: 'user', text: 'Old durable message.' }],
+    };
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') return null;
+      if (message.type === 'CHAT_NEW_SESSION') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    expect(container.textContent).toContain('Old durable message.');
+
+    await clickButtonByLabel('新建会话');
+    await clickButton('新建');
+    await flushPromises();
+
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'CHAT_NEW_SESSION' });
+    expect(container.textContent).not.toContain('Old durable message.');
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toMatchObject({
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      messages: [],
+    });
+    expect((chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] as { logicalConversationId: string }).logicalConversationId)
+      .not.toBe('conversation-old');
+  });
+
   it('replaces non-monotonic Qwen thinking summaries instead of duplicating them', async () => {
     const qwenModel = { providerId: 'qwen-web', modelId: 'qwen3.7-plus' } as const;
     const sendMessage = vi.fn(async (message: { type: string }) => {
@@ -687,6 +863,14 @@ function stubChrome(sendMessage: ReturnType<typeof vi.fn>) {
         }),
         removeListener: vi.fn((listener: (message: unknown) => void) => {
           runtimeListeners = runtimeListeners.filter((item) => item !== listener);
+        }),
+      },
+    },
+    storage: {
+      local: {
+        get: vi.fn(async (key: string) => ({ [key]: chromeStorage[key] })),
+        set: vi.fn(async (value: Record<string, unknown>) => {
+          Object.assign(chromeStorage, value);
         }),
       },
     },

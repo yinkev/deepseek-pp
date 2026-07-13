@@ -15,6 +15,10 @@ import {
 } from '../../../core/voice/settings';
 import { DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES } from '../../../core/deepseek/upload-limits';
 import type { ChatModelRef, ProviderAttachment, ProviderModel } from '../../../core/chat/provider';
+import {
+  loadActiveChatConversation,
+  saveActiveChatConversation,
+} from '../../../core/chat/conversation-store';
 import type { ChatMessage as ChatMessageType, ModelType } from '../../../core/types';
 import ChatMessage from '../components/ChatMessage';
 import { StatusMessage, useConfirm } from '../components/settings/primitives';
@@ -117,6 +121,8 @@ export default function ChatPage() {
   const [isListening, setIsListening] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<VisionImageAttachment[]>([]);
   const [msgSeq, setMsgSeq] = useState(0);
+  const [logicalConversationId, setLogicalConversationId] = useState(createLogicalConversationId);
+  const [conversationHydrated, setConversationHydrated] = useState(false);
   const { confirm, node: confirmNode } = useConfirm();
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -126,7 +132,8 @@ export default function ChatPage() {
   const activeChatModelRef = useRef<ChatModelRef | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceSettingsRef = useRef<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
-  const logicalConversationIdRef = useRef(createLogicalConversationId());
+  const translateRef = useRef(t);
+  const conversationCreatedAtRef = useRef(Date.now());
   const voiceCapabilities = detectVoiceCapabilities(window);
 
   const providerCatalogEnabled = chatModels.length > 0 && activeChatModel !== null;
@@ -154,6 +161,7 @@ export default function ChatPage() {
       .map((item) => item.fileId as string)
     : [];
   const canSendMessage = selectedProviderAvailable
+    && conversationHydrated
     && !isStreaming
     && !hasUploadingImageAttachment
     && !hasFailedImageAttachment
@@ -211,6 +219,51 @@ export default function ChatPage() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    translateRef.current = t;
+  }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadActiveChatConversation()
+      .then((conversation) => {
+        if (cancelled) return;
+        if (conversation) {
+          messagesRef.current = conversation.messages;
+          setMessages(conversation.messages);
+          setLogicalConversationId(conversation.logicalConversationId);
+          conversationCreatedAtRef.current = conversation.createdAt;
+        }
+        setConversationHydrated(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(translateRef.current('sidepanel.chatPage.conversationLoadFailed', {
+          error: err instanceof Error ? err.message : String(err),
+        }));
+        setConversationHydrated(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!conversationHydrated) return;
+    const timeout = window.setTimeout(() => {
+      void saveActiveChatConversation({
+        logicalConversationId,
+        messages,
+        createdAt: conversationCreatedAtRef.current,
+      }).catch((err) => {
+        setError(translateRef.current('sidepanel.chatPage.conversationSaveFailed', {
+          error: err instanceof Error ? err.message : String(err),
+        }));
+      });
+    }, 200);
+    return () => window.clearTimeout(timeout);
+  }, [conversationHydrated, logicalConversationId, messages]);
 
   useEffect(() => {
     imageAttachmentsRef.current = imageAttachments;
@@ -414,7 +467,7 @@ export default function ChatPage() {
         text,
         ...(providerCatalogEnabled && activeChatModel ? {
           model: activeChatModel,
-          logicalConversationId: logicalConversationIdRef.current,
+          logicalConversationId,
           transcript,
           ...(providerAttachments.length > 0 ? { attachments: providerAttachments } : {}),
         } : {}),
@@ -441,7 +494,10 @@ export default function ChatPage() {
       if (!ok) return;
     }
     chrome.runtime.sendMessage({ type: 'CHAT_NEW_SESSION' }).catch(() => {});
-    logicalConversationIdRef.current = createLogicalConversationId();
+    const nextLogicalConversationId = createLogicalConversationId();
+    const now = Date.now();
+    setLogicalConversationId(nextLogicalConversationId);
+    conversationCreatedAtRef.current = now;
     revokeChatMessageAttachmentPreviews(messagesRef.current);
     messagesRef.current = [];
     setMessages([]);
@@ -449,6 +505,18 @@ export default function ChatPage() {
     setIsStreaming(false);
     clearImageAttachments();
     stopVoiceInput();
+    try {
+      await saveActiveChatConversation({
+        logicalConversationId: nextLogicalConversationId,
+        messages: [],
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (err) {
+      setError(t('sidepanel.chatPage.conversationSaveFailed', {
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
     inputRef.current?.focus();
   };
 
@@ -1092,7 +1160,9 @@ function revokeVisionAttachmentPreview(attachment: VisionImageAttachment) {
 
 function revokeChatMessageAttachmentPreviews(messages: ChatMessageType[]) {
   messages.forEach((message) => {
-    message.attachments?.forEach((attachment) => URL.revokeObjectURL(attachment.previewUrl));
+    message.attachments?.forEach((attachment) => {
+      if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+    });
   });
 }
 
