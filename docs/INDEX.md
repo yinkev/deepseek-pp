@@ -8,12 +8,13 @@
 
 | Doc | Purpose |
 |-----|---------|
+| [roadmap/DEEPSEEK-PP-FINAL-VISION.md](./roadmap/DEEPSEEK-PP-FINAL-VISION.md) | Product north star, outcome horizons, and autonomous execution policy |
 | [HANDOFF-NEXT-AGENT.md](./HANDOFF-NEXT-AGENT.md) | Current provider addendum plus historical bridge handoff |
 | [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) | Approved and completed Qwen provider scope |
 | [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) | Implemented architecture, ownership, and mechanisms |
 | [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) | Automated/live evidence ledger and closeout |
 | [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) | Durable active-conversation schema, lifecycle, and verification |
-| [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) | Delivered persistence foundation and deferred continuity features |
+| [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) | Horizon B detail: delivered persistence foundation and deferred continuity controls |
 | [bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md) | **What we built** (chronological inventory) |
 | [bridge/ARCHITECTURE.md](./bridge/ARCHITECTURE.md) | How host ↔ extension ↔ DeepSeek connect |
 | [bridge/MODELS.md](./bridge/MODELS.md) | Model IDs and behavior |

@@ -11,11 +11,14 @@
 
 Read these documents before changing the provider system:
 
-1. [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) — approved scope and constraints.
-2. [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) — implemented structure and mechanisms.
-3. [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) — exact automated and live acceptance evidence.
-4. [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) — durable transcript schema, lifecycle, and verification.
-5. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — delivered foundation and explicitly deferred provider/workspace work.
+1. [roadmap/DEEPSEEK-PP-FINAL-VISION.md](./roadmap/DEEPSEEK-PP-FINAL-VISION.md) — authoritative final product vision, outcome horizons, acceptance gates, and autonomous execution policy.
+2. [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) — approved Qwen scope and constraints.
+3. [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) — implemented structure and mechanisms.
+4. [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) — exact automated and live acceptance evidence.
+5. [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) — durable transcript schema, lifecycle, and verification.
+6. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — Horizon B detail for delivered and deferred conversation continuity work.
+
+Execution style is outcome-driven: plan TDD and implementation slices internally, work through them autonomously, and report at horizon acceptance gates. Do not return a list of routine micro-decisions or ask the user what subtask should come next.
 
 Current provider truth:
 

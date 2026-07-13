@@ -4,6 +4,8 @@
 **Date:** 2026-07-12  
 **Intent:** Keep model providers replaceable without duplicating the user's DeepSeek++ identity or runtime.
 
+**North star:** [DEEPSEEK-PP-FINAL-VISION.md](./DEEPSEEK-PP-FINAL-VISION.md). This document is the detailed design backlog for Horizon B, not the overall product roadmap.
+
 ## Durable boundary
 
 - A **provider module** owns authentication, transport, model metadata, upload constraints, and response/tool encoding.
