@@ -2,6 +2,7 @@ import {
   installFetchHook,
   updateHookState,
   type RequestBodyModification,
+  type RequestTerminalPayload,
   type ResponseCompletePayload,
   type ResponseTokenSpeedPayload,
 } from '../core/interceptor/fetch-hook';
@@ -17,13 +18,21 @@ import type {
 } from '../core/types';
 import type { ToolCallPayloadChunk } from '../core/interceptor/streaming-tool-call-parser';
 import type { SkillPopupCopy, SkillPopupItem } from '../core/ui/skill-popup';
-import { validateBridgeMessage } from '../core/messaging/schema';
+import {
+  BRIDGE_HANDSHAKE_TYPES,
+  BRIDGE_READY_TYPE,
+  BRIDGE_SOURCES,
+  createBridgeSessionController,
+  isBridgeHandshakeMessage,
+  validateBridgeMessage,
+  type BridgeSessionController,
+  type BridgeSessionContext,
+} from '../core/messaging/schema';
 
-const MAIN_WORLD_SOURCE = 'deepseek-pp-main';
-const CONTENT_SOURCE = 'deepseek-pp-content';
-const BRIDGE_REQUEST_TYPE = 'DPP_BRIDGE_REQUEST';
-const BRIDGE_INIT_TYPE = 'DPP_BRIDGE_INIT';
-const BRIDGE_READY_TYPE = 'DPP_BRIDGE_READY';
+const MAIN_WORLD_SOURCE = BRIDGE_SOURCES.mainWorld;
+const CONTENT_SOURCE = BRIDGE_SOURCES.content;
+const BRIDGE_REQUEST_TYPE = BRIDGE_HANDSHAKE_TYPES.request;
+const BRIDGE_INIT_TYPE = BRIDGE_HANDSHAKE_TYPES.init;
 const REQUEST_TIMEOUT_MS = 8_000;
 const BRIDGE_REQUEST_INTERVAL_MS = 50;
 const BRIDGE_REQUEST_MAX_ATTEMPTS = 100;
@@ -47,6 +56,7 @@ type AugmentResultMessage = {
 let contentPort: MessagePort | null = null;
 let bridgeRequestAttempts = 0;
 let bridgeRequestTimer: ReturnType<typeof setInterval> | null = null;
+let contentBridgeSessions: BridgeSessionController | null = null;
 const pendingAugmentRequests = new Map<string, PendingRequest<RequestBodyModification | null>>();
 
 export default defineContentScript({
@@ -77,6 +87,9 @@ export default defineContentScript({
       onResponseComplete(complete: ResponseCompletePayload) {
         postToContent({ type: 'RESPONSE_COMPLETE', payload: complete });
       },
+      onRequestTerminal(terminal: RequestTerminalPayload) {
+        postToContent({ type: 'REQUEST_TERMINAL', payload: terminal });
+      },
       onResponseTokenSpeed(progress: ResponseTokenSpeedPayload) {
         postToContent({ type: 'RESPONSE_TOKEN_SPEED', payload: progress });
       },
@@ -88,21 +101,49 @@ export default defineContentScript({
 });
 
 function installContentBridge(): void {
+  contentBridgeSessions = createBridgeSessionController(window.location.origin);
+  window.addEventListener('pagehide', () => disconnectContentPort());
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted && !contentPort) startBridgeRequests();
+  });
   window.addEventListener('message', (event) => {
-    if (event.origin !== window.location.origin) return;
-    if (event.data?.source !== CONTENT_SOURCE || event.data.type !== BRIDGE_INIT_TYPE) return;
-    if (contentPort) return;
+    if (!isBridgeHandshakeMessage({
+      value: event.data,
+      actualOrigin: event.origin,
+      expectedOrigin: window.location.origin,
+      expectedSource: CONTENT_SOURCE,
+      expectedType: BRIDGE_INIT_TYPE,
+      alreadyConnected: Boolean(contentPort),
+      actualWindowSource: event.source,
+      expectedWindowSource: window,
+      actualTopLevel: window === window.top,
+      requireTopLevel: true,
+      requireTransferredPort: true,
+      transferredPortCount: event.ports.length,
+    })) return;
 
     const [port] = event.ports;
-    if (!port) return;
+    const bridgeSession = contentBridgeSessions?.open(
+      crypto.randomUUID(),
+      window.location.origin,
+      window === window.top,
+    );
+    if (!bridgeSession) return;
 
     contentPort = port;
-    contentPort.onmessage = (message) => handlePortMessage(message.data);
+    contentPort.onmessage = (message) => handlePortMessage(message.data, bridgeSession);
+    contentPort.onmessageerror = () => disconnectContentPort(bridgeSession);
     contentPort.start();
     stopBridgeRequests();
     postToContent({ type: BRIDGE_READY_TYPE });
   });
 
+  startBridgeRequests();
+}
+
+function startBridgeRequests(): void {
+  if (bridgeRequestTimer || contentPort) return;
+  bridgeRequestAttempts = 0;
   bridgeRequestTimer = setInterval(() => {
     if (contentPort || bridgeRequestAttempts >= BRIDGE_REQUEST_MAX_ATTEMPTS) {
       stopBridgeRequests();
@@ -119,7 +160,13 @@ function stopBridgeRequests(): void {
   bridgeRequestTimer = null;
 }
 
-function handlePortMessage(data: unknown): void {
+function handlePortMessage(data: unknown, bridgeSession: BridgeSessionContext): void {
+  if (!contentBridgeSessions?.accepts(
+    bridgeSession,
+    window.location.origin,
+    window === window.top,
+  )) return;
+
   const validated = validateBridgeMessage(data, CONTENT_SOURCE);
   if (!validated) return;
   const message = validated as AugmentResultMessage;
@@ -145,7 +192,23 @@ function handlePortMessage(data: unknown): void {
   }
 }
 
-function requestAugmentedBody(body: string): Promise<RequestBodyModification | null> {
+function disconnectContentPort(bridgeSession?: BridgeSessionContext): void {
+  if (!contentBridgeSessions?.close(bridgeSession)) return;
+  contentPort?.close();
+  contentPort = null;
+  stopBridgeRequests();
+
+  for (const pending of pendingAugmentRequests.values()) {
+    clearTimeout(pending.timeout);
+    pending.reject(new Error('DeepSeek++ main/content bridge disconnected.'));
+  }
+  pendingAugmentRequests.clear();
+}
+
+function requestAugmentedBody(
+  body: string,
+  requestId: string,
+): Promise<RequestBodyModification | null> {
   if (!contentPort) {
     return Promise.resolve(null);
   }
@@ -158,7 +221,7 @@ function requestAugmentedBody(body: string): Promise<RequestBodyModification | n
     }, REQUEST_TIMEOUT_MS);
 
     pendingAugmentRequests.set(id, { resolve, reject, timeout });
-    postToContent({ type: 'AUGMENT_REQUEST_BODY', id, body });
+    postToContent({ type: 'AUGMENT_REQUEST_BODY', id, requestId, body });
   });
 }
 

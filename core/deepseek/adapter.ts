@@ -19,13 +19,18 @@ import {
   type PowChallenge,
 } from './pow';
 import { DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES } from './upload-limits';
+import {
+  DEEPSEEK_BYPASS_HOOK_HEADER,
+  DEEPSEEK_FILE_FETCH_PATH,
+  DEEPSEEK_FILE_UPLOAD_PATH,
+  DEEPSEEK_WEB_ROUTES,
+} from './contracts';
 
 const COMPLETION_PATH = new URL(DEEPSEEK_API_URL).pathname;
-const POW_CHALLENGE_PATH = '/api/v0/chat/create_pow_challenge';
-const CHAT_SESSION_CREATE_PATH = '/api/v0/chat_session/create';
-const HISTORY_PATH = '/api/v0/chat/history_messages';
-export const DEEPSEEK_FILE_UPLOAD_PATH = '/api/v0/file/upload_file';
-export const DEEPSEEK_FILE_FETCH_PATH = '/api/v0/file/fetch_files';
+const POW_CHALLENGE_PATH = DEEPSEEK_WEB_ROUTES.powChallenge;
+const CHAT_SESSION_CREATE_PATH = DEEPSEEK_WEB_ROUTES.createSession;
+const HISTORY_PATH = DEEPSEEK_WEB_ROUTES.history;
+export { DEEPSEEK_FILE_FETCH_PATH, DEEPSEEK_FILE_UPLOAD_PATH } from './contracts';
 export { DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES } from './upload-limits';
 const DEFAULT_MODEL_TYPE = 'default';
 const DEFAULT_APP_VERSION = '2.0.0';
@@ -38,7 +43,7 @@ const FILE_READY_TIMEOUT_MS = 15_000;
 // DeepSeek can return audit_result=unknown together with status=SUCCESS for usable image uploads.
 const ACCEPTED_FILE_AUDIT_RESULTS = new Set(['PASS', 'PASSED', 'SUCCESS', 'OK', 'UNKNOWN']);
 const REJECTED_FILE_AUDIT_RESULTS = new Set(['REJECT', 'REJECTED', 'FAIL', 'FAILED', 'ERROR', 'BLOCK', 'BLOCKED', 'DENY', 'DENIED']);
-export const BYPASS_HOOK_HEADER = 'X-DPP-Bypass-Hook';
+export const BYPASS_HOOK_HEADER = DEEPSEEK_BYPASS_HOOK_HEADER;
 
 let rememberedClientHeaders: Record<string, string> | null = null;
 
@@ -137,10 +142,14 @@ export class DeepSeekPayloadError extends Error {
   }
 }
 
-export async function createChatSession(clientHeaders: Record<string, string>): Promise<string> {
+export async function createChatSession(
+  clientHeaders: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<string> {
   const response = await fetch(new URL(CHAT_SESSION_CREATE_PATH, DEEPSEEK_API_URL).href, {
     method: 'POST',
     credentials: 'include',
+    signal,
     headers: { 'content-type': 'application/json', ...clientHeaders },
     body: JSON.stringify({}),
   });
@@ -162,18 +171,22 @@ export async function createChatSession(clientHeaders: Record<string, string>): 
 export async function createPowHeaders(
   clientHeaders: Record<string, string>,
   wasmUrl?: string,
+  signal?: AbortSignal,
 ): Promise<Record<string, string>> {
-  return createPowHeadersForPath(clientHeaders, COMPLETION_PATH, wasmUrl);
+  return createPowHeadersForPath(clientHeaders, COMPLETION_PATH, wasmUrl, signal);
 }
 
 export async function createPowHeadersForPath(
   clientHeaders: Record<string, string>,
   targetPath: string,
   wasmUrl?: string,
+  signal?: AbortSignal,
 ): Promise<Record<string, string>> {
   try {
-    const challenge = await createPowChallenge(clientHeaders, targetPath);
-    const answer = await solvePowChallenge(challenge, wasmUrl);
+    const challenge = await createPowChallenge(clientHeaders, targetPath, signal);
+    assertSignalActive(signal);
+    const answer = await solvePowChallenge(challenge, wasmUrl, signal);
+    assertSignalActive(signal);
     return {
       'X-DS-PoW-Response': base64EncodeUtf8(JSON.stringify({
         algorithm: answer.algorithm,
@@ -185,10 +198,17 @@ export async function createPowHeadersForPath(
       })),
     };
   } catch (err) {
+    if (signal?.aborted) assertSignalActive(signal);
     if (err instanceof DeepSeekPowError) throw err;
     if (err instanceof DeepSeekAuthError) throw err;
     throw new DeepSeekPowError(err instanceof Error ? err.message : String(err));
   }
+}
+
+function assertSignalActive(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new DOMException('DeepSeek request was aborted.', 'AbortError');
 }
 
 export function createClientHeaders(options?: { missingTokenMessage?: string }): Record<string, string> {
@@ -460,6 +480,7 @@ export async function readHistorySnapshot(
   chatSessionId: string,
   expectedAssistantMessageId: number,
   clientHeadersOverride?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<DeepSeekHistorySnapshot | null> {
   const clientHeaders = clientHeadersOverride ?? createClientHeaders();
   const url = new URL(HISTORY_PATH, DEEPSEEK_API_URL);
@@ -467,6 +488,7 @@ export async function readHistorySnapshot(
   const response = await fetch(url.href, {
     method: 'GET',
     credentials: 'include',
+    signal,
     headers: {
       accept: 'application/json',
       ...clientHeaders,
@@ -815,10 +837,15 @@ function normalizeModelType(modelType: string | null): string {
   return DEFAULT_MODEL_TYPE;
 }
 
-async function createPowChallenge(clientHeaders: Record<string, string>, targetPath: string): Promise<PowChallenge> {
+async function createPowChallenge(
+  clientHeaders: Record<string, string>,
+  targetPath: string,
+  signal?: AbortSignal,
+): Promise<PowChallenge> {
   const response = await fetch(new URL(POW_CHALLENGE_PATH, DEEPSEEK_API_URL).href, {
     method: 'POST',
     credentials: 'include',
+    signal,
     headers: { 'content-type': 'application/json', ...clientHeaders },
     body: JSON.stringify({ target_path: targetPath }),
   });
@@ -896,9 +923,13 @@ function isUploadedFileAuditRejected(file: DeepSeekUploadedFile): boolean {
   return auditResult ? REJECTED_FILE_AUDIT_RESULTS.has(auditResult) : false;
 }
 
-async function solvePowChallenge(challenge: PowChallenge, wasmUrl?: string): Promise<PowAnswer> {
+async function solvePowChallenge(
+  challenge: PowChallenge,
+  wasmUrl?: string,
+  signal?: AbortSignal,
+): Promise<PowAnswer> {
   try {
-    return await solvePowChallengeLocally(challenge, wasmUrl);
+    return await solvePowChallengeLocally(challenge, wasmUrl, signal);
   } catch (err) {
     const localMessage = err instanceof Error ? err.message : String(err);
     throw new DeepSeekPowError(`DeepSeek PoW challenge failed: ${localMessage}`);

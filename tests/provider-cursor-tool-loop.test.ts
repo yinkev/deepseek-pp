@@ -33,7 +33,7 @@ describe('provider-neutral tool continuation cursor', () => {
       submitContinuation,
     });
 
-    expect(executeToolCall).toHaveBeenCalledWith(call, 'qwen-response-1');
+    expect(executeToolCall).toHaveBeenCalledWith(call, 'qwen-response-1', { depth: 0, callIndex: 0 });
     expect(submitContinuation).toHaveBeenCalledWith('tool result: 2', 'qwen-response-1');
     expect(result.turn.parentCursor).toBe('qwen-response-2');
   });

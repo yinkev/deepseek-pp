@@ -25,9 +25,15 @@ export interface ToolContinuationLoopInput<TTurn, TCursor extends string | numbe
   getAssistantText: (turn: TTurn) => string;
   getParentCursor: (turn: TTurn) => TCursor | null;
   extractToolCalls: (assistantText: string, turn: TTurn) => ToolCall[];
-  executeToolCall: (call: ToolCall, parentCursor: TCursor) => Promise<ToolExecutionRecord>;
+  executeToolCall: (
+    call: ToolCall,
+    parentCursor: TCursor,
+    position: { depth: number; callIndex: number },
+  ) => Promise<ToolExecutionRecord>;
   buildContinuationPrompt: (executions: ToolExecutionRecord[]) => string;
   submitContinuation: (prompt: string, parentCursor: TCursor) => Promise<TTurn>;
+  signal?: AbortSignal;
+  assertActive?: () => void;
 }
 
 export async function runToolContinuationLoop<TTurn, TCursor extends string | number>(
@@ -38,14 +44,21 @@ export async function runToolContinuationLoop<TTurn, TCursor extends string | nu
   const executions: ToolExecutionRecord[] = [];
 
   for (let depth = 0; depth < input.maxDepth; depth++) {
+    assertContinuationActive(input);
     if (parentCursor === null) break;
 
     const calls = input.extractToolCalls(input.getAssistantText(turn), turn);
     if (calls.length === 0) break;
 
     const stepExecutions: ToolExecutionRecord[] = [];
-    for (const call of calls) {
-      const execution = await input.executeToolCall(call, parentCursor);
+    for (let callIndex = 0; callIndex < calls.length; callIndex++) {
+      assertContinuationActive(input);
+      const execution = await input.executeToolCall(
+        calls[callIndex],
+        parentCursor,
+        { depth, callIndex },
+      );
+      assertContinuationActive(input);
       stepExecutions.push(execution);
       executions.push(execution);
     }
@@ -57,14 +70,26 @@ export async function runToolContinuationLoop<TTurn, TCursor extends string | nu
     });
     if (allAborted) break;
 
+    assertContinuationActive(input);
     turn = await input.submitContinuation(
       input.buildContinuationPrompt(stepExecutions),
       parentCursor,
     );
+    assertContinuationActive(input);
     parentCursor = input.getParentCursor(turn);
   }
 
   return { turn, executions };
+}
+
+function assertContinuationActive<TTurn, TCursor extends string | number>(
+  input: ToolContinuationLoopInput<TTurn, TCursor>,
+): void {
+  input.assertActive?.();
+  if (!input.signal?.aborted) return;
+  const reason = input.signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException('Automation continuation was aborted.', 'AbortError');
 }
 
 export function createToolExecutionRecord(

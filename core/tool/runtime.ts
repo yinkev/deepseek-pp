@@ -47,15 +47,41 @@ import {
   isBrowserControlToolName,
   shouldExposeBrowserControlTools,
 } from '../browser-control/tool';
+import {
+  executeSandboxToolCall,
+  isSandboxToolName,
+  type SandboxToolRuntime,
+} from '../sandbox';
 import { getWebToolSettings } from './web-settings';
 import type { ToolCall, ToolDescriptor, ToolExecutionTrigger, ToolResult } from './types';
+import type { RuntimeToolAuthorizationContext } from './types';
 import {
   isExternalizedToolPayload,
   parseExternalizedToolPayload,
   takeExternalizedToolPayloadText,
 } from './externalized-payload';
+import { isToolCallRecord } from '../messaging/tool-record-codec';
+import {
+  authorizeToolExecution,
+  completeToolExecutionAuthorization,
+  createToolAuthorizationResult,
+  getToolAuthorizationAuditTrigger,
+  ToolAuthorizationError,
+} from './authorization';
 
-export type RuntimeToolCallOptions = McpToolExecutionOptions;
+export interface RuntimeToolCallOptions extends McpToolExecutionOptions {
+  signal?: AbortSignal;
+  idempotencyKey?: string;
+  assertActive?: () => void;
+  /**
+   * Narrow, caller-provided sandbox surface. Never advertised via the public
+   * descriptor catalog; only available when the trusted background path injects it.
+   */
+  sandbox?: {
+    runtime: SandboxToolRuntime;
+    descriptors: readonly ToolDescriptor[];
+  };
+}
 
 const memoryRuntime: MemoryToolRuntime = {
   async saveMemory(input: NewMemory) {
@@ -76,6 +102,19 @@ const memoryRuntime: MemoryToolRuntime = {
 export async function getRuntimeToolDescriptors(
   locale: SupportedLocale = DEFAULT_LOCALE,
 ): Promise<ToolDescriptor[]> {
+  return getRuntimeDescriptors(locale, false);
+}
+
+export async function getRuntimeAuthorizationDescriptors(
+  locale: SupportedLocale = DEFAULT_LOCALE,
+): Promise<ToolDescriptor[]> {
+  return getRuntimeDescriptors(locale, true);
+}
+
+async function getRuntimeDescriptors(
+  locale: SupportedLocale,
+  includeDisabledMcp: boolean,
+): Promise<ToolDescriptor[]> {
   const webSettings = await getWebToolSettings();
   const enabledWebDescriptors = createWebSearchToolDescriptors(locale).filter(
     (d) => webSettings[d.name as keyof typeof webSettings] !== false,
@@ -90,7 +129,7 @@ export async function getRuntimeToolDescriptors(
     ...createSkillCreatorToolDescriptors(locale),
     ...createMemoryImportToolDescriptors(locale),
     ...browserControlDescriptors,
-    ...await getMcpToolDescriptors(),
+    ...await getMcpToolDescriptors(includeDisabledMcp ? { includeDisabled: true } : undefined),
   ];
 }
 
@@ -108,25 +147,145 @@ export async function refreshRuntimeToolDescriptors(
 
 export async function executeRuntimeToolCall(
   call: ToolCall,
-  source: ToolExecutionTrigger,
+  authorization: RuntimeToolAuthorizationContext | ToolExecutionTrigger,
   locale: SupportedLocale = DEFAULT_LOCALE,
   options: RuntimeToolCallOptions = {},
 ): Promise<ToolResult> {
-  const resolvedCall = await resolveToolCallPayload(call);
-  const result = await executeToolCallWithoutHistory(resolvedCall, locale, options);
+  assertRuntimeExecutionActive(options);
+  const identifiedCall = !call.id && options.idempotencyKey
+    ? { ...call, id: options.idempotencyKey }
+    : call;
+  if (!isToolCallRecord(identifiedCall)) {
+    return {
+      ok: false,
+      summary: translate(locale, 'tool.runtime.invalidFormat'),
+      detail: 'Runtime tool call does not match the released contract.',
+      name: typeof (identifiedCall as { name?: unknown })?.name === 'string' ? identifiedCall.name : undefined,
+      error: {
+        code: 'tool_call_payload_invalid',
+        message: 'Runtime tool call does not match the released contract.',
+        retryable: false,
+      },
+    };
+  }
+  const context = typeof authorization === 'string'
+    ? createTrustedExecutionContext(identifiedCall, authorization)
+    : authorization;
+  if (identifiedCall.parseError) {
+    const result = createParseErrorToolResult(identifiedCall, locale);
+    await appendAuthorizedFailureHistory(identifiedCall, result, context);
+    return result;
+  }
+  let authorized: Awaited<ReturnType<typeof authorizeToolExecution>>;
   try {
-    await appendToolCallHistory(resolvedCall, result, source);
+    authorized = await authorizeToolExecution(
+      identifiedCall,
+      context,
+      await getAuthorizationDescriptorsForOptions(locale, options),
+    );
+    assertRuntimeExecutionActive(options);
+  } catch (error) {
+    if (!(error instanceof ToolAuthorizationError)) throw error;
+    const result = error.code === 'tool_unsupported'
+      ? createUnsupportedToolResult(identifiedCall, locale)
+      : createToolAuthorizationResult(
+        error,
+        identifiedCall,
+        translate(locale, 'tool.runtime.authorizationRejected'),
+      );
+    await appendAuthorizedFailureHistory(identifiedCall, result, context);
+    return result;
+  }
+
+  let result: ToolResult;
+  let resolvedCall = authorized.call;
+  try {
+    resolvedCall = await resolveToolCallPayload(
+      authorized.call,
+      authorized.externalPayloadNamespace,
+    );
+    assertRuntimeExecutionActive(options);
+    result = await executeToolCallWithoutHistory(
+      resolvedCall,
+      authorized.descriptor,
+      locale,
+      options,
+    );
+    assertRuntimeExecutionActive(options);
+  } catch (error) {
+    await completeAuthorizationAfterProvider(authorized.reservation);
+    throw error;
+  }
+  await completeAuthorizationAfterProvider(authorized.reservation, result);
+  await appendRuntimeToolHistory(resolvedCall, result, authorized.trigger);
+  assertRuntimeExecutionActive(options);
+  return result;
+}
+
+function assertRuntimeExecutionActive(options: RuntimeToolCallOptions): void {
+  options.assertActive?.();
+  if (!options.signal?.aborted) return;
+  const reason = options.signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException('Tool execution was aborted.', 'AbortError');
+}
+
+async function getAuthorizationDescriptorsForOptions(
+  locale: SupportedLocale,
+  options: RuntimeToolCallOptions,
+): Promise<ToolDescriptor[]> {
+  const descriptors = await getRuntimeAuthorizationDescriptors(locale);
+  if (!options.sandbox?.descriptors?.length) return descriptors;
+  return [...descriptors, ...options.sandbox.descriptors];
+}
+
+async function appendAuthorizedFailureHistory(
+  call: ToolCall,
+  result: ToolResult,
+  context: RuntimeToolAuthorizationContext,
+): Promise<void> {
+  const trigger = await getToolAuthorizationAuditTrigger(call, context);
+  if (trigger) await appendRuntimeToolHistory(call, result, trigger);
+}
+
+async function completeAuthorizationAfterProvider(
+  reservation: Awaited<ReturnType<typeof authorizeToolExecution>>['reservation'],
+  result?: ToolResult,
+): Promise<void> {
+  try {
+    await completeToolExecutionAuthorization(reservation, result);
+  } catch (error) {
+    // The executing reservation was persisted before provider I/O, so a failed
+    // completion write remains fail-closed for replay. Preserve the real
+    // provider result and history instead of replacing it with a storage error.
+    console.error('[DeepSeek++] tool authorization completion persistence failed', error);
+  }
+}
+
+async function appendRuntimeToolHistory(
+  call: ToolCall,
+  result: ToolResult,
+  source: ToolExecutionTrigger,
+): Promise<void> {
+  try {
+    await appendToolCallHistory(call, result, source);
   } catch (error) {
     if (!isRecoverableToolHistoryError(error)) throw error;
     console.warn('[DeepSeek++] tool history persistence failed', error);
   }
-  return result;
 }
 
-async function resolveToolCallPayload(call: ToolCall): Promise<ToolCall> {
+async function resolveToolCallPayload(
+  call: ToolCall,
+  externalPayloadNamespace?: string,
+): Promise<ToolCall> {
   if (!isExternalizedToolPayload(call.payload)) return call;
 
-  const body = takeExternalizedToolPayloadText(call.payload.ref, call.payload.invocationName);
+  const body = takeExternalizedToolPayloadText(
+    call.payload.ref,
+    call.payload.invocationName,
+    externalPayloadNamespace,
+  );
   if (body === null) {
     return {
       ...call,
@@ -163,19 +322,20 @@ function isRecoverableToolHistoryError(error: unknown): boolean {
 
 async function executeToolCallWithoutHistory(
   call: ToolCall,
+  descriptor: ToolDescriptor,
   locale: SupportedLocale,
   options: RuntimeToolCallOptions,
 ): Promise<ToolResult> {
   if (call.parseError) {
-    return {
-      ok: false,
-      summary: translate(locale, 'tool.runtime.invalidFormat'),
-      detail: call.parseError.message,
-      name: call.name,
-      provider: call.provider,
-      descriptorId: call.descriptorId,
-      error: call.parseError,
-    };
+    return createParseErrorToolResult(call, locale);
+  }
+
+  if (descriptor.provider.kind === 'mcp') {
+    return executeMcpToolCall(call, descriptor, options);
+  }
+
+  if (descriptor.provider.kind !== 'local') {
+    return createUnsupportedToolResult(call, locale);
   }
 
   if (isMemoryToolName(call.name)) {
@@ -183,7 +343,7 @@ async function executeToolCallWithoutHistory(
   }
 
   if (isWebSearchToolName(call.name)) {
-    return executeWebSearchToolCall(call, locale);
+    return executeWebSearchToolCall(call, locale, { signal: options.signal });
   }
 
   if (isArtifactToolName(call.name)) {
@@ -202,10 +362,30 @@ async function executeToolCallWithoutHistory(
     return executeBrowserControlToolCall(call, locale);
   }
 
-  if (call.provider?.kind === 'mcp' || call.descriptorId?.startsWith('mcp:')) {
-    return executeMcpToolCall(call, options);
+  if (options.sandbox && isSandboxToolName(call.name)) {
+    return executeSandboxToolCall(options.sandbox.runtime, call, locale);
   }
 
+  return createUnsupportedToolResult(call, locale);
+}
+
+function createParseErrorToolResult(call: ToolCall, locale: SupportedLocale): ToolResult {
+  return {
+    ok: false,
+    summary: translate(locale, 'tool.runtime.invalidFormat'),
+    detail: call.parseError?.message ?? 'Tool call payload is invalid.',
+    name: call.name,
+    provider: call.provider,
+    descriptorId: call.descriptorId,
+    error: call.parseError ?? {
+      code: 'tool_call_payload_invalid',
+      message: 'Tool call payload is invalid.',
+      retryable: false,
+    },
+  };
+}
+
+function createUnsupportedToolResult(call: ToolCall, locale: SupportedLocale): ToolResult {
   return {
     ok: false,
     summary: translate(locale, 'tool.runtime.unknownTool'),
@@ -218,6 +398,22 @@ async function executeToolCallWithoutHistory(
       message: `Unsupported tool: ${call.name}`,
       retryable: false,
     },
+  };
+}
+
+function createTrustedExecutionContext(
+  call: ToolCall,
+  trigger: ToolExecutionTrigger,
+): RuntimeToolAuthorizationContext {
+  return {
+    kind: 'trusted',
+    trigger,
+    requestId: call.source?.requestId ?? crypto.randomUUID(),
+    chatSessionId: call.source?.chatSessionId ?? null,
+    taskId: call.source?.taskId,
+    runId: call.source?.runId,
+    automationId: call.source?.automationId,
+    automationRunId: call.source?.automationRunId,
   };
 }
 

@@ -4,9 +4,7 @@ import {
   saveMemory,
   updateMemory,
   deleteMemory,
-  deleteMemoriesForProject,
   touchMemories,
-  replaceAllMemories,
   archiveStaleMemories,
 } from '../core/memory/store';
 import { filterMemoriesByProjectScope } from '../core/memory/scope';
@@ -16,8 +14,6 @@ import {
   getAllSkills,
   getSkillLibrary,
   getUserSkills,
-  replaceAllCustomSkills,
-  replaceAllSkillSources,
   saveSkill,
   setSkillEnabled,
   setSkillsEnabled,
@@ -40,7 +36,6 @@ import {
   deletePreset,
   getActivePreset,
   setActivePresetId,
-  replaceAllPresets,
 } from '../core/preset/store';
 import { getModelType, setModelType } from '../core/model/store';
 import { getDeepSeekTheme, saveDeepSeekTheme } from '../core/theme/store';
@@ -49,8 +44,28 @@ import { getPetConfig, savePetConfig, clearPetConfig } from '../core/pet/store';
 import { clearUsageRecords, getUsageSummary, recordUsageTurn } from '../core/usage/store';
 import { getExtensionVersion } from '../core/version';
 import { getSyncConfig, saveSyncConfig } from '../core/sync/config';
+import {
+  OPTIONAL_SYNC_FILE_KEYS,
+  REQUIRED_SYNC_FILE_KEYS,
+  SYNC_FILE_KEYS,
+  type SyncFileKey,
+} from '../core/sync/contracts';
+import {
+  readCurrentSyncGeneration,
+  uploadSyncGeneration,
+} from '../core/sync/generation';
 import { mergeLocalSkillImportsIntoSyncSnapshot } from '../core/sync/local-skill-merge';
-import { createStorageBackend, type StorageBackend } from '../core/sync/storage-backend';
+import {
+  recoverPendingSyncLocalApply,
+  stageAndApplySyncSnapshotLocally,
+} from '../core/sync/local-apply-runtime';
+import { createSyncRecoveryBarrier } from '../core/sync/recovery-barrier';
+import { createStorageBackend } from '../core/sync/backend-factory';
+import type { StorageBackend } from '../core/sync/storage-backend';
+import {
+  serializeSyncDataSnapshot,
+  type SyncDataSnapshot,
+} from '../core/sync/snapshot';
 import { authorizeGDrive } from '../core/sync/gdrive-client';
 import { authorizeOneDrive } from '../core/sync/onedrive-client';
 import {
@@ -62,16 +77,28 @@ import {
   validateSavedItemsState,
   validateSkillImportSource,
   validateSkill,
-  validateStoredMemory,
+  validateSyncMemory,
 } from '../core/sync/schema';
 import { clearToolCallHistory, getToolCallHistory } from '../core/tool/history';
-import { appendExternalizedToolPayloadChunk } from '../core/tool/externalized-payload';
+import {
+  appendExternalizedToolPayloadChunk,
+  clearExternalizedToolPayloadNamespace,
+} from '../core/tool/externalized-payload';
 import {
   executeRuntimeToolCall,
+  getRuntimeAuthorizationDescriptors,
   getRuntimeToolDescriptors,
   refreshRuntimeToolDescriptors,
   type RuntimeToolCallOptions,
 } from '../core/tool/runtime';
+import {
+  authorizeExternalToolPayloadChunk,
+  closeToolAuthorization,
+  createToolAuthorization,
+  createToolAuthorizationResult,
+  ToolAuthorizationError,
+} from '../core/tool/authorization';
+import { ExternalPayloadAuthorizationCache } from '../core/tool/external-payload-authorization-cache';
 import {
   browserControlService,
   getBrowserControlSettings,
@@ -85,14 +112,13 @@ import {
   addConversationToProject,
   bindPendingProjectConversation,
   createProjectContext,
-  deleteProjectContext,
+  deleteProjectContextAndMemories,
   formatProjectPromptContext,
   getProjectContextState,
   getProjectForConversation,
   getProjectPromptContextForConversation,
   refreshProjectConversation,
   removeConversationFromProject,
-  saveProjectContextState,
   setPendingProjectContext,
   updateProjectContext,
 } from '../core/project';
@@ -101,7 +127,6 @@ import {
   deleteSavedItem,
   getAllSavedItems,
   getSavedItemsState,
-  replaceAllSavedItems,
   saveSavedItem,
 } from '../core/saved-items';
 import {
@@ -114,11 +139,17 @@ import {
   getVoiceSettings,
   saveVoiceSettings,
 } from '../core/voice/settings';
-import type { SandboxExecutionResult, SandboxRunRequest, SandboxToolRuntime } from '../core/sandbox';
 import {
   createSandboxToolDescriptors,
-  executeSandboxToolCall,
-  isSandboxToolName,
+  normalizeSandboxExecutionResult,
+  normalizeSandboxRunRequest,
+  parseSandboxEnvelope,
+  readSandboxRequestId,
+  SANDBOX_MESSAGE_TYPES,
+  SANDBOX_OFFSCREEN_PORT,
+  type SandboxExecutionResult,
+  type SandboxRunRequest,
+  type SandboxToolRuntime,
 } from '../core/sandbox';
 import { getCurrentBrowserExtensionEnvironment } from '../core/platform';
 import { readOptionalChromeApi } from '../core/platform/chrome-api';
@@ -199,6 +230,7 @@ import { createAutomationRunnerFailure } from '../core/automation/messages';
 import {
   AUTOMATION_WAKE_ALARM_NAME,
   AUTOMATION_WAKE_INTERVAL_MINUTES,
+  cancelActiveAutomationRun,
   refreshAutomationNextRunAt,
   runAutomation,
   scanDueAutomations,
@@ -272,6 +304,17 @@ import { normalizeConversationExportRequest } from '../core/export/schema';
 import { buildPromptAugmentation } from '../core/prompt';
 import { extractToolCalls } from '../core/interceptor/tool-parser';
 import { broadcastRuntimeUpdate } from '../core/messaging/broadcast';
+import { createBackgroundErrorResponse } from '../core/messaging/background-error';
+import {
+  authorizeRuntimeMessage,
+  createRuntimeBoundaryErrorResponse,
+  createRuntimeMessageContext,
+  decodeRuntimeMessageEnvelope,
+  type RuntimeMessageContext,
+  type RuntimeMessageEnvelope,
+} from '../core/messaging/runtime-boundary';
+import { createRuntimeCommandRegistry } from '../core/messaging/runtime-command-registry';
+import { createBootstrapRuntimeHandlers } from './background/bootstrap-handlers';
 import {
   createTranslator,
   DEFAULT_LOCALE,
@@ -284,9 +327,10 @@ import {
   watchLocalePreference,
 } from '../core/i18n/store';
 import type { WebSearchToolName } from '../core/tool/web-search';
-import type { BackgroundConfig, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, ProjectContextState, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncConfigDraft, SyncCounts, SystemPromptPreset, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
+import type { BackgroundConfig, CurrentDeepSeekConversation, DeepSeekTheme, GitHubSkillImportRequest, GitHubSkillSource, LocalSkillImportRequest, Memory, ModelType, NewMemory, PetConfig, SavedItemInput, Skill, SkillImportSource, SyncConfig, SyncConfigDraft, SyncCounts, SystemPromptPreset, ToolAuthorizationSubject, ToolCall, ToolDescriptor, ToolExecutionRecord, ToolExecutionTrigger, ToolResult, UsageTurnInput } from '../core/types';
 import type { McpServerConfig, McpServerCreateInput, McpServerUpdateInput } from '../core/mcp/types';
 import type { AutomationCreateInput, AutomationRunnerRequest, AutomationRunnerResult, AutomationStatus, AutomationUpdateInput } from '../core/automation/types';
+import type { AutomationExecutionContext } from '../core/automation/execution';
 import type { ConversationExportProgress, ConversationExportResult } from '../core/export/types';
 
 const DEEPSEEK_HOME_URL = 'https://chat.deepseek.com/';
@@ -342,14 +386,38 @@ interface SidepanelProviderConversationState {
 type ProviderTransportKind = 'deepseek-web' | 'deepseek-official' | 'qwen-web';
 let sidepanelProviderConversation: SidepanelProviderConversationState | null = null;
 const conversationExportControllers = new Map<string, AbortController>();
+const externalPayloadAuthorizationCache = new ExternalPayloadAuthorizationCache();
 let currentBackgroundLocale: SupportedLocale = DEFAULT_LOCALE;
 let currentBackgroundTranslator = createTranslator(DEFAULT_LOCALE);
 let sandboxOffscreenCreation: Promise<void> | null = null;
+const syncLocalRecoveryBarrier = createSyncRecoveryBarrier({
+  recover: recoverPendingSyncLocalApply,
+  async notifyRecovered() {
+    await Promise.all([
+      broadcastStateUpdate(),
+      broadcastProjectContextUpdate(),
+      broadcastSavedItemsUpdate(),
+    ]);
+  },
+  onRecoveryFailure(error) {
+    reportBackgroundStartupError('sync_local_recovery_failed', error);
+  },
+  onNotificationFailure(error) {
+    reportBackgroundStartupError('sync_local_recovery_broadcast_failed', error);
+  },
+});
 const SANDBOX_OFFSCREEN_URL = 'sandbox-offscreen.html';
-const SANDBOX_OFFSCREEN_PORT = 'sandbox-offscreen';
 const browserSandboxRuntime: SandboxToolRuntime = {
   runSandbox: (request) => runBrowserSandboxToolResult(request),
 };
+const runtimeCommandRegistry = createRuntimeCommandRegistry({
+  typedHandlers: createBootstrapRuntimeHandlers({
+    getVersion: getExtensionVersion,
+    dismissWhatsNew,
+    refreshWhatsNewBadge,
+  }),
+  handleLegacy: handleLegacyMessage,
+});
 
 function backgroundT(key: LocaleMessageKey, params?: MessageParams): string {
   return currentBackgroundTranslator.t(key, params);
@@ -369,16 +437,8 @@ type ActionApi = {
   setBadgeBackgroundColor?: (details: { color: string }) => Promise<void> | void;
 };
 
-type SyncDataSnapshot = {
-  memories: Omit<Memory, 'id'>[];
-  skills: Skill[];
-  skillSources: SkillImportSource[];
-  presets: SystemPromptPreset[];
-  projectContext: ProjectContextState | null;
-  savedItems: Awaited<ReturnType<typeof getSavedItemsState>> | null;
-};
-
 export default defineBackground(() => {
+  void syncLocalRecoveryBarrier.ensureReady().catch(() => undefined);
   enableSidePanelActionClick();
   registerWhatsNewInstallListener();
   registerAutomationAlarmListener();
@@ -395,39 +455,68 @@ export default defineBackground(() => {
       .catch((error) => reportBackgroundStartupError('locale_refresh_failed', error));
   });
 
-  archiveStaleMemories().catch((error) => reportBackgroundStartupError('archive_stale_memories_failed', error));
+  syncLocalRecoveryBarrier.ensureReady()
+    .then(() => archiveStaleMemories()
+      .catch((error) => reportBackgroundStartupError('archive_stale_memories_failed', error)))
+    .catch(() => undefined);
   ensureBuiltInMcpPresets().catch((error) => reportBackgroundStartupError('builtin_mcp_presets_failed', error));
   refreshWhatsNewBadge().catch((error) => reportBackgroundStartupError('whats_new_badge_failed', error));
   ensureAutomationWakeAlarm().catch((error) => reportBackgroundStartupError('automation_alarm_create_failed', error));
   reconcileInterruptedChatLoopOnWake().catch((error) => reportBackgroundStartupError('chat_loop_reconcile_failed', error));
+  // Qwen capture can register immediately; automations + Cursor bridge wait for sync recovery.
   registerQwenRequestAuthCapture();
   refreshQwenAuthFromChrome().catch(() => {});
-  scanDueAutomationsFromWake().catch((error) => reportBackgroundStartupError('automation_startup_scan_failed', error));
-  // Local Cursor bridge: native host OpenAI surface → extension → DeepSeek web path.
-  startCursorBridgeRuntime({
-    deps: {
-      loadClientHeaders: async () => {
-        // Content script write to legacy cache is the freshest after a page message.
-        const legacy = await loadClientHeadersFromStorage();
-        if (legacy?.Authorization) return legacy;
-        const { loadAnyAccountHeaders } = await import('../core/cursor-bridge/account-vault');
-        return await loadAnyAccountHeaders();
-      },
-      refreshClientHeadersFromTabs: () => refreshClientHeadersFromDeepSeekTabs(),
-      // Same DeepSeek++ tool runtime as web chat / automation / sidepanel.
-      executeTool: (call) => executeBackgroundRuntimeToolCall(call, call.source?.trigger ?? 'agent_run'),
-      loadToolDescriptors: () => getRuntimeToolDescriptors(currentBackgroundLocale),
-      loadMemories: () => getAllMemories(),
-      toolsEnabled: true,
-    },
-    // Lifecycle noise only — never console.error (shows up as Chrome extension Errors).
-    onLog: (message) => console.debug(`[DeepSeek++] cursor_bridge: ${message}`),
-  });
+  syncLocalRecoveryBarrier.ensureReady()
+    .then(() => {
+      scanDueAutomationsFromWake()
+        .catch((error) => reportBackgroundStartupError('automation_startup_scan_failed', error));
+      // Local Cursor bridge: native host OpenAI surface → extension → DeepSeek web path.
+      startCursorBridgeRuntime({
+        deps: {
+          loadClientHeaders: async () => {
+            // Content script write to legacy cache is the freshest after a page message.
+            const legacy = await loadClientHeadersFromStorage();
+            if (legacy?.Authorization) return legacy;
+            const { loadAnyAccountHeaders } = await import('../core/cursor-bridge/account-vault');
+            return await loadAnyAccountHeaders();
+          },
+          refreshClientHeadersFromTabs: () => refreshClientHeadersFromDeepSeekTabs(),
+          // Same DeepSeek++ tool runtime as web chat / automation / sidepanel.
+          executeTool: (call) => executeBackgroundRuntimeToolCall(call, call.source?.trigger ?? 'agent_run'),
+          loadToolDescriptors: () => getRuntimeToolDescriptors(currentBackgroundLocale),
+          loadMemories: () => getAllMemories(),
+          toolsEnabled: true,
+        },
+        // Lifecycle noise only — never console.error (shows up as Chrome extension Errors).
+        onLog: (message) => console.debug(`[DeepSeek++] cursor_bridge: ${message}`),
+      });
+    })
+    .catch(() => undefined);
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    handleMessage(message, sender)
+    let envelope: RuntimeMessageEnvelope | undefined;
+    let context: RuntimeMessageContext;
+    try {
+      envelope = decodeRuntimeMessageEnvelope(message);
+      context = createRuntimeMessageContext(sender, {
+        runtimeId: chrome.runtime.id,
+        extensionOrigin: chrome.runtime.getURL('/'),
+        deepSeekOrigin: new URL(DEEPSEEK_HOME_URL).origin,
+      });
+      authorizeRuntimeMessage(envelope, context);
+    } catch (error) {
+      sendResponse(createRuntimeBoundaryErrorResponse(error, envelope));
+      return false;
+    }
+
+    syncLocalRecoveryBarrier.ensureReady()
+      .then(() => handleMessage(envelope, context))
       .then(sendResponse)
-      .catch((error) => sendResponse(createBackgroundErrorResponse(message, error)));
+      .catch((error) => sendResponse(createBackgroundErrorResponse(
+        envelope,
+        error,
+        backgroundT('content.toolBlock.summaries.backgroundFailed'),
+      )));
     return true;
   });
 
@@ -442,8 +531,16 @@ export default defineBackground(() => {
 function registerAutomationAlarmListener() {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== AUTOMATION_WAKE_ALARM_NAME) return;
-    scanDueAutomationsFromWake().catch((error) => reportBackgroundStartupError('automation_alarm_scan_failed', error));
+    syncLocalRecoveryBarrier.ensureReady()
+      .then(() => scanDueAutomationsFromWake()
+        .catch((error) => reportBackgroundStartupError('automation_alarm_scan_failed', error)))
+      .catch(() => undefined);
   });
+}
+
+function beginSyncLocalApply(stage: () => Promise<SyncDataSnapshot>) {
+  const operation = stageAndApplySyncSnapshotLocally(stage);
+  return syncLocalRecoveryBarrier.trackApply(operation);
 }
 
 async function ensureAutomationWakeAlarm() {
@@ -613,39 +710,16 @@ function reportBackgroundStartupError(code: string, error: unknown) {
   console.error(`[DeepSeek++] ${code}: ${detail}`, error);
 }
 
-function createBackgroundErrorResponse(
-  message: { type?: string } | unknown,
-  error: unknown,
-): ToolResult | { ok: false; error: string } | null {
-  const detail = error instanceof Error ? error.message : String(error);
-
-  if (!message || typeof message !== 'object') {
-    return null;
-  }
-
-  const type = (message as { type?: string }).type;
-
-  if (type === 'EXECUTE_TOOL_CALL') {
-    return {
-      ok: false,
-      summary: backgroundT('content.toolBlock.summaries.backgroundFailed'),
-      detail,
-      error: {
-        code: 'background_tool_execution_failed',
-        message: detail,
-        retryable: true,
-      },
-    };
-  }
-
-  // Sidepanel sync handlers check result?.ok; content scripts use sendRuntimeMessage
-  // which guards against error responses. Return structured error for both.
-  return { ok: false, error: detail };
+async function handleMessage(
+  message: RuntimeMessageEnvelope,
+  context: RuntimeMessageContext,
+) {
+  return runtimeCommandRegistry.dispatch(message, context);
 }
 
-async function handleMessage(
+async function handleLegacyMessage(
   message: { type: string; payload?: unknown },
-  sender: chrome.runtime.MessageSender,
+  context: RuntimeMessageContext,
 ) {
   switch (message.type) {
     case 'GET_MEMORIES':
@@ -658,7 +732,7 @@ async function handleMessage(
 
     case 'SAVE_MEMORY': {
       const id = await saveMemory(message.payload as NewMemory);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { id };
     }
 
@@ -678,20 +752,20 @@ async function handleMessage(
       for (const memory of validatedMemories) {
         ids.push(await saveMemory(memory));
       }
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true, ids, count: ids.length };
     }
 
     case 'UPDATE_MEMORY': {
       await updateMemory(message.payload as Memory);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'DELETE_MEMORY': {
       const { id } = message.payload as { id: number };
       await deleteMemory(id);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -717,28 +791,28 @@ async function handleMessage(
       const payload = message.payload as Skill | { skill: Skill; previousName?: string };
       const { skill, previousName } = 'skill' in payload ? payload : { skill: payload, previousName: undefined };
       await saveSkill(skill, previousName);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'DELETE_SKILL': {
       const { name } = message.payload as { name: string };
       await deleteSkill(name);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'SET_SKILL_ENABLED': {
       const { name, enabled } = message.payload as { name: string; enabled: boolean };
       await setSkillEnabled(name, enabled);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'SET_SKILLS_ENABLED': {
       const { updates } = message.payload as { updates: Array<{ name: string; enabled: boolean }> };
       await setSkillsEnabled(updates);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -749,24 +823,31 @@ async function handleMessage(
 
     case 'IMPORT_GITHUB_SKILL_SOURCE': {
       const result = await importGitHubSkillSource(message.payload as GitHubSkillImportRequest);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return result;
     }
 
     case 'PREVIEW_LOCAL_SKILL_SOURCE': {
       const { rootPath } = message.payload as { rootPath: string };
-      return previewLocalSkillSource(rootPath);
+      return previewLocalSkillSource(rootPath, { executeToolCall: executeLocalSkillImporterToolCall });
     }
 
     case 'PICK_LOCAL_SKILL_FOLDER': {
       const { defaultPath } = (message.payload ?? {}) as { defaultPath?: string };
-      return { path: await pickLocalSkillFolder(defaultPath) };
+      return {
+        path: await pickLocalSkillFolder(defaultPath, {
+          executeToolCall: executeLocalSkillImporterToolCall,
+        }),
+      };
     }
 
     case 'IMPORT_LOCAL_SKILL_SOURCE': {
-      const result = await importLocalSkillSource(message.payload as LocalSkillImportRequest);
+      const result = await importLocalSkillSource(
+        message.payload as LocalSkillImportRequest,
+        { executeToolCall: executeLocalSkillImporterToolCall },
+      );
       if (!result.ok) return result;
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return result;
     }
 
@@ -778,14 +859,14 @@ async function handleMessage(
     case 'UPDATE_GITHUB_SKILL_SOURCE': {
       const { sourceId } = message.payload as { sourceId: string };
       const result = await updateGitHubSkillSource(sourceId);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return result;
     }
 
     case 'DELETE_GITHUB_SKILL_SOURCE': {
       const { sourceId } = message.payload as { sourceId: string };
       await deleteGitHubSkillSource(sourceId);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -794,21 +875,21 @@ async function handleMessage(
 
     case 'SAVE_PRESET': {
       await savePreset(message.payload as SystemPromptPreset);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'DELETE_PRESET': {
       const { id: presetId } = message.payload as { id: string };
       await deletePreset(presetId);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'SET_ACTIVE_PRESET': {
       const { id: activeId } = message.payload as { id: string | null };
       await setActivePresetId(activeId);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -824,7 +905,7 @@ async function handleMessage(
 
     case 'SAVE_PROMPT_INJECTION_SETTINGS': {
       const settings = await savePromptInjectionSettings(message.payload as Parameters<typeof savePromptInjectionSettings>[0]);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return settings;
     }
 
@@ -833,14 +914,14 @@ async function handleMessage(
 
     case 'SAVE_SAVED_ITEM': {
       const item = await saveSavedItem(message.payload as SavedItemInput);
-      await broadcastSavedItemsUpdate(sender.tab?.id);
+      await broadcastSavedItemsUpdate(context.tabId);
       return item;
     }
 
     case 'DELETE_SAVED_ITEM': {
       const { id } = message.payload as { id: string };
       await deleteSavedItem(id);
-      await broadcastSavedItemsUpdate(sender.tab?.id);
+      await broadcastSavedItemsUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -854,7 +935,7 @@ async function handleMessage(
 
     case 'SAVE_VOICE_SETTINGS': {
       const settings = await saveVoiceSettings(message.payload as Parameters<typeof saveVoiceSettings>[0]);
-      await broadcastVoiceSettingsUpdate(sender.tab?.id);
+      await broadcastVoiceSettingsUpdate(context.tabId);
       return settings;
     }
 
@@ -871,24 +952,24 @@ async function handleMessage(
 
     case 'CREATE_MCP_SERVER': {
       const server = await createMcpServer(message.payload as McpServerCreateInput);
-      await broadcastMcpServersUpdate(sender.tab?.id);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
+      await broadcastMcpServersUpdate(context.tabId);
+      await broadcastToolDescriptorsUpdate(context.tabId);
       return server;
     }
 
     case 'UPDATE_MCP_SERVER': {
       const { id, patch } = message.payload as { id: string; patch: McpServerUpdateInput };
       const server = await updateMcpServer(id, patch);
-      await broadcastMcpServersUpdate(sender.tab?.id);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
+      await broadcastMcpServersUpdate(context.tabId);
+      await broadcastToolDescriptorsUpdate(context.tabId);
       return server;
     }
 
     case 'DELETE_MCP_SERVER': {
       const { id } = message.payload as { id: string };
       await deleteMcpServer(id);
-      await broadcastMcpServersUpdate(sender.tab?.id);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
+      await broadcastMcpServersUpdate(context.tabId);
+      await broadcastToolDescriptorsUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -900,8 +981,8 @@ async function handleMessage(
     case 'REFRESH_MCP_SERVER_TOOLS': {
       const { serverId } = message.payload as { serverId: string };
       const cache = await refreshMcpServerDiscovery(serverId);
-      await broadcastMcpServersUpdate(sender.tab?.id);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
+      await broadcastMcpServersUpdate(context.tabId);
+      await broadcastToolDescriptorsUpdate(context.tabId);
       return cache;
     }
 
@@ -922,8 +1003,8 @@ async function handleMessage(
     case 'TEST_MCP_SERVER_CONNECTION': {
       const { serverId } = message.payload as { serverId: string };
       const cache = await refreshMcpServerDiscovery(serverId);
-      await broadcastMcpServersUpdate(sender.tab?.id);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
+      await broadcastMcpServersUpdate(context.tabId);
+      await broadcastToolDescriptorsUpdate(context.tabId);
       return {
         ok: cache.health.status === 'ready',
         cache,
@@ -937,7 +1018,7 @@ async function handleMessage(
     case 'SET_WEB_TOOL_SETTING': {
       const { name, enabled } = message.payload as { name: WebSearchToolName; enabled: boolean };
       await setWebToolEnabled(name, enabled);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
+      await broadcastToolDescriptorsUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -946,8 +1027,8 @@ async function handleMessage(
 
     case 'SAVE_BROWSER_CONTROL_SETTINGS': {
       const settings = await saveBrowserControlSettings(message.payload as Partial<BrowserControlSettings>);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
-      await broadcastBrowserControlUpdate(sender.tab?.id);
+      await broadcastToolDescriptorsUpdate(context.tabId);
+      await broadcastBrowserControlUpdate(context.tabId);
       return settings;
     }
 
@@ -955,8 +1036,8 @@ async function handleMessage(
       const { enabled } = message.payload as { enabled: boolean };
       const settings = await setBrowserControlEnabled(enabled);
       if (!enabled) await browserControlService.detach();
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
-      await broadcastBrowserControlUpdate(sender.tab?.id);
+      await broadcastToolDescriptorsUpdate(context.tabId);
+      await broadcastBrowserControlUpdate(context.tabId);
       return settings;
     }
 
@@ -966,13 +1047,13 @@ async function handleMessage(
     case 'SET_BROWSER_CONTROL_TARGET': {
       const { tabId } = message.payload as { tabId: number };
       const target = await browserControlService.setTarget(tabId);
-      await broadcastBrowserControlUpdate(sender.tab?.id);
+      await broadcastBrowserControlUpdate(context.tabId);
       return { ok: true, target };
     }
 
     case 'DETACH_BROWSER_CONTROL': {
       await browserControlService.detach();
-      await broadcastBrowserControlUpdate(sender.tab?.id);
+      await broadcastBrowserControlUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -1023,24 +1104,126 @@ async function handleMessage(
 
     case 'REFRESH_TOOL_DESCRIPTORS': {
       const tools = await refreshRuntimeToolDescriptors(currentBackgroundLocale);
-      await broadcastToolDescriptorsUpdate(sender.tab?.id);
-      await broadcastMcpServersUpdate(sender.tab?.id);
+      await broadcastToolDescriptorsUpdate(context.tabId);
+      await broadcastMcpServersUpdate(context.tabId);
       return tools;
     }
 
+    case 'CREATE_TOOL_AUTHORIZATION': {
+      if (context.surface !== 'deepseek_content') {
+        return { ok: false, error: 'tool_authorization_requires_content_runtime' };
+      }
+      const payload = message.payload as {
+        requestId?: unknown;
+        trigger?: unknown;
+        chatSessionId?: unknown;
+        runId?: unknown;
+        descriptorIds?: unknown;
+      };
+      if (
+        typeof payload.requestId !== 'string' ||
+        (payload.trigger !== 'manual_chat' && payload.trigger !== 'agent_run') ||
+        (payload.chatSessionId !== undefined && payload.chatSessionId !== null && typeof payload.chatSessionId !== 'string') ||
+        (payload.runId !== undefined && typeof payload.runId !== 'string') ||
+        (payload.descriptorIds !== undefined && (
+          !Array.isArray(payload.descriptorIds) ||
+          !payload.descriptorIds.every((id) => typeof id === 'string')
+        ))
+      ) {
+        return { ok: false, error: 'invalid_tool_authorization_request' };
+      }
+
+      const currentDescriptors = await getRuntimeToolDescriptors(currentBackgroundLocale);
+      const requestedDescriptorIds = payload.descriptorIds
+        ? new Set(payload.descriptorIds as string[])
+        : null;
+      const descriptors = requestedDescriptorIds
+        ? currentDescriptors.filter((descriptor) => requestedDescriptorIds.has(descriptor.id))
+        : currentDescriptors;
+      if (requestedDescriptorIds && descriptors.length !== requestedDescriptorIds.size) {
+        return { ok: false, error: 'unknown_tool_authorization_descriptor' };
+      }
+
+      return createToolAuthorization({
+        requestId: payload.requestId,
+        trigger: payload.trigger,
+        chatSessionId: payload.chatSessionId as string | null | undefined,
+        runId: payload.runId as string | undefined,
+        subject: createToolAuthorizationSubject(context),
+        descriptors,
+      });
+    }
+
+    case 'CLOSE_TOOL_AUTHORIZATION': {
+      const { authorizationId } = (message.payload as { authorizationId?: unknown } | undefined) ?? {};
+      if (typeof authorizationId !== 'string') return { ok: false, error: 'invalid_tool_authorization_id' };
+      await closeToolAuthorization(authorizationId, createToolAuthorizationSubject(context));
+      externalPayloadAuthorizationCache.deleteGrant(authorizationId);
+      clearExternalizedToolPayloadNamespace(authorizationId);
+      return { ok: true };
+    }
+
     case 'APPEND_EXTERNAL_TOOL_PAYLOAD_CHUNK': {
-      const payload = message.payload as { callId?: string; invocationName?: string; chunk?: string };
-      if (typeof payload.callId !== 'string' || typeof payload.invocationName !== 'string' || typeof payload.chunk !== 'string') {
+      const payload = message.payload as {
+        authorizationId?: string;
+        callId?: string;
+        invocationName?: string;
+        chunk?: string;
+      };
+      if (
+        typeof payload.authorizationId !== 'string' ||
+        typeof payload.callId !== 'string' ||
+        typeof payload.invocationName !== 'string' ||
+        typeof payload.chunk !== 'string'
+      ) {
         return { ok: false, error: 'invalid_external_payload_chunk' };
       }
-      appendExternalizedToolPayloadChunk(payload.callId, payload.invocationName, payload.chunk);
+      try {
+        const subject = createToolAuthorizationSubject(context);
+        const binding = {
+          grantId: payload.authorizationId,
+          subject,
+          callId: payload.callId,
+          invocationName: payload.invocationName,
+        };
+        if (!externalPayloadAuthorizationCache.has(binding)) {
+          const chunkAuthorization = await authorizeExternalToolPayloadChunk({
+            ...binding,
+            currentDescriptors: await getRuntimeAuthorizationDescriptors(currentBackgroundLocale),
+          });
+          externalPayloadAuthorizationCache.remember(binding, chunkAuthorization.expiresAt);
+        }
+        appendExternalizedToolPayloadChunk(
+          payload.callId,
+          payload.invocationName,
+          payload.chunk,
+          payload.authorizationId,
+        );
+      } catch (error) {
+        if (!(error instanceof ToolAuthorizationError)) throw error;
+        return createToolAuthorizationResult(error);
+      }
       return { ok: true };
     }
 
     case 'EXECUTE_TOOL_CALL': {
-      const call = message.payload as ToolCall;
-      const result = await executeBackgroundRuntimeToolCall(call, call.source?.trigger ?? 'manual_chat');
-      await broadcastToolCallHistoryUpdate(sender.tab?.id);
+      const payload = message.payload as ToolCall & { authorizationId?: unknown };
+      const { authorizationId, ...call } = payload;
+      if (typeof authorizationId === 'string' && typeof call.id === 'string') {
+        externalPayloadAuthorizationCache.deleteCall(authorizationId, call.id);
+      }
+      const result = context.surface === 'deepseek_content'
+        ? await executeRuntimeToolCall(
+          call,
+          {
+            kind: 'grant',
+            grantId: typeof authorizationId === 'string' ? authorizationId : '',
+            subject: createToolAuthorizationSubject(context),
+          },
+          currentBackgroundLocale,
+        )
+        : await executeBackgroundRuntimeToolCall(call, 'manual_chat');
+      await broadcastToolCallHistoryUpdate(context.tabId);
       return result;
     }
 
@@ -1054,7 +1237,7 @@ async function handleMessage(
 
     case 'CLEAR_TOOL_CALL_HISTORY': {
       await clearToolCallHistory();
-      await broadcastToolCallHistoryUpdate(sender.tab?.id);
+      await broadcastToolCallHistoryUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -1066,44 +1249,43 @@ async function handleMessage(
 
     case 'CREATE_PROJECT_CONTEXT': {
       const project = await createProjectContext(message.payload as Parameters<typeof createProjectContext>[0]);
-      await broadcastProjectContextUpdate(sender.tab?.id);
+      await broadcastProjectContextUpdate(context.tabId);
       return project;
     }
 
     case 'UPDATE_PROJECT_CONTEXT': {
       const { projectId, patch } = message.payload as { projectId: string; patch: Parameters<typeof updateProjectContext>[1] };
       const project = await updateProjectContext(projectId, patch);
-      await broadcastProjectContextUpdate(sender.tab?.id);
+      await broadcastProjectContextUpdate(context.tabId);
       return project;
     }
 
     case 'DELETE_PROJECT_CONTEXT': {
       const { projectId } = message.payload as { projectId: string };
-      await deleteProjectContext(projectId);
-      const deletedMemories = await deleteMemoriesForProject(projectId);
-      await broadcastProjectContextUpdate(sender.tab?.id);
-      if (deletedMemories > 0) await broadcastStateUpdate(sender.tab?.id);
+      const deletedMemories = await deleteProjectContextAndMemories(projectId);
+      await broadcastProjectContextUpdate(context.tabId);
+      if (deletedMemories > 0) await broadcastStateUpdate(context.tabId);
       return { ok: true, deletedMemories };
     }
 
     case 'ADD_CONVERSATION_TO_PROJECT': {
       const { projectId, conversation } = message.payload as { projectId: string; conversation: Parameters<typeof addConversationToProject>[1] };
       const added = await addConversationToProject(projectId, conversation);
-      await broadcastProjectContextUpdate(sender.tab?.id);
+      await broadcastProjectContextUpdate(context.tabId);
       return { ok: true, conversation: added };
     }
 
     case 'REMOVE_CONVERSATION_FROM_PROJECT': {
       const { conversationId } = message.payload as { conversationId: string };
       await removeConversationFromProject(conversationId);
-      await broadcastProjectContextUpdate(sender.tab?.id);
+      await broadcastProjectContextUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'SET_PENDING_PROJECT_CONTEXT': {
       const { projectId } = message.payload as { projectId: string | null };
       await setPendingProjectContext(projectId);
-      await broadcastProjectContextUpdate(sender.tab?.id);
+      await broadcastProjectContextUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -1118,13 +1300,13 @@ async function handleMessage(
       const bound = bindPendingProject === true
         ? await bindPendingProjectConversation(conversation)
         : await refreshProjectConversation(conversation);
-      if (bound) await broadcastProjectContextUpdate(sender.tab?.id);
+      if (bound) await broadcastProjectContextUpdate(context.tabId);
       const project = await getProjectForConversation(conversation.conversationId);
       if (!project) return null;
-      const context = await getProjectPromptContextForConversation(conversation.conversationId);
+      const projectContext = await getProjectPromptContextForConversation(conversation.conversationId);
       return {
         projectId: project.id,
-        context: context ? formatProjectPromptContext(context) : null,
+        context: projectContext ? formatProjectPromptContext(projectContext) : null,
       };
     }
 
@@ -1132,15 +1314,6 @@ async function handleMessage(
       const { id } = message.payload as { id: string };
       const artifact = await getArtifact(id);
       return artifact ? { ok: true, artifact } : { ok: false, error: 'artifact_not_found' };
-    }
-
-    case 'GET_CONFIG':
-      return { version: getExtensionVersion() };
-
-    case 'WHATS_NEW_DISMISSED': {
-      await dismissWhatsNew();
-      await refreshWhatsNewBadge();
-      return { ok: true };
     }
 
     case 'GET_DEEPSEEK_API_KEY_STATUS':
@@ -1151,7 +1324,7 @@ async function handleMessage(
       await saveDeepSeekApiKey(apiKey ?? '');
       officialApiChatMessages = [];
       await createContextMenus();
-      await broadcastChatAuthStatus(sender.tab?.id);
+      await broadcastChatAuthStatus(context.tabId);
       return { ok: true, configured: true };
     }
 
@@ -1159,7 +1332,7 @@ async function handleMessage(
       await clearDeepSeekApiKey();
       officialApiChatMessages = [];
       await createContextMenus();
-      await broadcastChatAuthStatus(sender.tab?.id);
+      await broadcastChatAuthStatus(context.tabId);
       return { ok: true, configured: false };
 
     case 'GET_MULTIMODAL_SETTINGS_STATUS':
@@ -1173,7 +1346,7 @@ async function handleMessage(
 
     case 'ANALYZE_MULTIMODAL_MEDIA': {
       const response = await analyzeMultimodalMedia(message.payload as MultimodalMediaAnalyzeRequest);
-      await broadcastToolCallHistoryUpdate(sender.tab?.id);
+      await broadcastToolCallHistoryUpdate(context.tabId);
       if (!response.ok) {
         return {
           ok: false,
@@ -1193,7 +1366,7 @@ async function handleMessage(
       const current = await getDeepSeekTheme();
       if (current === theme) return { ok: true };
       await saveDeepSeekTheme(theme);
-      await broadcastThemeUpdate(theme, sender.tab?.id);
+      await broadcastThemeUpdate(theme, context.tabId);
       return { ok: true };
     }
 
@@ -1205,7 +1378,7 @@ async function handleMessage(
       const current = await getModelType();
       if (newModelType === current) return { ok: true };
       await setModelType(newModelType);
-      await broadcastStateUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
       return { ok: true };
     }
 
@@ -1304,27 +1477,16 @@ async function handleMessage(
       if (!config) throw new Error(backgroundT('background.sync.missingSync'));
 
       const backend = createStorageBackend(config, backgroundT);
-      const snapshot = await mergeSyncSnapshotWithLocalImports(await getRemoteSyncDataSnapshot(backend));
-
-      const replacements: Promise<unknown>[] = [
-        replaceAllMemories(snapshot.memories),
-        replaceAllCustomSkills(snapshot.skills),
-        replaceAllSkillSources(snapshot.skillSources),
-        replaceAllPresets(snapshot.presets),
-      ];
-      if (snapshot.projectContext) {
-        replacements.push(saveProjectContextState(snapshot.projectContext));
-      }
-      if (snapshot.savedItems) {
-        replacements.push(replaceAllSavedItems(snapshot.savedItems.items));
-      }
-      await Promise.all(replacements);
+      const remoteSnapshot = await getRemoteSyncDataSnapshot(backend);
+      const snapshot = await beginSyncLocalApply(
+        () => mergeSyncSnapshotWithLocalImports(remoteSnapshot),
+      );
 
       const now = Date.now();
       await saveSyncConfig({ ...config, lastSyncAt: now });
-      await broadcastStateUpdate(sender.tab?.id);
-      if (snapshot.projectContext) await broadcastProjectContextUpdate(sender.tab?.id);
-      if (snapshot.savedItems) await broadcastSavedItemsUpdate(sender.tab?.id);
+      await broadcastStateUpdate(context.tabId);
+      if (snapshot.projectContext) await broadcastProjectContextUpdate(context.tabId);
+      if (snapshot.savedItems) await broadcastSavedItemsUpdate(context.tabId);
       return { ok: true, lastSyncAt: now, counts: getSyncCounts(snapshot) };
     }
 
@@ -1352,18 +1514,18 @@ async function handleMessage(
           refFileIds: coerceRefFileIds(refFileIds),
           attachments: normalizeProviderAttachments(attachments),
           officialApiConfig: config ? normalizeOfficialApiChatConfig(config) : undefined,
-        }, sender.tab?.id).catch(() => {});
+        }, context.tabId).catch(() => {});
       } else {
-        handleChatSubmitPrompt(text, config, coerceRefFileIds(refFileIds), sender.tab?.id).catch(() => {});
+        handleChatSubmitPrompt(text, config, coerceRefFileIds(refFileIds), context.tabId).catch(() => {});
       }
       return { ok: true };
     }
 
     case 'UPLOAD_DEEPSEEK_IMAGE':
-      return handleDeepSeekImageUpload(message.payload, sender.tab?.id);
+      return handleDeepSeekImageUpload(message.payload, context.tabId);
 
     case 'UPLOAD_CHAT_IMAGE':
-      return handleProviderImageUpload(message.payload, sender.tab?.id);
+      return handleProviderImageUpload(message.payload, context.tabId);
 
     case 'CHAT_NEW_SESSION':
       chatSessionId = null;
@@ -1373,11 +1535,11 @@ async function handleMessage(
       return { ok: true };
 
     case 'GET_AUTH_STATUS': {
-      return getChatAuthStatus(sender.tab?.id);
+      return getChatAuthStatus(context.tabId);
     }
 
     case 'GET_CHAT_CATALOG': {
-      await refreshQwenAuthFromChrome(sender.tab?.id);
+      await refreshQwenAuthFromChrome(context.tabId);
       const statuses = await Promise.all(CHAT_MODELS.map(async (modelEntry) => ({
         providerId: modelEntry.ref.providerId,
         ...await getChatProviderStatus(modelEntry.ref.providerId),
@@ -1403,7 +1565,7 @@ async function handleMessage(
       return saveOfficialApiChatConfig(message.payload);
 
     case 'EXPORT_DEEPSEEK_CONVERSATIONS':
-      return handleConversationExport(message.payload, sender.tab?.id);
+      return handleConversationExport(message.payload, context.tabId);
 
     case 'CANCEL_DEEPSEEK_EXPORT': {
       const { exportId } = message.payload as { exportId?: string };
@@ -1419,12 +1581,12 @@ async function handleMessage(
         current: 0,
         total: 0,
         message: backgroundT('background.export.cancelled'),
-      }, sender.tab?.id);
+      }, context.tabId);
       return { ok: true };
     }
 
     case 'AUTH_STATUS_CHANGED': {
-      await broadcastChatAuthStatus(sender.tab?.id);
+      await broadcastChatAuthStatus(context.tabId);
       return { ok: true };
     }
 
@@ -1441,7 +1603,7 @@ async function handleMessage(
       validateAutomationInput(input);
       const automation = await createAutomation(input);
       const refreshed = await refreshAutomationNextRunAt(automation.id);
-      await broadcastAutomationUpdate(sender.tab?.id);
+      await broadcastAutomationUpdate(context.tabId);
       return refreshed ?? automation;
     }
 
@@ -1451,7 +1613,7 @@ async function handleMessage(
       const automation = await updateAutomation(id, patch);
       if (!automation) return { ok: false, error: 'automation_not_found' };
       const refreshed = await refreshAutomationNextRunAt(id);
-      await broadcastAutomationUpdate(sender.tab?.id);
+      await broadcastAutomationUpdate(context.tabId);
       return refreshed ?? automation;
     }
 
@@ -1461,21 +1623,22 @@ async function handleMessage(
       const automation = await setAutomationStatus(id, status);
       if (!automation) return { ok: false, error: 'automation_not_found' };
       const refreshed = await refreshAutomationNextRunAt(id);
-      await broadcastAutomationUpdate(sender.tab?.id);
+      await broadcastAutomationUpdate(context.tabId);
       return refreshed ?? automation;
     }
 
     case 'DELETE_AUTOMATION': {
       const { id } = message.payload as { id: string };
+      cancelActiveAutomationRun(id);
       await deleteAutomation(id);
-      await broadcastAutomationUpdate(sender.tab?.id);
-      await broadcastAutomationRunsUpdate(sender.tab?.id);
+      await broadcastAutomationUpdate(context.tabId);
+      await broadcastAutomationRunsUpdate(context.tabId);
       return { ok: true };
     }
 
     case 'RUN_AUTOMATION_NOW': {
       const { id } = message.payload as { id: string };
-      return runAutomationNow(id, sender.tab?.id);
+      return runAutomationNow(id, context.tabId);
     }
 
     case 'SCENARIOS_UPDATED':
@@ -1483,8 +1646,17 @@ async function handleMessage(
       return { ok: true };
 
     default:
-      return null;
+      throw new Error(`Legacy runtime command owner is missing: ${message.type}`);
   }
+}
+
+async function executeLocalSkillImporterToolCall(call: ToolCall): Promise<ToolResult> {
+  const hasDescriptor = (await getRuntimeAuthorizationDescriptors(currentBackgroundLocale))
+    .some((descriptor) => descriptor.id === call.descriptorId);
+  if (!hasDescriptor && call.provider?.kind === 'mcp') {
+    await refreshMcpServerDiscovery(call.provider.id);
+  }
+  return executeBackgroundRuntimeToolCall(call, 'manual_chat');
 }
 
 async function broadcastToTabs(payload: Record<string, unknown>, excludeTabId?: number) {
@@ -1885,10 +2057,43 @@ async function executeBackgroundRuntimeToolCall(
   source: ToolExecutionTrigger,
   options?: RuntimeToolCallOptions,
 ): Promise<ToolResult> {
-  if (isSandboxToolName(call.name)) {
-    return executeSandboxToolCall(browserSandboxRuntime, call, currentBackgroundLocale);
-  }
-  return executeRuntimeToolCall(call, source, currentBackgroundLocale, options);
+  return executeRuntimeToolCall(call, {
+    kind: 'trusted',
+    trigger: source,
+    requestId: call.source?.requestId ??
+      call.source?.automationRunId ??
+      call.source?.runId ??
+      crypto.randomUUID(),
+    chatSessionId: call.source?.chatSessionId ?? null,
+    taskId: call.source?.taskId,
+    runId: call.source?.runId,
+    automationId: call.source?.automationId,
+    automationRunId: call.source?.automationRunId,
+  }, currentBackgroundLocale, {
+    ...options,
+    sandbox: options?.sandbox ?? {
+      runtime: browserSandboxRuntime,
+      descriptors: createSandboxToolDescriptors(currentBackgroundLocale),
+    },
+  });
+}
+
+function createToolAuthorizationSubject(
+  context: RuntimeMessageContext,
+): ToolAuthorizationSubject {
+  // Firefox may omit MessageSender.documentId. Keep the receiver-owned
+  // tab/frame identity stable across DeepSeek SPA route changes; a full
+  // navigation destroys the content runtime and revokes its in-memory grant.
+  const documentSessionId = context.documentId
+    ? context.documentSessionId
+    : `${context.surface}:${context.tabId ?? 'extension'}:${context.frameId ?? 'extension'}`;
+  return {
+    surface: context.surface,
+    documentSessionId,
+    tabId: context.tabId,
+    frameId: context.frameId,
+    chatSessionId: context.chatSessionId ?? null,
+  };
 }
 
 async function analyzeMultimodalMedia(
@@ -2085,7 +2290,27 @@ function invalidMediaKind(index: number): never {
 
 async function runBrowserSandboxToolResult(request: SandboxRunRequest): Promise<ToolResult> {
   const startedAt = Date.now();
-  const result = await requestOffscreenSandboxRun(request);
+  let normalizedRequest: SandboxRunRequest;
+  try {
+    normalizedRequest = normalizeSandboxRunRequest(request);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      summary: backgroundT('tool.sandbox.invalidRequest'),
+      detail,
+      error: {
+        code: 'sandbox_invalid_request',
+        message: detail,
+        retryable: false,
+      },
+      startedAt,
+      completedAt: Date.now(),
+      durationMs: 0,
+      truncated: false,
+    };
+  }
+  const result = await requestOffscreenSandboxRun(normalizedRequest);
   const completedAt = Date.now();
   const detail = result.ok
     ? result.result || result.stdout || ''
@@ -2163,11 +2388,14 @@ function sendSandboxRunToOffscreen(request: SandboxRunRequest): Promise<SandboxE
     }, timeoutMs);
 
     port.onMessage.addListener((message: unknown) => {
-      const value = message && typeof message === 'object'
-        ? message as { type?: unknown; requestId?: unknown; result?: unknown }
-        : {};
-      if (value.type !== 'OFFSCREEN_SANDBOX_RESULT' || value.requestId !== requestId) return;
-      settle(normalizeSandboxExecutionResult(value.result));
+      const envelope = parseSandboxEnvelope(message, SANDBOX_MESSAGE_TYPES.offscreenResult, requestId);
+      if (!envelope) {
+        if (readSandboxRequestId(message, SANDBOX_MESSAGE_TYPES.offscreenResult) === requestId) {
+          settle(createSandboxFailure('Invalid sandbox offscreen result.', 'sandbox_invalid_result'));
+        }
+        return;
+      }
+      settle(normalizeSandboxExecutionResult(envelope.result));
     });
 
     port.onDisconnect.addListener(() => {
@@ -2177,26 +2405,11 @@ function sendSandboxRunToOffscreen(request: SandboxRunRequest): Promise<SandboxE
     });
 
     port.postMessage({
-      type: 'OFFSCREEN_SANDBOX_RUN',
+      type: SANDBOX_MESSAGE_TYPES.offscreenRun,
       requestId,
       payload: request,
     });
   });
-}
-
-function normalizeSandboxExecutionResult(value: unknown): SandboxExecutionResult {
-  const result = value && typeof value === 'object' ? value as Partial<SandboxExecutionResult> : {};
-  return {
-    ok: result.ok === true,
-    stdout: typeof result.stdout === 'string' ? result.stdout : '',
-    stderr: typeof result.stderr === 'string' ? result.stderr : '',
-    result: typeof result.result === 'string' ? result.result : undefined,
-    html: typeof result.html === 'string' ? result.html : undefined,
-    previewText: typeof result.previewText === 'string' ? result.previewText : undefined,
-    durationMs: typeof result.durationMs === 'number' && Number.isFinite(result.durationMs) ? result.durationMs : 0,
-    truncated: result.truncated === true,
-    error: typeof result.error === 'string' ? result.error : undefined,
-  };
 }
 
 function createSandboxFailure(message: string, code: string, durationMs = 0): SandboxExecutionResult {
@@ -2335,7 +2548,9 @@ async function runAutomationNow(id: string, excludeTabId?: number) {
 
 async function executeAutomationWithContext(
   request: AutomationRunnerRequest,
+  execution: AutomationExecutionContext,
 ): Promise<AutomationRunnerResult> {
+  execution.assertActive();
   const [memories, activePreset, toolDescriptors] = await Promise.all([
     getAllMemories(),
     getActivePreset(),
@@ -2348,8 +2563,10 @@ async function executeAutomationWithContext(
       getProjectPromptContextForConversation(request.chatSessionId),
     ])
     : [null, null];
+  execution.assertActive();
 
   const clientHeaders = await loadOrRefreshClientHeaders();
+  execution.assertActive();
   if (!clientHeaders) {
     return createAutomationRunnerFailure(
       { ...request },
@@ -2357,6 +2574,8 @@ async function executeAutomationWithContext(
       AUTOMATION_AUTH_TOKEN_MISSING_MESSAGE,
       'auth',
       true,
+      Date.now(),
+      { externalOutcome: 'not_started', retrySafe: true },
     );
   }
 
@@ -2370,8 +2589,17 @@ async function executeAutomationWithContext(
       toolDescriptors: enabledDescriptors,
     },
   }, {
-    executeToolCall: (call) => executeBackgroundRuntimeToolCall(call, 'automation'),
+    executeToolCall: (call, toolExecution) => executeBackgroundRuntimeToolCall(
+      call,
+      'automation',
+      {
+        signal: toolExecution.signal,
+        idempotencyKey: toolExecution.idempotencyKey,
+        assertActive: () => execution.assertActive(),
+      },
+    ),
     clientHeaders,
+    execution,
   });
 }
 
@@ -2429,55 +2657,67 @@ async function getLocalSyncDataSnapshot(): Promise<SyncDataSnapshot> {
 }
 
 async function uploadSyncDataSnapshot(backend: StorageBackend, snapshot: SyncDataSnapshot): Promise<void> {
-  await Promise.all([
-    backend.put('memories.json', JSON.stringify(snapshot.memories)),
-    backend.put('skills.json', JSON.stringify(snapshot.skills)),
-    backend.put('skill-sources.json', JSON.stringify(snapshot.skillSources)),
-    backend.put('presets.json', JSON.stringify(snapshot.presets)),
-    snapshot.projectContext
-      ? backend.put('project-context.json', JSON.stringify(snapshot.projectContext))
-      : Promise.resolve(),
-    snapshot.savedItems
-      ? backend.put('saved-items.json', JSON.stringify(snapshot.savedItems))
-      : Promise.resolve(),
-  ]);
+  await uploadSyncGeneration(backend, serializeSyncDataSnapshot(snapshot));
 }
 
 async function getRemoteSyncDataSnapshot(backend: StorageBackend): Promise<SyncDataSnapshot> {
-  const [remoteMemJson, remoteSkillJson, remotePresetJson, remoteSkillSourceJson, remoteProjectContextJson, remoteSavedItemsJson] = await Promise.all([
-    backendGetRequired(backend, 'memories.json'),
-    backendGetRequired(backend, 'skills.json'),
-    backendGetRequired(backend, 'presets.json'),
-    backend.get('skill-sources.json'),
-    backend.get('project-context.json'),
-    backend.get('saved-items.json'),
+  const generationFiles = await readCurrentSyncGeneration(backend);
+  const remoteFiles = generationFiles ?? await getLegacyRemoteSyncFiles(backend);
+  return parseRemoteSyncDataSnapshot(remoteFiles);
+}
+
+async function getLegacyRemoteSyncFiles(backend: StorageBackend): Promise<ReadonlyMap<SyncFileKey, string>> {
+  const [requiredFiles, optionalFiles] = await Promise.all([
+    Promise.all(REQUIRED_SYNC_FILE_KEYS.map((file) => backendGetRequired(backend, file))),
+    Promise.all(OPTIONAL_SYNC_FILE_KEYS.map((file) => backend.get(file))),
   ]);
-
-  const memories = parseValidatedArray('memories.json', remoteMemJson, (item, path) => {
-    if (!item || typeof item !== 'object') throw new Error(`${path} must be an object`);
-    const { id: _id, ...memory } = item as Memory;
-    return validateStoredMemory(memory, path);
+  const entries: [SyncFileKey, string][] = REQUIRED_SYNC_FILE_KEYS.map(
+    (file, index) => [file, requiredFiles[index]],
+  );
+  OPTIONAL_SYNC_FILE_KEYS.forEach((file, index) => {
+    const content = optionalFiles[index];
+    if (content !== null) entries.push([file, content]);
   });
+  return new Map(entries);
+}
 
-  const skills = parseValidatedArray('skills.json', remoteSkillJson, validateSkill)
+function parseRemoteSyncDataSnapshot(remoteFiles: ReadonlyMap<SyncFileKey, string>): SyncDataSnapshot {
+  const remoteMemJson = getRequiredSyncFile(remoteFiles, SYNC_FILE_KEYS.memories);
+  const remoteSkillJson = getRequiredSyncFile(remoteFiles, SYNC_FILE_KEYS.skills);
+  const remotePresetJson = getRequiredSyncFile(remoteFiles, SYNC_FILE_KEYS.presets);
+  const remoteSkillSourceJson = remoteFiles.get(SYNC_FILE_KEYS.skillSources) ?? null;
+  const remoteProjectContextJson = remoteFiles.get(SYNC_FILE_KEYS.projectContext) ?? null;
+  const remoteSavedItemsJson = remoteFiles.get(SYNC_FILE_KEYS.savedItems) ?? null;
+
+  const memories = parseValidatedArray(SYNC_FILE_KEYS.memories, remoteMemJson, validateSyncMemory);
+
+  const skills = parseValidatedArray(SYNC_FILE_KEYS.skills, remoteSkillJson, validateSkill)
     .filter(isSyncableSkill);
   const skillSources = remoteSkillSourceJson === null
     ? []
-    : parseValidatedArray('skill-sources.json', remoteSkillSourceJson, validateSkillImportSource)
+    : parseValidatedArray(SYNC_FILE_KEYS.skillSources, remoteSkillSourceJson, validateSkillImportSource)
       .filter(isSyncableSkillSource);
 
   return {
     memories,
     skills,
     skillSources,
-    presets: parseValidatedArray('presets.json', remotePresetJson, validatePreset),
+    presets: parseValidatedArray(SYNC_FILE_KEYS.presets, remotePresetJson, validatePreset),
     projectContext: remoteProjectContextJson === null
       ? null
-      : parseValidatedJson('project-context.json', remoteProjectContextJson, validateProjectContextState),
+      : parseValidatedJson(SYNC_FILE_KEYS.projectContext, remoteProjectContextJson, validateProjectContextState),
     savedItems: remoteSavedItemsJson === null
       ? null
-      : parseValidatedJson('saved-items.json', remoteSavedItemsJson, validateSavedItemsState),
+      : parseValidatedJson(SYNC_FILE_KEYS.savedItems, remoteSavedItemsJson, validateSavedItemsState),
   };
+}
+
+function getRequiredSyncFile(files: ReadonlyMap<SyncFileKey, string>, file: SyncFileKey): string {
+  const content = files.get(file);
+  if (content === undefined) {
+    throw new Error(backgroundT('background.sync.missingRemoteFile', { file }));
+  }
+  return content;
 }
 
 function isSyncableSkill(skill: Skill): boolean {

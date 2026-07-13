@@ -64,6 +64,7 @@ export async function runProviderToolLoop(
     getAssistantText: (entry) => entry.turn.assistantText,
     getParentCursor: (entry) => entry.turn.session.parentCursor,
     extractToolCalls: (_text, entry) => entry.calls,
+    signal: input.signal,
     async executeToolCall(call) {
       if (input.signal?.aborted) {
         return createToolExecutionRecord(call, {

@@ -1,5 +1,6 @@
 import type { ToolCall, ToolDescriptor, ToolResult } from '../tool';
-import { applyMcpToolPolicy, callMcpTool, createMcpProtocolClient, initializeMcpServer } from './client';
+import { haveEquivalentToolDescriptorSecurity } from '../tool/authorization';
+import { applyMcpToolPolicy, callMcpTool, initializeMcpServer, listMcpTools } from './client';
 import {
   getAllMcpServers,
   getAllMcpToolCaches,
@@ -20,7 +21,7 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 
 export async function refreshMcpServerDiscovery(
   serverId: McpServerId,
-  options?: { cacheTtlMs?: number },
+  options?: { cacheTtlMs?: number; signal?: AbortSignal },
 ): Promise<McpToolCacheEntry> {
   const server = await getMcpServerById(serverId, { includeSecrets: true });
   if (!server) throw new Error(`MCP server not found: ${serverId}`);
@@ -59,7 +60,7 @@ export async function getMcpToolDescriptors(options?: {
 
 export async function ensureMcpServerDiscovery(
   serverId: McpServerId,
-  options?: { maxAgeMs?: number; cacheTtlMs?: number },
+  options?: { maxAgeMs?: number; cacheTtlMs?: number; signal?: AbortSignal },
 ): Promise<McpToolCacheEntry> {
   const cache = await getMcpToolCache(serverId);
   const now = Date.now();
@@ -76,15 +77,17 @@ export async function ensureMcpServerDiscovery(
 export interface McpToolExecutionOptions {
   timeoutMs?: number;
   maxResultBytes?: number;
+  signal?: AbortSignal;
 }
 
 export async function executeMcpToolCall(
   call: ToolCall,
+  authorizedDescriptor: ToolDescriptor,
   options: McpToolExecutionOptions = {},
 ): Promise<ToolResult> {
-  const serverId = call.provider?.kind === 'mcp'
-    ? call.provider.id
-    : call.provider?.id || call.descriptorId?.split(':')[1];
+  const serverId = authorizedDescriptor.provider.kind === 'mcp'
+    ? authorizedDescriptor.provider.id
+    : null;
   if (!serverId) {
     return {
       ok: false,
@@ -129,9 +132,9 @@ export async function executeMcpToolCall(
     };
   }
 
-  const cache = await ensureMcpServerDiscovery(server.id);
+  const cache = await ensureMcpServerDiscovery(server.id, { signal: options.signal });
   const descriptors = applyMcpToolPolicy(cache.descriptors, server);
-  const descriptor = descriptors.find((item) => item.id === call.descriptorId || item.invocationName === call.invocationName || item.name === call.name);
+  const descriptor = descriptors.find((item) => item.id === authorizedDescriptor.id);
   if (!descriptor) {
     return {
       ok: false,
@@ -162,10 +165,25 @@ export async function executeMcpToolCall(
       },
     };
   }
+  if (!await haveEquivalentToolDescriptorSecurity(authorizedDescriptor, descriptor)) {
+    return {
+      ok: false,
+      summary: 'MCP 工具授权已过期',
+      detail: `MCP tool ${authorizedDescriptor.name} changed after it was authorized.`,
+      name: authorizedDescriptor.name,
+      provider: authorizedDescriptor.provider,
+      descriptorId: authorizedDescriptor.id,
+      error: {
+        code: 'mcp_tool_authorization_stale',
+        message: `MCP tool ${authorizedDescriptor.name} changed after it was authorized.`,
+        retryable: false,
+      },
+    };
+  }
   const startedAt = Date.now();
   try {
     const transport = createMcpTransport(server);
-    await initializeMcpServer(server, transport);
+    await initializeMcpServer(server, transport, { signal: options.signal });
     return callMcpTool(server, transport, {
       call: {
         ...call,
@@ -175,8 +193,10 @@ export async function executeMcpToolCall(
       descriptor,
       timeoutMs: options.timeoutMs ?? descriptor?.execution.timeoutMs ?? server.timeouts.requestMs,
       maxResultBytes: options.maxResultBytes ?? descriptor?.execution.maxResultBytes ?? server.limits.maxResultBytes,
+      signal: options.signal,
     });
   } catch (err) {
+    throwIfMcpExecutionAborted(options.signal);
     const completedAt = Date.now();
     const message = err instanceof Error ? err.message : String(err);
     const error = err && typeof err === 'object'
@@ -206,13 +226,14 @@ export async function executeMcpToolCall(
 
 async function discoverServerTools(
   server: McpServerConfig,
-  options?: { cacheTtlMs?: number },
+  options?: { cacheTtlMs?: number; signal?: AbortSignal },
 ): Promise<McpToolCacheEntry> {
   const startedAt = Date.now();
   try {
-    const client = createMcpProtocolClient(server, createMcpTransport(server));
-    await client.initialize();
-    const descriptors = await client.listTools();
+    const transport = createMcpTransport(server);
+    await initializeMcpServer(server, transport, { signal: options?.signal });
+    const descriptors = await listMcpTools(server, transport, { signal: options?.signal });
+    throwIfMcpExecutionAborted(options?.signal);
     const completedAt = Date.now();
     const health: McpServerHealth = {
       serverId: server.id,
@@ -237,6 +258,7 @@ async function discoverServerTools(
     });
     return entry;
   } catch (err) {
+    throwIfMcpExecutionAborted(options?.signal);
     const completedAt = Date.now();
     const message = err instanceof Error ? err.message : String(err);
     const health: McpServerHealth = {
@@ -261,4 +283,10 @@ async function discoverServerTools(
     });
     return entry;
   }
+}
+
+function throwIfMcpExecutionAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  throw new DOMException('MCP execution was aborted.', 'AbortError');
 }
