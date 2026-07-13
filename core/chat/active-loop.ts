@@ -10,7 +10,7 @@
 const SESSION_STORAGE_KEY = 'deepseek_pp_active_chat_loop';
 const STALE_THRESHOLD_MS = 15_000;
 
-export type ChatLoopProvider = 'web' | 'official-api';
+export type ChatLoopProvider = 'web' | 'official-api' | 'qwen-web';
 
 export interface ActiveChatLoop {
   active: boolean;
@@ -34,7 +34,11 @@ async function readMarker(): Promise<ActiveChatLoop | null> {
   return {
     active: true,
     startedAt: marker.startedAt,
-    provider: marker.provider === 'official-api' ? 'official-api' : 'web',
+    provider: marker.provider === 'official-api'
+      ? 'official-api'
+      : marker.provider === 'qwen-web'
+        ? 'qwen-web'
+        : 'web',
   };
 }
 

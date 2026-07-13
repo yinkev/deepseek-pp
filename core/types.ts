@@ -634,6 +634,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   reasoningText?: string;
+  providerId?: 'deepseek-web' | 'qwen-web';
+  modelId?: string;
 }
 
 export interface ChatStreamChunk {

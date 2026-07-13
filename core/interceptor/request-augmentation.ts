@@ -30,9 +30,10 @@ export interface RequestBodyAugmentationResult {
   messageCount: number;
 }
 
-interface ResolvedSkills {
+export interface ResolvedSkillPrompt {
   combinedPrompt: string;
   memoryEnabled: boolean;
+  skillName: string;
 }
 
 export function augmentRequestBody(
@@ -71,7 +72,7 @@ export function augmentRequestBody(
 
   const invocation = parseSkillCommand(originalPrompt);
   if (invocation) {
-    const resolved = resolveSkills(state.skills, invocation.skillName, invocation.args, locale);
+    const resolved = resolveSkillPrompt(state.skills, invocation.skillName, invocation.args, locale);
     if (resolved) {
       const scopedMemories = filterMemoriesByProjectScope(state.memories, state.projectId);
       const { augmented, usedMemoryIds } = buildPromptAugmentation(resolved.combinedPrompt, {
@@ -118,12 +119,12 @@ export function augmentRequestBody(
   };
 }
 
-function resolveSkills(
+export function resolveSkillPrompt(
   skills: RequestAugmentationState['skills'],
   skillName: string,
   args: string,
   locale: SupportedLocale,
-): ResolvedSkills | null {
+): ResolvedSkillPrompt | null {
   const primarySkill = skills.find((s) => s.name === skillName);
   if (!primarySkill) return null;
 
@@ -138,6 +139,7 @@ function resolveSkills(
           ? wrapUserInput(combinedInstructions, userArgs, locale)
           : combinedInstructions,
         memoryEnabled: primarySkill.memoryEnabled || secondSkill.memoryEnabled,
+        skillName: `${primarySkill.name}+${secondSkill.name}`,
       };
     }
   }
@@ -147,6 +149,7 @@ function resolveSkills(
       ? wrapUserInput(primarySkill.instructions, args, locale)
       : primarySkill.instructions,
     memoryEnabled: primarySkill.memoryEnabled,
+    skillName: primarySkill.name,
   };
 }
 

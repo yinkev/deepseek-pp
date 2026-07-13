@@ -11,12 +11,12 @@ const targets = [
   {
     browser: 'chrome',
     manifestPath: 'dist/chrome-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'scripting', 'sidePanel'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'scripting', 'cookies', 'webRequest', 'sidePanel'],
   },
   {
     browser: 'edge',
     manifestPath: 'dist/edge-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'scripting', 'sidePanel'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'offscreen', 'debugger', 'tabs', 'identity', 'scripting', 'cookies', 'webRequest', 'sidePanel'],
   },
   {
     browser: 'firefox',
@@ -28,8 +28,12 @@ const targets = [
 const expectedHostPermissions = [
   '*://chat.deepseek.com/*',
   'https://api.deepseek.com/*',
+  'https://chat.qwen.ai/*',
+  'https://*.aliyuncs.com/*',
   '*://cn.bing.com/*',
   '*://www.bing.com/*',
+  'http://127.0.0.1:8787/*',
+  'http://localhost:8787/*',
   'https://accounts.google.com/*',
   'https://oauth2.googleapis.com/*',
   'https://www.googleapis.com/*',

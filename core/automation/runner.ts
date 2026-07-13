@@ -166,7 +166,7 @@ async function runAutomationToolLoop(
     initialTurn,
     maxDepth: AUTOMATION_MCP_CONTINUATION_LIMIT,
     getAssistantText: (turn) => turn.assistantText,
-    getParentMessageId: (turn) => turn.responseMessageId,
+    getParentCursor: (turn) => turn.responseMessageId,
     extractToolCalls: (text) => extractToolCalls(text, {
       descriptors: request.promptContext?.toolDescriptors ?? DEFAULT_TOOL_DESCRIPTORS,
     }).filter((call) => call.provider?.kind === 'mcp' || call.provider?.id === 'web'),

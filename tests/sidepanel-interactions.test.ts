@@ -410,6 +410,115 @@ describe('sidepanel interactions', () => {
     expect(buttonByText('识图').className).toContain('ds-chat-segment-active');
   });
 
+  it('switches providers in the existing chat panel and submits the selected model', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [
+            {
+              ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+              label: 'DeepSeek',
+              supportsImages: true,
+            },
+            {
+              ref: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+              label: 'Qwen 3.7 Plus',
+              supportsImages: true,
+            },
+          ],
+          activeModel: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+          statuses: [
+            { providerId: 'deepseek-web', available: true },
+            { providerId: 'qwen-web', available: true },
+          ],
+        };
+      }
+      if (message.type === 'SET_ACTIVE_CHAT_MODEL') return { ok: true, model: (message.payload as { model: unknown }).model };
+      if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+
+    const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="提供商和模型"]');
+    expect(providerSelect).toBeTruthy();
+    await act(async () => {
+      setSelectValue(providerSelect!, 'qwen-web/qwen3.7-plus');
+      providerSelect!.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flushPromises();
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SET_ACTIVE_CHAT_MODEL',
+      payload: { model: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' } },
+    });
+
+    await enterText('给 DeepSeek++ 发送消息', '继续这个对话');
+    await clickButtonByLabel('发送');
+
+    const submit = sendMessage.mock.calls.find(([message]) => message.type === 'CHAT_SUBMIT_PROMPT')?.[0];
+    expect(submit).toMatchObject({
+      type: 'CHAT_SUBMIT_PROMPT',
+      payload: {
+        text: '继续这个对话',
+        model: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+        transcript: [],
+      },
+    });
+    expect((submit?.payload as { logicalConversationId?: string }).logicalConversationId).toBeTruthy();
+  });
+
+  it('replaces non-monotonic Qwen thinking summaries instead of duplicating them', async () => {
+    const qwenModel = { providerId: 'qwen-web', modelId: 'qwen3.7-plus' } as const;
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{ ref: qwenModel, label: 'Qwen 3.7 Plus', supportsImages: true }],
+          activeModel: qwenModel,
+          statuses: [{ providerId: 'qwen-web', available: true }],
+        };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        providerId: 'qwen-web',
+        modelId: 'qwen3.7-plus',
+        reasoningText: 'Checked',
+        reasoningFullText: 'Checked',
+        done: false,
+      }));
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        providerId: 'qwen-web',
+        modelId: 'qwen3.7-plus',
+        reasoningText: 'Revised',
+        reasoningFullText: 'Revised',
+        done: false,
+      }));
+    });
+
+    const thinking = container.querySelector('.ds-chat-thinking div');
+    expect(thinking?.textContent).toBe('Revised');
+  });
+
   it('uploads a vision image attachment and submits its file reference', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
@@ -465,6 +574,78 @@ describe('sidepanel interactions', () => {
       payload: {
         text: '描述这张图片',
         refFileIds: ['file-image-1'],
+      },
+    });
+  });
+
+  it('uploads a Qwen image through the provider-neutral composer and submits its Qwen file object', async () => {
+    const qwenModel = { providerId: 'qwen-web', modelId: 'qwen3.7-plus' } as const;
+    const providerAttachment = {
+      id: 'file-qwen-1',
+      name: 'eyes.png',
+      mimeType: 'image/png',
+      providerFileId: 'file-qwen-1',
+      providerData: { id: 'file-qwen-1', type: 'image', file_class: 'vision' },
+    };
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') {
+        return {
+          ok: true,
+          models: [{ ref: qwenModel, label: 'Qwen 3.7 Plus', supportsImages: true }],
+          activeModel: qwenModel,
+          statuses: [{ providerId: 'qwen-web', available: true }],
+        };
+      }
+      if (message.type === 'UPLOAD_CHAT_IMAGE') return { ok: true, attachment: providerAttachment };
+      if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+    stubObjectUrl();
+    stubFileReader('data:image/png;base64,YWJj');
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const image = new File(['abc'], 'eyes.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { value: [image], configurable: true });
+    await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })));
+    await flushPromises();
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'UPLOAD_CHAT_IMAGE',
+      payload: {
+        model: qwenModel,
+        dataUrl: 'data:image/png;base64,YWJj',
+        name: 'eyes.png',
+        mimeType: 'image/png',
+        sizeBytes: 3,
+      },
+    });
+
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({ type: 'STATE_UPDATED', modelType: null }));
+      runtimeListeners.forEach((listener) => listener({
+        type: 'AUTH_STATUS_CHANGED',
+        available: true,
+        provider: 'official-api',
+      }));
+    });
+    expect(container.textContent).toContain('已添加');
+
+    await enterText('给 DeepSeek++ 发送消息', '描述这张图');
+    await clickButtonByLabel('发送');
+
+    const submit = sendMessage.mock.calls.find(([message]) => message.type === 'CHAT_SUBMIT_PROMPT')?.[0];
+    expect(submit).toMatchObject({
+      payload: {
+        model: qwenModel,
+        attachments: [providerAttachment],
       },
     });
   });

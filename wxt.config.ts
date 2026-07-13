@@ -51,7 +51,16 @@ function createManifest(env: ConfigEnv): UserManifest {
   // request; WebDAV URLs are arbitrary and stay in optional_host_permissions.
   // scripting: MAIN-world localStorage read for DeepSeek userToken after extension
   // reload (isolated content world cannot see page storage; vault was stale).
-  const chromiumPermissions = [...permissions, 'offscreen', 'debugger', 'tabs', 'identity', 'scripting'];
+  const chromiumPermissions = [
+    ...permissions,
+    'offscreen',
+    'debugger',
+    'tabs',
+    'identity',
+    'scripting',
+    'cookies',
+    'webRequest',
+  ];
 
   return {
     default_locale: 'en',
@@ -64,6 +73,8 @@ function createManifest(env: ConfigEnv): UserManifest {
       // DeepSeek + Bing: core extension hosts.
       '*://chat.deepseek.com/*',
       'https://api.deepseek.com/*',
+      'https://chat.qwen.ai/*',
+      'https://*.aliyuncs.com/*',
       '*://cn.bing.com/*',
       '*://www.bing.com/*',
       // Cursor bridge host: image asset relay for eyes pipeline (never DeepSeek itself).

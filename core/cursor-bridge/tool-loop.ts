@@ -246,7 +246,7 @@ export async function runBridgeToolLoop(
     initialTurn: input.initialTurn,
     maxDepth,
     getAssistantText: (turn) => turn.assistantText,
-    getParentMessageId: (turn) => turn.responseMessageId,
+    getParentCursor: (turn) => turn.responseMessageId,
     extractToolCalls: (text) => extractToolCalls(text, { descriptors }),
     async executeToolCall(call, parentMessageId) {
       if (input.signal?.aborted) {

@@ -14,6 +14,7 @@ import {
   type VoiceSettings,
 } from '../../../core/voice/settings';
 import { DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES } from '../../../core/deepseek/upload-limits';
+import type { ChatModelRef, ProviderAttachment, ProviderModel } from '../../../core/chat/provider';
 import type { ChatMessage as ChatMessageType, ModelType } from '../../../core/types';
 import ChatMessage from '../components/ChatMessage';
 import { StatusMessage, useConfirm } from '../components/settings/primitives';
@@ -33,10 +34,20 @@ interface ChatStreamMessage extends ChatAuthStatus {
   type: string;
   text?: string;
   reasoningText?: string;
+  reasoningFullText?: string;
   voiceSettings?: VoiceSettings;
   phase?: 'reasoning' | 'answer';
   done?: boolean;
   error?: string;
+  providerId?: ChatModelRef['providerId'];
+  modelId?: string;
+}
+
+interface ChatCatalogResponse {
+  ok?: boolean;
+  models?: ProviderModel[];
+  activeModel?: ChatModelRef;
+  statuses?: Array<{ providerId: ChatModelRef['providerId']; available: boolean; reason?: string }>;
 }
 
 type VisionImageUploadStatus = 'uploading' | 'ready' | 'error';
@@ -50,6 +61,7 @@ interface VisionImageAttachment {
   previewUrl: string;
   status: VisionImageUploadStatus;
   error: string | null;
+  providerAttachment?: ProviderAttachment;
 }
 
 interface DeepSeekImageUploadResponse {
@@ -60,6 +72,12 @@ interface DeepSeekImageUploadResponse {
     fileName?: string | null;
     status?: string | null;
   };
+}
+
+interface ProviderImageUploadResponse {
+  ok?: boolean;
+  error?: string;
+  attachment?: ProviderAttachment;
 }
 
 const MAX_VISION_IMAGE_ATTACHMENTS = 4;
@@ -91,6 +109,9 @@ export default function ChatPage() {
   const [authStatus, setAuthStatus] = useState<ChatAuthStatus | null>(null);
   const [chatConfig, setChatConfig] = useState<OfficialApiChatConfig>(DEFAULT_OFFICIAL_API_CHAT_CONFIG);
   const [webModelType, setWebModelType] = useState<ModelType>(null);
+  const [chatModels, setChatModels] = useState<ProviderModel[]>([]);
+  const [activeChatModel, setActiveChatModel] = useState<ChatModelRef | null>(null);
+  const [providerStatuses, setProviderStatuses] = useState<ChatCatalogResponse['statuses']>([]);
   const [error, setError] = useState<string | null>(null);
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const [isListening, setIsListening] = useState(false);
@@ -102,13 +123,29 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<ChatMessageType[]>([]);
   const imageAttachmentsRef = useRef<VisionImageAttachment[]>([]);
+  const activeChatModelRef = useRef<ChatModelRef | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceSettingsRef = useRef<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
+  const logicalConversationIdRef = useRef(createLogicalConversationId());
   const voiceCapabilities = detectVoiceCapabilities(window);
 
-  const apiControlsEnabled = authStatus?.provider === 'official-api';
-  const webControlsEnabled = authStatus?.provider === 'deepseek-web';
-  const visionAttachmentsEnabled = webControlsEnabled && webModelType === 'vision';
+  const providerCatalogEnabled = chatModels.length > 0 && activeChatModel !== null;
+  const selectedProviderId = activeChatModel?.providerId ?? 'deepseek-web';
+  const selectedProviderStatus = providerStatuses?.find((status) => status.providerId === selectedProviderId);
+  const selectedProviderAvailable = providerCatalogEnabled
+    ? selectedProviderStatus?.available !== false
+    : authStatus?.available !== false;
+  const apiControlsEnabled = selectedProviderId === 'deepseek-web' && authStatus?.provider === 'official-api';
+  const webControlsEnabled = selectedProviderId === 'deepseek-web' && authStatus?.provider === 'deepseek-web';
+  const selectedModelSupportsImages = chatModels.find((model) => (
+    model.ref.providerId === activeChatModel?.providerId && model.ref.modelId === activeChatModel?.modelId
+  ))?.supportsImages === true;
+  const visionAttachmentsEnabled = providerCatalogEnabled
+    ? selectedModelSupportsImages && (
+      selectedProviderId === 'qwen-web'
+      || (webControlsEnabled && webModelType === 'vision')
+    )
+    : webControlsEnabled && webModelType === 'vision';
   const hasUploadingImageAttachment = imageAttachments.some((item) => item.status === 'uploading');
   const hasFailedImageAttachment = imageAttachments.some((item) => item.status === 'error');
   const readyImageFileIds = visionAttachmentsEnabled
@@ -116,7 +153,11 @@ export default function ChatPage() {
       .filter((item) => item.status === 'ready' && item.fileId)
       .map((item) => item.fileId as string)
     : [];
-  const canSendMessage = !isStreaming && !hasUploadingImageAttachment && !hasFailedImageAttachment && !!inputText.trim();
+  const canSendMessage = selectedProviderAvailable
+    && !isStreaming
+    && !hasUploadingImageAttachment
+    && !hasFailedImageAttachment
+    && !!inputText.trim();
 
   function updateLastAssistant(update: (message: ChatMessageType) => ChatMessageType) {
     setMessages((prev) => {
@@ -126,7 +167,12 @@ export default function ChatPage() {
         messagesRef.current = next;
         return next;
       }
-      const next = [...prev, update({ role: 'assistant', text: '' })];
+      const next = [...prev, update({
+        role: 'assistant',
+        text: '',
+        providerId: activeChatModel?.providerId,
+        modelId: activeChatModel?.modelId,
+      })];
       messagesRef.current = next;
       return next;
     });
@@ -144,6 +190,10 @@ export default function ChatPage() {
       ...message,
       reasoningText: `${message.reasoningText ?? ''}${reasoningText}`,
     }));
+  }
+
+  function replaceAssistantReasoning(reasoningText: string) {
+    updateLastAssistant((message) => ({ ...message, reasoningText }));
   }
 
   useEffect(() => {
@@ -165,6 +215,10 @@ export default function ChatPage() {
   useEffect(() => {
     imageAttachmentsRef.current = imageAttachments;
   }, [imageAttachments]);
+
+  useEffect(() => {
+    activeChatModelRef.current = activeChatModel;
+  }, [activeChatModel]);
 
   useEffect(() => () => {
     imageAttachmentsRef.current.forEach(revokeVisionAttachmentPreview);
@@ -192,6 +246,15 @@ export default function ChatPage() {
     chrome.runtime.sendMessage({ type: 'GET_VOICE_SETTINGS' })
       .then((result) => setVoiceSettings(normalizeVoiceSettings(result)))
       .catch(() => setVoiceSettings(DEFAULT_VOICE_SETTINGS));
+
+    chrome.runtime.sendMessage({ type: 'GET_CHAT_CATALOG' })
+      .then((result: ChatCatalogResponse | undefined) => {
+        if (!result?.ok || !Array.isArray(result.models) || !result.activeModel) return;
+        setChatModels(result.models);
+        setActiveChatModel(result.activeModel);
+        setProviderStatuses(Array.isArray(result.statuses) ? result.statuses : []);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -205,7 +268,28 @@ export default function ChatPage() {
       if (msg.type === 'AUTH_STATUS_CHANGED') {
         const nextAuthStatus = normalizeAuthStatus(msg);
         setAuthStatus(nextAuthStatus);
-        if (nextAuthStatus.provider !== 'deepseek-web') clearImageAttachments();
+        setProviderStatuses((previous) => {
+          const statuses = previous ?? [];
+          return [
+            ...statuses.filter((status) => status.providerId !== 'deepseek-web'),
+            { providerId: 'deepseek-web', available: nextAuthStatus.available === true },
+          ];
+        });
+        if (
+          activeChatModelRef.current?.providerId !== 'qwen-web'
+          && nextAuthStatus.provider !== 'deepseek-web'
+        ) clearImageAttachments();
+        return;
+      }
+
+      if (msg.type === 'QWEN_AUTH_STATUS_CHANGED') {
+        setProviderStatuses((previous) => {
+          const statuses = previous ?? [];
+          return [
+            ...statuses.filter((status) => status.providerId !== 'qwen-web'),
+            { providerId: 'qwen-web', available: msg.available === true },
+          ];
+        });
         return;
       }
 
@@ -214,7 +298,10 @@ export default function ChatPage() {
         if (nextModelType !== undefined) {
           const normalizedModelType = normalizeWebModelType(nextModelType);
           setWebModelType(normalizedModelType);
-          if (normalizedModelType !== 'vision') clearImageAttachments();
+          if (
+            activeChatModelRef.current?.providerId !== 'qwen-web'
+            && normalizedModelType !== 'vision'
+          ) clearImageAttachments();
         }
         return;
       }
@@ -225,6 +312,14 @@ export default function ChatPage() {
       }
 
       if (msg.type !== 'CHAT_STREAM_CHUNK') return;
+
+      if (msg.providerId && msg.modelId) {
+        updateLastAssistant((message) => ({
+          ...message,
+          providerId: msg.providerId,
+          modelId: msg.modelId,
+        }));
+      }
 
       if (msg.error) {
         setError(msg.error);
@@ -242,7 +337,9 @@ export default function ChatPage() {
         return;
       }
 
-      if (msg.reasoningText) {
+      if (msg.reasoningFullText) {
+        replaceAssistantReasoning(msg.reasoningFullText);
+      } else if (msg.reasoningText) {
         appendAssistantReasoning(msg.reasoningText);
       }
 
@@ -276,9 +373,21 @@ export default function ChatPage() {
     const text = inputText.trim();
     if (!text || !canSendMessage) return;
     const refFileIds = readyImageFileIds;
+    const providerAttachments = imageAttachments
+      .map((attachment) => attachment.providerAttachment)
+      .filter((attachment): attachment is ProviderAttachment => Boolean(attachment));
+    const transcript = messagesRef.current.map((message) => ({
+      role: message.role,
+      content: message.text,
+    }));
 
     setMessages((prev) => {
-      const next = [...prev, { role: 'user' as const, text }];
+      const next = [...prev, {
+        role: 'user' as const,
+        text,
+        providerId: activeChatModel?.providerId,
+        modelId: activeChatModel?.modelId,
+      }];
       messagesRef.current = next;
       return next;
     });
@@ -291,6 +400,12 @@ export default function ChatPage() {
       type: 'CHAT_SUBMIT_PROMPT',
       payload: {
         text,
+        ...(providerCatalogEnabled && activeChatModel ? {
+          model: activeChatModel,
+          logicalConversationId: logicalConversationIdRef.current,
+          transcript,
+          ...(providerAttachments.length > 0 ? { attachments: providerAttachments } : {}),
+        } : {}),
         ...(apiControlsEnabled ? { config: chatConfig } : {}),
         ...(webControlsEnabled && refFileIds.length > 0 ? { refFileIds } : {}),
       },
@@ -314,6 +429,7 @@ export default function ChatPage() {
       if (!ok) return;
     }
     chrome.runtime.sendMessage({ type: 'CHAT_NEW_SESSION' }).catch(() => {});
+    logicalConversationIdRef.current = createLogicalConversationId();
     messagesRef.current = [];
     setMessages([]);
     setError(null);
@@ -358,6 +474,25 @@ export default function ChatPage() {
       if (nextModelType !== 'vision') clearImageAttachments();
     } catch (err) {
       setWebModelType(previous);
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleProviderModelChange = async (value: string) => {
+    if (isStreaming) return;
+    const nextModel = chatModels.find((model) => getChatModelValue(model.ref) === value)?.ref;
+    if (!nextModel) return;
+    const previous = activeChatModel;
+    setActiveChatModel(nextModel);
+    clearImageAttachments();
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'SET_ACTIVE_CHAT_MODEL',
+        payload: { model: nextModel },
+      });
+      if (result?.ok === false) throw new Error(result.error || 'Failed to save provider');
+    } catch (err) {
+      setActiveChatModel(previous);
       setError(err instanceof Error ? err.message : String(err));
     }
   };
@@ -426,16 +561,18 @@ export default function ChatPage() {
     try {
       const dataUrl = await readFileAsDataUrl(file);
       const response = await chrome.runtime.sendMessage({
-        type: 'UPLOAD_DEEPSEEK_IMAGE',
+        type: providerCatalogEnabled ? 'UPLOAD_CHAT_IMAGE' : 'UPLOAD_DEEPSEEK_IMAGE',
         payload: {
+          ...(providerCatalogEnabled && activeChatModel ? { model: activeChatModel } : {}),
           dataUrl,
           name: file.name,
           mimeType: file.type,
           sizeBytes: file.size,
         },
-      }) as DeepSeekImageUploadResponse;
+      }) as DeepSeekImageUploadResponse & ProviderImageUploadResponse;
       if (response?.ok === false) throw new Error(response.error || t('sidepanel.chatPage.imageUploadFailed'));
-      const fileId = response?.file?.id;
+      const providerAttachment = response?.attachment;
+      const fileId = providerAttachment?.providerFileId ?? providerAttachment?.id ?? response?.file?.id;
       if (!fileId) throw new Error(t('sidepanel.chatPage.imageUploadMissingId'));
 
       setImageAttachments((prev) => prev.map((item) => (
@@ -443,6 +580,7 @@ export default function ChatPage() {
           ? {
             ...item,
             fileId,
+            ...(providerAttachment ? { providerAttachment } : {}),
             status: 'ready',
             error: null,
           }
@@ -517,19 +655,6 @@ export default function ChatPage() {
     }
   };
 
-  if (authStatus?.available === false) {
-    return (
-      <div className="ds-chat-auth-empty">
-        <p className="text-sm mb-3" style={{ color: 'var(--ds-text-secondary)' }}>
-          {t('sidepanel.chatPage.authRequired')}
-        </p>
-        <p className="text-xs" style={{ color: 'var(--ds-text-tertiary)' }}>
-          {t('sidepanel.chatPage.authHint')}
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="ds-chat-page">
       <header className="ds-chat-header">
@@ -539,7 +664,13 @@ export default function ChatPage() {
               <span className="text-sm font-semibold" style={{ color: 'var(--ds-text)' }}>
                 {t('sidepanel.chatPage.title')}
               </span>
-              <ProviderBadge provider={authStatus?.provider ?? null} />
+              <ProviderBadge
+                provider={authStatus?.provider ?? null}
+                model={chatModels.find((entry) => (
+                  entry.ref.providerId === activeChatModel?.providerId
+                  && entry.ref.modelId === activeChatModel?.modelId
+                ))}
+              />
             </div>
             <p className="ds-chat-subtitle">
               {apiControlsEnabled
@@ -572,6 +703,25 @@ export default function ChatPage() {
             </button>
           </div>
         </div>
+
+        {providerCatalogEnabled && (
+          <div className="ds-chat-config-panel">
+            <select
+              value={getChatModelValue(activeChatModel)}
+              disabled={isStreaming}
+              onChange={(event) => void handleProviderModelChange(event.target.value)}
+              className="ds-chat-provider-select"
+              aria-label={t('sidepanel.chatPage.providerModelLabel')}
+              title={t('sidepanel.chatPage.providerModelLabel')}
+            >
+              {chatModels.map((model) => (
+                <option key={getChatModelValue(model.ref)} value={getChatModelValue(model.ref)}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {apiControlsEnabled && (
           <div className="ds-chat-config-panel">
@@ -649,7 +799,20 @@ export default function ChatPage() {
       <div ref={listRef} className="ds-chat-messages">
         {confirmNode}
 
-        {messages.length === 0 && !isStreaming && (
+        {!selectedProviderAvailable && (
+          <div className="ds-chat-auth-empty">
+            <p className="text-sm mb-3" style={{ color: 'var(--ds-text-secondary)' }}>
+              {t('sidepanel.chatPage.providerAuthRequired', {
+                provider: chatModels.find((model) => model.ref.providerId === selectedProviderId)?.label ?? 'DeepSeek',
+              })}
+            </p>
+            <p className="text-xs" style={{ color: 'var(--ds-text-tertiary)' }}>
+              {t('sidepanel.chatPage.providerAuthHint')}
+            </p>
+          </div>
+        )}
+
+        {selectedProviderAvailable && messages.length === 0 && !isStreaming && (
           <div className="ds-chat-empty">
             <div className="ds-empty-state-icon">
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -811,13 +974,22 @@ function normalizeWebModelType(value: unknown): ModelType {
   return value === 'expert' || value === 'vision' ? value : null;
 }
 
-function ProviderBadge({ provider }: { provider: ChatProvider }) {
+function ProviderBadge({ provider, model }: { provider: ChatProvider; model?: ProviderModel }) {
   const { t } = useI18n();
+  if (model) return <span className="ds-chat-provider-badge">{model.label}</span>;
   if (!provider) return null;
   const label = provider === 'official-api'
     ? t('sidepanel.chatPage.apiProvider')
     : t('sidepanel.chatPage.webProvider');
   return <span className="ds-chat-provider-badge">{label}</span>;
+}
+
+function getChatModelValue(model: ChatModelRef): string {
+  return `${model.providerId}/${model.modelId}`;
+}
+
+function createLogicalConversationId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function getWebModelLabel(

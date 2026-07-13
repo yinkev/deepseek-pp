@@ -19,33 +19,33 @@ export async function executeToolCallsSequentially(
   return results;
 }
 
-export interface ToolContinuationLoopInput<TTurn> {
+export interface ToolContinuationLoopInput<TTurn, TCursor extends string | number> {
   initialTurn: TTurn;
   maxDepth: number;
   getAssistantText: (turn: TTurn) => string;
-  getParentMessageId: (turn: TTurn) => number | null;
+  getParentCursor: (turn: TTurn) => TCursor | null;
   extractToolCalls: (assistantText: string) => ToolCall[];
-  executeToolCall: (call: ToolCall, parentMessageId: number) => Promise<ToolExecutionRecord>;
+  executeToolCall: (call: ToolCall, parentCursor: TCursor) => Promise<ToolExecutionRecord>;
   buildContinuationPrompt: (executions: ToolExecutionRecord[]) => string;
-  submitContinuation: (prompt: string, parentMessageId: number) => Promise<TTurn>;
+  submitContinuation: (prompt: string, parentCursor: TCursor) => Promise<TTurn>;
 }
 
-export async function runToolContinuationLoop<TTurn>(
-  input: ToolContinuationLoopInput<TTurn>,
+export async function runToolContinuationLoop<TTurn, TCursor extends string | number>(
+  input: ToolContinuationLoopInput<TTurn, TCursor>,
 ): Promise<{ turn: TTurn; executions: ToolExecutionRecord[] }> {
   let turn = input.initialTurn;
-  let parentMessageId = input.getParentMessageId(turn);
+  let parentCursor = input.getParentCursor(turn);
   const executions: ToolExecutionRecord[] = [];
 
   for (let depth = 0; depth < input.maxDepth; depth++) {
-    if (parentMessageId === null) break;
+    if (parentCursor === null) break;
 
     const calls = input.extractToolCalls(input.getAssistantText(turn));
     if (calls.length === 0) break;
 
     const stepExecutions: ToolExecutionRecord[] = [];
     for (const call of calls) {
-      const execution = await input.executeToolCall(call, parentMessageId);
+      const execution = await input.executeToolCall(call, parentCursor);
       stepExecutions.push(execution);
       executions.push(execution);
     }
@@ -59,9 +59,9 @@ export async function runToolContinuationLoop<TTurn>(
 
     turn = await input.submitContinuation(
       input.buildContinuationPrompt(stepExecutions),
-      parentMessageId,
+      parentCursor,
     );
-    parentMessageId = input.getParentMessageId(turn);
+    parentCursor = input.getParentCursor(turn);
   }
 
   return { turn, executions };

@@ -115,6 +115,11 @@ import {
   saveVoiceSettings,
 } from '../core/voice/settings';
 import type { SandboxExecutionResult, SandboxRunRequest, SandboxToolRuntime } from '../core/sandbox';
+import {
+  createSandboxToolDescriptors,
+  executeSandboxToolCall,
+  isSandboxToolName,
+} from '../core/sandbox';
 import { getCurrentBrowserExtensionEnvironment } from '../core/platform';
 import { readOptionalChromeApi } from '../core/platform/chrome-api';
 import {
@@ -209,6 +214,48 @@ import {
   loadClientHeadersFromStorage,
   uploadDeepSeekFile,
 } from '../core/deepseek/adapter';
+import {
+  loadQwenCachedAuth,
+  mergeAndSaveQwenAuth,
+  qwenAuthCaptureFromHeaders,
+  refreshQwenAuthFromBrowser,
+  type QwenAuthCapture,
+} from '../core/qwen/auth';
+import {
+  createQwenWebTransport,
+} from '../core/qwen/transport';
+import { createQwenWebProviderAdapter } from '../core/qwen/provider-adapter';
+import { createQwenImageUploader } from '../core/qwen/upload';
+import { createDeepSeekWebProviderAdapter } from '../core/deepseek/provider-adapter';
+import { createDeepSeekOfficialProviderAdapter } from '../core/deepseek/official-provider-adapter';
+import { compileSharedAgentPrompt } from '../core/chat/agent-prompt';
+import { runProviderToolLoop } from '../core/chat/provider-tool-loop';
+import {
+  prependConversationTransfer,
+  shouldStartFreshProviderSession,
+  type NormalizedConversationMessage,
+} from '../core/chat/conversation-transfer';
+import {
+  CHAT_MODELS,
+  isSupportedChatModelRef,
+} from '../core/chat/provider-registry';
+import {
+  getActiveChatModelRef,
+  saveActiveChatModelRef,
+} from '../core/chat/provider-model-store';
+import type {
+  ChatModelRef,
+  ChatProviderAdapter,
+  ProviderAttachment,
+  ProviderSession,
+} from '../core/chat/provider';
+import {
+  addEniBondLo,
+  addEniBondUs,
+  extractSoftBondFromAssistant,
+  extractSoftBondLoFacts,
+  touchEniBondLastBeat,
+} from '../core/cursor-bridge/eni-bond';
 // Thin hook: browser-origin Cursor API bridge (isolated package; survives upstream merges).
 import { getBridgeStatusSnapshot, startCursorBridgeRuntime } from '../core/cursor-bridge';
 import {
@@ -243,12 +290,56 @@ import type { ConversationExportProgress, ConversationExportResult } from '../co
 
 const DEEPSEEK_HOME_URL = 'https://chat.deepseek.com/';
 const DEEPSEEK_TAB_URL_PATTERN = '*://chat.deepseek.com/*';
+const QWEN_TAB_URL_PATTERN = '*://chat.qwen.ai/*';
 const REFRESH_AUTH_MESSAGE = { type: 'REFRESH_DEEPSEEK_AUTH' } as const;
 const AUTOMATION_AUTH_TOKEN_MISSING_MESSAGE =
   'DeepSeek login token is missing. Refresh chat.deepseek.com or sign in again, then retry the automation.';
 let chatSessionId: string | null = null;
 let chatParentMessageId: number | null = null;
 let officialApiChatMessages: OfficialDeepSeekMessage[] = [];
+const qwenWebTransport = createQwenWebTransport({ loadAuth: loadQwenCachedAuth });
+const uploadQwenImage = createQwenImageUploader({ loadAuth: loadQwenCachedAuth });
+const deepSeekWebProviderAdapter = createDeepSeekWebProviderAdapter({
+  loadClientHeaders: () => loadOrRefreshClientHeaders(),
+  loadModelType: () => getModelType(),
+});
+const deepSeekOfficialProviderAdapter = createDeepSeekOfficialProviderAdapter({
+  loadApiKey: getDeepSeekApiKey,
+  loadConfig: getOfficialApiChatConfig,
+});
+const qwenWebProviderAdapter = createQwenWebProviderAdapter({
+  transport: qwenWebTransport,
+  getStatus: async () => ({ available: Boolean((await loadQwenCachedAuth())?.authorization) }),
+});
+async function resolveChatProviderTransport(model: ChatModelRef): Promise<{
+  adapter: ChatProviderAdapter;
+  kind: ProviderTransportKind;
+  loopProvider: ChatLoopProvider;
+}> {
+  if (model.providerId === 'qwen-web') {
+    return { adapter: qwenWebProviderAdapter, kind: 'qwen-web', loopProvider: 'qwen-web' };
+  }
+  if (await getDeepSeekApiKey()) {
+    return { adapter: deepSeekOfficialProviderAdapter, kind: 'deepseek-official', loopProvider: 'official-api' };
+  }
+  return { adapter: deepSeekWebProviderAdapter, kind: 'deepseek-web', loopProvider: 'web' };
+}
+
+async function getChatProviderStatus(providerId: ChatModelRef['providerId']) {
+  if (providerId === 'qwen-web') return qwenWebProviderAdapter.getStatus();
+  const official = await deepSeekOfficialProviderAdapter.getStatus();
+  return official.available ? official : deepSeekWebProviderAdapter.getStatus();
+}
+
+interface SidepanelProviderConversationState {
+  logicalConversationId: string;
+  model: ChatModelRef;
+  session: ProviderSession;
+  messageCount: number;
+  transportKind: ProviderTransportKind;
+}
+type ProviderTransportKind = 'deepseek-web' | 'deepseek-official' | 'qwen-web';
+let sidepanelProviderConversation: SidepanelProviderConversationState | null = null;
 const conversationExportControllers = new Map<string, AbortController>();
 let currentBackgroundLocale: SupportedLocale = DEFAULT_LOCALE;
 let currentBackgroundTranslator = createTranslator(DEFAULT_LOCALE);
@@ -308,6 +399,8 @@ export default defineBackground(() => {
   refreshWhatsNewBadge().catch((error) => reportBackgroundStartupError('whats_new_badge_failed', error));
   ensureAutomationWakeAlarm().catch((error) => reportBackgroundStartupError('automation_alarm_create_failed', error));
   reconcileInterruptedChatLoopOnWake().catch((error) => reportBackgroundStartupError('chat_loop_reconcile_failed', error));
+  registerQwenRequestAuthCapture();
+  refreshQwenAuthFromChrome().catch(() => {});
   scanDueAutomationsFromWake().catch((error) => reportBackgroundStartupError('automation_startup_scan_failed', error));
   // Local Cursor bridge: native host OpenAI surface → extension → DeepSeek web path.
   startCursorBridgeRuntime({
@@ -1235,31 +1328,71 @@ async function handleMessage(
     }
 
     case 'CHAT_SUBMIT_PROMPT': {
-      const { text, config, refFileIds } = message.payload as {
+      const { text, config, refFileIds, attachments, model, logicalConversationId, transcript } = message.payload as {
         text: string;
         config?: Partial<OfficialApiChatConfig>;
         refFileIds?: unknown;
+        attachments?: unknown;
+        model?: unknown;
+        logicalConversationId?: unknown;
+        transcript?: unknown;
       };
       if (!(await getChatEnabled())) {
         return { ok: false, error: 'chat_disabled' };
       }
       if (!text?.trim()) return { ok: false, error: 'empty_prompt' };
       // Fire and forget — the streaming response is broadcast
-      handleChatSubmitPrompt(text, config, coerceRefFileIds(refFileIds), sender.tab?.id).catch(() => {});
+      if (isSupportedChatModelRef(model) && typeof logicalConversationId === 'string' && logicalConversationId.trim()) {
+        handleProviderChatSubmitPrompt({
+          text,
+          model,
+          logicalConversationId: logicalConversationId.trim(),
+          transcript: normalizeProviderTranscript(transcript),
+          refFileIds: coerceRefFileIds(refFileIds),
+          attachments: normalizeProviderAttachments(attachments),
+          officialApiConfig: config ? normalizeOfficialApiChatConfig(config) : undefined,
+        }, sender.tab?.id).catch(() => {});
+      } else {
+        handleChatSubmitPrompt(text, config, coerceRefFileIds(refFileIds), sender.tab?.id).catch(() => {});
+      }
       return { ok: true };
     }
 
     case 'UPLOAD_DEEPSEEK_IMAGE':
       return handleDeepSeekImageUpload(message.payload, sender.tab?.id);
 
+    case 'UPLOAD_CHAT_IMAGE':
+      return handleProviderImageUpload(message.payload, sender.tab?.id);
+
     case 'CHAT_NEW_SESSION':
       chatSessionId = null;
       chatParentMessageId = null;
       officialApiChatMessages = [];
+      sidepanelProviderConversation = null;
       return { ok: true };
 
     case 'GET_AUTH_STATUS': {
       return getChatAuthStatus(sender.tab?.id);
+    }
+
+    case 'GET_CHAT_CATALOG': {
+      await refreshQwenAuthFromChrome(sender.tab?.id);
+      const statuses = await Promise.all(CHAT_MODELS.map(async (modelEntry) => ({
+        providerId: modelEntry.ref.providerId,
+        ...await getChatProviderStatus(modelEntry.ref.providerId),
+      })));
+      return {
+        ok: true,
+        models: CHAT_MODELS,
+        activeModel: await getActiveChatModelRef(),
+        statuses,
+      };
+    }
+
+    case 'SET_ACTIVE_CHAT_MODEL': {
+      const model = (message.payload as { model?: unknown } | undefined)?.model;
+      if (!isSupportedChatModelRef(model)) return { ok: false, error: 'unsupported_chat_model' };
+      return { ok: true, model: await saveActiveChatModelRef(model) };
     }
 
     case 'GET_OFFICIAL_API_CHAT_CONFIG':
@@ -1369,6 +1502,106 @@ async function loadOrRefreshClientHeaders(preferredTabId?: number): Promise<Reco
 
   await refreshClientHeadersFromDeepSeekTabs(preferredTabId);
   return loadClientHeadersFromStorage();
+}
+
+function registerQwenRequestAuthCapture(): void {
+  if (!chrome.webRequest?.onBeforeSendHeaders) return;
+  chrome.webRequest.onBeforeSendHeaders.addListener(
+    (details) => {
+      const capture = qwenAuthCaptureFromHeaders(details.requestHeaders ?? []);
+      if (capture.authorization) {
+        mergeAndSaveQwenAuth(capture)
+          .then((auth) => {
+            if (auth) chrome.runtime.sendMessage({ type: 'QWEN_AUTH_STATUS_CHANGED', available: true }).catch(() => {});
+          })
+          .catch(() => {});
+      }
+      return undefined;
+    },
+    { urls: ['https://chat.qwen.ai/api/*'] },
+    ['requestHeaders', 'extraHeaders'],
+  );
+}
+
+async function refreshQwenAuthFromChrome(preferredTabId?: number) {
+  const tabs = await getQwenTabsForAuthRefresh(preferredTabId);
+  return refreshQwenAuthFromBrowser({
+    readPageCapture: async () => {
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+        try {
+          const capture = await captureQwenAuthFromTabMainWorld(tab.id);
+          if (capture?.authorization) return capture;
+        } catch {
+          // Try the next Qwen tab; cached auth and cookies remain available tablessly.
+        }
+      }
+      return null;
+    },
+    readCookies: async () => {
+      if (!chrome.cookies?.getAll) return [];
+      const cookies = await chrome.cookies.getAll({ url: 'https://chat.qwen.ai/' });
+      return cookies
+        .filter((cookie) => typeof cookie.name === 'string' && typeof cookie.value === 'string')
+        .map((cookie) => ({ name: cookie.name, value: cookie.value }));
+    },
+  });
+}
+
+async function captureQwenAuthFromTabMainWorld(tabId: number): Promise<QwenAuthCapture | null> {
+  if (!chrome.scripting?.executeScript) return null;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: () => {
+      const read = (keys: string[]): string | undefined => {
+        for (const key of keys) {
+          for (const storage of [localStorage, sessionStorage]) {
+            try {
+              const value = storage.getItem(key)?.trim();
+              if (value) return value;
+            } catch {
+              // Storage can be unavailable during navigation.
+            }
+          }
+        }
+        return undefined;
+      };
+      const parseToken = (raw: string | undefined): string | undefined => {
+        if (!raw || raw === 'null') return undefined;
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (typeof parsed === 'string') return parsed.trim() || undefined;
+          if (parsed && typeof parsed === 'object') {
+            const record = parsed as Record<string, unknown>;
+            for (const key of ['token', 'value', 'accessToken']) {
+              const value = record[key];
+              if (typeof value === 'string' && value.trim()) return value.trim();
+            }
+          }
+        } catch {
+          return raw;
+        }
+        return raw;
+      };
+      return {
+        authorization: parseToken(read(['token', 'accessToken', 'userToken'])),
+        version: read(['version', 'appVersion', 'qwenVersion', 'qwen-version']),
+        bxUmidToken: read(['bx-umidtoken', 'bxUmidToken', 'umidToken']),
+        bxUa: read(['bx-ua', 'bxUa']),
+      };
+    },
+  });
+  const capture = results?.[0]?.result;
+  if (!capture || typeof capture !== 'object') return null;
+  return capture as QwenAuthCapture;
+}
+
+async function getQwenTabsForAuthRefresh(preferredTabId?: number): Promise<chrome.tabs.Tab[]> {
+  const tabs = await chrome.tabs.query({ url: QWEN_TAB_URL_PATTERN });
+  if (!preferredTabId) return tabs.sort((a, b) => Number(b.active) - Number(a.active));
+  const preferred = tabs.find((tab) => tab.id === preferredTabId);
+  return preferred ? [preferred, ...tabs.filter((tab) => tab.id !== preferredTabId)] : tabs;
 }
 
 async function refreshClientHeadersFromDeepSeekTabs(preferredTabId?: number): Promise<boolean> {
@@ -1651,6 +1884,9 @@ async function executeBackgroundRuntimeToolCall(
   source: ToolExecutionTrigger,
   options?: RuntimeToolCallOptions,
 ): Promise<ToolResult> {
+  if (isSandboxToolName(call.name)) {
+    return executeSandboxToolCall(browserSandboxRuntime, call, currentBackgroundLocale);
+  }
   return executeRuntimeToolCall(call, source, currentBackgroundLocale, options);
 }
 
@@ -2326,6 +2562,50 @@ async function handleDeepSeekImageUpload(payload: unknown, excludeTabId?: number
   return { ok: true, file: uploaded };
 }
 
+async function handleProviderImageUpload(payload: unknown, excludeTabId?: number) {
+  const value = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  if (!isSupportedChatModelRef(value.model)) {
+    return { ok: false, error: 'unsupported_chat_model' };
+  }
+  const request = normalizeDeepSeekImageUploadRequest(payload);
+  if (value.model.providerId === 'deepseek-web') {
+    const result = await handleDeepSeekImageUpload(payload, excludeTabId);
+    if (result.ok === false) return result;
+    const uploaded = result.file;
+    if (!uploaded) return { ok: false, error: 'missing_upload_file' };
+    return {
+      ok: true,
+      attachment: {
+        id: uploaded.id,
+        name: request.name,
+        mimeType: request.mimeType,
+        providerFileId: uploaded.id,
+      } satisfies ProviderAttachment,
+    };
+  }
+
+  await refreshQwenAuthFromChrome(excludeTabId);
+  const file = dataUrlToBlob(request.dataUrl, request.mimeType);
+  if (file.size !== request.sizeBytes) {
+    throw new Error('Image upload payload size changed during transfer.');
+  }
+  const providerData = await uploadQwenImage({
+    data: new Uint8Array(await file.arrayBuffer()),
+    filename: request.name,
+    contentType: request.mimeType,
+  });
+  return {
+    ok: true,
+    attachment: {
+      id: providerData.id,
+      name: request.name,
+      mimeType: request.mimeType,
+      providerFileId: providerData.id,
+      providerData: { ...providerData },
+    } satisfies ProviderAttachment,
+  };
+}
+
 function normalizeDeepSeekImageUploadRequest(payload: unknown): DeepSeekImageUploadRequest {
   const value = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const dataUrl = typeof value.dataUrl === 'string' ? value.dataUrl : '';
@@ -2384,10 +2664,158 @@ function coerceRefFileIds(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function normalizeProviderAttachments(value: unknown): ProviderAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== 'string' || typeof record.name !== 'string' || typeof record.mimeType !== 'string') {
+      return [];
+    }
+    return [{
+      id: record.id,
+      name: record.name,
+      mimeType: record.mimeType,
+      ...(typeof record.providerFileId === 'string' ? { providerFileId: record.providerFileId } : {}),
+      ...(record.providerData && typeof record.providerData === 'object' && !Array.isArray(record.providerData)
+        ? { providerData: record.providerData as Record<string, unknown> }
+        : {}),
+    }];
+  });
+}
+
 function formatUploadBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)}MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
   return `${bytes}B`;
+}
+
+interface ProviderChatSubmitRequest {
+  text: string;
+  model: ChatModelRef;
+  logicalConversationId: string;
+  transcript: NormalizedConversationMessage[];
+  refFileIds: string[];
+  attachments: ProviderAttachment[];
+  officialApiConfig?: OfficialApiChatConfig;
+}
+
+async function handleProviderChatSubmitPrompt(
+  request: ProviderChatSubmitRequest,
+  excludeTabId?: number,
+): Promise<void> {
+  if (request.model.providerId === 'qwen-web') {
+    await refreshQwenAuthFromChrome(excludeTabId);
+  }
+  if (request.model.providerId === 'deepseek-web' && request.officialApiConfig && await getDeepSeekApiKey()) {
+    await saveOfficialApiChatConfig(request.officialApiConfig);
+  }
+  const transport = await resolveChatProviderTransport(request.model);
+  await markChatLoopStarted(transport.loopProvider);
+  try {
+    const adapter = transport.adapter;
+    const freshSession = !sidepanelProviderConversation
+      || sidepanelProviderConversation.logicalConversationId !== request.logicalConversationId
+      || shouldStartFreshProviderSession(sidepanelProviderConversation.model, request.model)
+      || sidepanelProviderConversation.transportKind !== transport.kind;
+    const session = freshSession
+      ? await adapter.createSession(request.model)
+      : sidepanelProviderConversation!.session;
+    const messageCount = (freshSession ? request.transcript.length : sidepanelProviderConversation!.messageCount) + 1;
+    const [memories, skills, activePreset, runtimeDescriptors, promptSettings] = await Promise.all([
+      getAllMemories(),
+      getAllSkills({ locale: currentBackgroundLocale }),
+      getActivePreset(),
+      getRuntimeToolDescriptors(currentBackgroundLocale),
+      getPromptInjectionSettings(),
+    ]);
+    const toolDescriptors = filterSidepanelChatToolDescriptors([
+      ...runtimeDescriptors,
+      ...createSandboxToolDescriptors(currentBackgroundLocale),
+    ]);
+    const compiled = await compileSharedAgentPrompt({
+      userPrompt: request.text,
+      isFirstProviderTurn: freshSession,
+      messageCount,
+      memories: memories.filter((memory) => memory.scope !== 'project'),
+      skills,
+      activePreset,
+      toolDescriptors,
+      locale: currentBackgroundLocale,
+      promptSettings,
+    });
+    if (compiled.usedMemoryIds.length > 0) await touchMemories(compiled.usedMemoryIds);
+    const prompt = freshSession && request.transcript.length > 0
+      ? prependConversationTransfer(compiled.prompt, request.transcript)
+      : compiled.prompt;
+    const result = await runProviderToolLoop({
+      adapter,
+      model: request.model,
+      session,
+      prompt,
+      originalTask: request.text,
+      thinkingEnabled: request.model.providerId === 'qwen-web',
+      attachments: request.attachments.length > 0
+        ? request.attachments
+        : request.refFileIds.map((id) => ({ id, name: id, mimeType: 'application/octet-stream', providerFileId: id })),
+      toolDescriptors,
+      executeTool: (call) => executeBackgroundRuntimeToolCall(call, 'sidepanel_chat'),
+      onVisibleText: (text) => broadcastChatChunk({
+        text,
+        done: false,
+        phase: 'answer',
+        providerId: request.model.providerId,
+        modelId: request.model.modelId,
+      }, excludeTabId),
+      onThinkingText: (text, fullText) => broadcastChatChunk({
+        text: '',
+        reasoningText: text,
+        reasoningFullText: fullText,
+        done: false,
+        phase: 'reasoning',
+        providerId: request.model.providerId,
+        modelId: request.model.modelId,
+      }, excludeTabId),
+    });
+    sidepanelProviderConversation = {
+      logicalConversationId: request.logicalConversationId,
+      model: request.model,
+      session: result.session,
+      messageCount: messageCount + 1,
+      transportKind: transport.kind,
+    };
+    for (const fact of extractSoftBondLoFacts(request.text)) await addEniBondLo(fact);
+    for (const fact of extractSoftBondFromAssistant(result.finalVisibleText)) await addEniBondUs(fact);
+    await touchEniBondLastBeat(request.text);
+    broadcastChatChunk({
+      text: '',
+      done: true,
+      providerId: request.model.providerId,
+      modelId: request.model.modelId,
+    }, excludeTabId);
+  } catch (error) {
+    sidepanelProviderConversation = null;
+    broadcastChatChunk({
+      text: '',
+      done: true,
+      error: error instanceof Error ? error.message : String(error),
+      providerId: request.model.providerId,
+      modelId: request.model.modelId,
+    }, excludeTabId);
+  } finally {
+    await markChatLoopFinished();
+  }
+}
+
+function normalizeProviderTranscript(value: unknown): NormalizedConversationMessage[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): NormalizedConversationMessage[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    if (record.role !== 'user' && record.role !== 'assistant') return [];
+    if (typeof record.content !== 'string' || !record.content.trim()) return [];
+    return [{ role: record.role, content: record.content.trim() }];
+  });
 }
 
 async function handleChatSubmitPrompt(
@@ -2684,7 +3112,10 @@ function broadcastChatChunk(
     done: boolean;
     error?: string;
     reasoningText?: string;
+    reasoningFullText?: string;
     phase?: 'reasoning' | 'answer';
+    providerId?: ChatModelRef['providerId'];
+    modelId?: string;
   },
   excludeTabId?: number,
 ) {
