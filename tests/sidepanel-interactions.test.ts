@@ -658,6 +658,8 @@ describe('sidepanel interactions', () => {
         attachments: [providerAttachment],
       },
     });
+    expect(container.querySelector('.ds-chat-attachment')).toBeNull();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview');
   });
 });
 

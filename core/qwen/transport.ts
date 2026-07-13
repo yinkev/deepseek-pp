@@ -235,6 +235,7 @@ async function readQwenCompletionStream(
       responseId = responseId
         ?? readString(created.response_id)
         ?? readString(created.id)
+        ?? readString(record.response_id)
         ?? readCreatedResponseId(record);
 
       const choices = Array.isArray(record.choices) ? record.choices : [];

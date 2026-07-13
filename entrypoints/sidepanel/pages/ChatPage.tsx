@@ -393,6 +393,7 @@ export default function ChatPage() {
     });
     setMsgSeq((n) => n + 1);
     setInputText('');
+    clearImageAttachments();
     setIsStreaming(true);
     setError(null);
 

@@ -109,6 +109,36 @@ describe('Qwen web transport', () => {
     });
   });
 
+  it('accepts the top-level response id emitted by Qwen vision streams', async () => {
+    const fetchImpl = vi.fn<FetchMock>()
+      .mockResolvedValueOnce(jsonResponse({ data: { id: 'chat-vision-1' } }))
+      .mockResolvedValueOnce(sseResponse([
+        'data: {"response_id":"vision-response-1","choices":[{"delta":{"phase":"thinking_summary","status":"finished","extra":{"summary_thought":{"content":["Checked the image"]}}}}]}',
+        'data: {"response_id":"vision-response-1","choices":[{"delta":{"phase":"answer","content":"Waldo is in the top right.","status":"finished"}}]}',
+      ]));
+    const transport = createQwenWebTransport({
+      fetchImpl,
+      loadAuth: async () => ({ authorization: 'Bearer test-token', version: '0.2.63' }),
+      randomUUID: sequenceUuid('request-1', 'user-1', 'response-1'),
+      now: () => 123_000,
+    });
+
+    const session = await transport.createSession('qwen3.7-plus');
+
+    await expect(transport.streamTurn({
+      session,
+      modelId: 'qwen3.7-plus',
+      prompt: 'Find Waldo',
+      thinkingEnabled: true,
+      files: [{ id: 'image-1', type: 'image' }],
+    }, {})).resolves.toEqual({
+      assistantText: 'Waldo is in the top right.',
+      thinkingText: 'Checked the image',
+      responseId: 'vision-response-1',
+      finished: true,
+    });
+  });
+
   it('surfaces missing authentication and daily rate limits without retrying', async () => {
     const unauthenticated = createQwenWebTransport({
       fetchImpl: vi.fn<FetchMock>(),
