@@ -261,7 +261,8 @@ describe('sandbox compatibility contract', () => {
     expect(sidepanel).toContain('export function composeSidepanelChatToolDescriptors');
     expect(sidepanel).toContain('createSandboxToolDescriptors');
     expect(background).toContain('composeSidepanelChatToolDescriptors');
-    expect(background).toContain('createStreamingToolTextAccumulator');
+    expect(background).toContain('createSidepanelLegacyToolStream');
+    expect(background).toContain('executeSidepanelToolCalls');
     // Provider path and DeepSeek legacy prompt path both use the shared composer.
     expect(background.match(/composeSidepanelChatToolDescriptors\(/g)?.length).toBeGreaterThanOrEqual(2);
     // Legacy loops must not rebroadcast fullText on the no-tool path.

@@ -108,7 +108,10 @@ import {
   type BrowserControlSettings,
 } from '../core/browser-control';
 import { composeSidepanelChatToolDescriptors } from '../core/tool/sidepanel';
-import { createStreamingToolTextAccumulator } from '../core/interceptor/streaming-tool-text';
+import {
+  createSidepanelLegacyToolStream,
+  executeSidepanelToolCalls,
+} from '../core/chat/sidepanel-legacy-tool-stream';
 import {
   addConversationToProject,
   bindPendingProjectConversation,
@@ -303,7 +306,6 @@ import {
 } from '../core/export/service';
 import { normalizeConversationExportRequest } from '../core/export/schema';
 import { buildPromptAugmentation } from '../core/prompt';
-import { extractToolCalls } from '../core/interceptor/tool-parser';
 import { broadcastRuntimeUpdate } from '../core/messaging/broadcast';
 import { createBackgroundErrorResponse } from '../core/messaging/background-error';
 import {
@@ -3210,33 +3212,27 @@ async function runOfficialApiToolLoop(
   let currentMessages = [...input.messages];
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    let accumulated = '';
     let reasoningAccumulated = '';
-    const toolText = createStreamingToolTextAccumulator(toolDescriptors);
-    let visibleLength = 0;
-    const emitVisibleGrowth = (visible: string) => {
-      if (visible.length <= visibleLength) return;
-      const delta = visible.slice(visibleLength);
-      visibleLength = visible.length;
-      if (delta) broadcastChatChunk({ text: delta, done: false, phase: 'answer' }, excludeTabId);
-    };
+    const stream = createSidepanelLegacyToolStream(
+      toolDescriptors,
+      (delta) => broadcastChatChunk({ text: delta, done: false, phase: 'answer' }, excludeTabId),
+    );
     const turn = await submitOfficialDeepSeekStreaming({
       apiKey: input.apiKey,
       config: input.config,
       messages: currentMessages,
     }, {
       onTextChunk(newText: string, fullText: string) {
-        accumulated = fullText;
-        emitVisibleGrowth(toolText.append(newText));
+        stream.onTextChunk(newText, fullText);
       },
       onReasoningChunk(newText: string, fullText: string) {
         reasoningAccumulated = fullText;
         broadcastChatChunk({ text: '', reasoningText: newText, done: false, phase: 'reasoning' }, excludeTabId);
       },
     });
-    emitVisibleGrowth(toolText.flush());
+    stream.finishStream();
 
-    const fullText = accumulated || turn.assistantText;
+    const fullText = stream.getFullText(turn.assistantText);
 
     if (!fullText) {
       broadcastChatChunk({ text: '', done: true }, excludeTabId);
@@ -3251,28 +3247,17 @@ async function runOfficialApiToolLoop(
         reasoningContent: reasoningAccumulated || turn.reasoningText || undefined,
       },
     ];
-    const toolCalls = extractToolCalls(fullText, { descriptors: toolDescriptors });
+    const toolCalls = stream.extractCalls();
 
     if (toolCalls.length === 0) {
       broadcastChatChunk({ text: '', done: true }, excludeTabId);
       return currentMessages;
     }
 
-    const execs: ToolExecutionRecord[] = [];
-    for (const call of toolCalls) {
-      const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat');
-      execs.push({
-        name: call.name,
-        result: {
-          ok: result.ok,
-          summary: result.summary,
-          detail: result.detail,
-          output: result.output,
-          truncated: result.truncated,
-          error: result.error,
-        },
-      });
-    }
+    const execs = await executeSidepanelToolCalls(
+      toolCalls,
+      (call) => executeBackgroundRuntimeToolCall(call, 'sidepanel_chat'),
+    );
 
     const toolResultsText = execs.map((e) =>
       `<${e.name}_result>\n${JSON.stringify(e.result)}\n</${e.name}_result>`
@@ -3310,56 +3295,39 @@ async function runSidepanelToolLoop(
   let currentInput = input;
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    let accumulated = '';
-    const toolText = createStreamingToolTextAccumulator(toolDescriptors);
-    let visibleLength = 0;
-    const emitVisibleGrowth = (visible: string) => {
-      if (visible.length <= visibleLength) return;
-      const delta = visible.slice(visibleLength);
-      visibleLength = visible.length;
-      if (delta) broadcastChatChunk({ text: delta, done: false }, excludeTabId);
-    };
+    const stream = createSidepanelLegacyToolStream(
+      toolDescriptors,
+      (delta) => broadcastChatChunk({ text: delta, done: false }, excludeTabId),
+    );
     const turn = await submitPromptStreaming({
       ...currentInput,
       powHeaders: await createPowHeaders(currentInput.clientHeaders),
     }, {
       onTextChunk(newText: string, fullText: string) {
-        accumulated = fullText;
-        emitVisibleGrowth(toolText.append(newText));
+        stream.onTextChunk(newText, fullText);
       },
     });
-    emitVisibleGrowth(toolText.flush());
+    stream.finishStream();
 
     chatParentMessageId = turn.responseMessageId;
-    const fullText = accumulated || turn.assistantText;
+    const fullText = stream.getFullText(turn.assistantText);
 
     if (!fullText) {
       broadcastChatChunk({ text: '', done: true }, excludeTabId);
       return;
     }
 
-    const toolCalls = extractToolCalls(fullText, { descriptors: toolDescriptors });
+    const toolCalls = stream.extractCalls();
 
     if (toolCalls.length === 0) {
       broadcastChatChunk({ text: '', done: true }, excludeTabId);
       return;
     }
 
-    const execs: ToolExecutionRecord[] = [];
-    for (const call of toolCalls) {
-      const result = await executeBackgroundRuntimeToolCall(call, 'sidepanel_chat');
-      execs.push({
-        name: call.name,
-        result: {
-          ok: result.ok,
-          summary: result.summary,
-          detail: result.detail,
-          output: result.output,
-          truncated: result.truncated,
-          error: result.error,
-        },
-      });
-    }
+    const execs = await executeSidepanelToolCalls(
+      toolCalls,
+      (call) => executeBackgroundRuntimeToolCall(call, 'sidepanel_chat'),
+    );
     allExecutions.push(...execs);
 
     const toolResultsText = execs.map((e) =>

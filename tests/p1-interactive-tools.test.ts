@@ -135,14 +135,14 @@ describe('P1 interactive tool contracts', () => {
     expect(sidepanelNames).not.toContain('memory_import_preview');
   });
 
-  it('keeps sandbox enabled in the composed sidepanel chat catalog', async () => {
+  it('adds sandbox to the composed sidepanel chat catalog when it is absent from runtime descriptors', async () => {
     const { composeSidepanelChatToolDescriptors } = await import('../core/tool/sidepanel');
-    const { createSandboxToolDescriptors } = await import('../core/sandbox');
-    const descriptors = composeSidepanelChatToolDescriptors([
+    const input = [
       ...createMemoryToolDescriptors('en'),
       ...createArtifactToolDescriptors('en'),
-      ...createSandboxToolDescriptors('en'),
-    ], 'en');
+    ];
+    expect(input.some((descriptor) => descriptor.name === 'sandbox_run')).toBe(false);
+    const descriptors = composeSidepanelChatToolDescriptors(input, 'en');
     const sandbox = descriptors.find((descriptor) => descriptor.name === 'sandbox_run');
     expect(sandbox).toBeTruthy();
     expect(sandbox?.execution.enabled).toBe(true);
