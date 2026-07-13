@@ -54,7 +54,7 @@ describe('Qwen web transport', () => {
       .mockResolvedValueOnce(jsonResponse({ data: { id: 'chat-1' } }))
       .mockResolvedValueOnce(sseResponse([
         'data: {"response.created":{"response_id":"upstream-response-1"}}',
-        'data: {"choices":[{"delta":{"phase":"thinking_summary","extra":{"summary_thought":{"content":["Checked context"]}}}}]}',
+        'data: {"choices":[{"delta":{"phase":"thinking_summary","status":"finished","extra":{"summary_thought":{"content":["Checked context"]}}}}]}',
         'data: {"choices":[{"delta":{"phase":"answer","content":"Hel"}}]}',
         'data: {"choices":[{"delta":{"phase":"answer","content":"lo","status":"finished"}}]}',
       ]));

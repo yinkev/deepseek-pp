@@ -256,7 +256,10 @@ async function readQwenCompletionStream(
         assistantText += content;
         callbacks.onTextChunk?.(content, assistantText);
       }
-      if (readString(delta.status)?.toLowerCase() === 'finished') finished = true;
+      if (
+        readString(delta.status)?.toLowerCase() === 'finished'
+        && (phase === 'answer' || phase === 'finished' || !phase)
+      ) finished = true;
     }
   };
 
