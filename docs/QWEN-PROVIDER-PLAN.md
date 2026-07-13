@@ -1,10 +1,13 @@
 # Approved plan: Qwen provider and multi-provider DeepSeek++
 
-**Status:** Approved  
-**Date:** 2026-07-12  
-**Repo:** `/Users/kyin/Projects/deepseek-pp` only  
-**Execution branch:** `feature/qwen-provider` after the current dirty tree is preserved  
+**Status:** Implemented and verified
+**Date:** 2026-07-12
+**Repo:** `/Users/kyin/Projects/deepseek-pp` only
+**Execution branch:** `feature/qwen-provider` after the current dirty tree is preserved
 **Chrome load path:** `/Users/kyin/Projects/deepseek-pp/dist/chrome-mv3`
+
+**Implementation architecture:** [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md)
+**Verification closeout:** [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md)
 
 ## Goal
 
@@ -18,7 +21,7 @@ This is a medium-sized architecture change, not a rewrite. Expected effort is ro
 - One provider/model dropdown.
 - Switching providers carries bounded conversation context.
 - Qwen starts with the proven `qwen3.7-plus`.
-- `qwenRelay` is read-only protocol evidence, not a runtime dependency, codebase dependency, or new product direction.
+- `qwenRelay` is read-only protocol evidence for the Qwen authentication values, request fields, Baxia/cookie behavior, cursor shapes, SSE, and uploads. DeepSeek++ implements those mechanisms natively and calls `chat.qwen.ai` directly; qwenRelay is not a runtime dependency, codebase dependency, service hop, or new product direction.
 - Muse remains paused and untouched.
 - Internal adapters only; no public provider SDK.
 - One canonical repo and Chrome build path; no worktree.
@@ -179,7 +182,7 @@ Required live checks:
 2. Complete one deterministic `sandbox_run` roundtrip with no raw tool markup exposed.
 3. Exercise one Skill, one ENI memory/context case, and one image case.
 4. Switch DeepSeek to Qwen to DeepSeek while preserving the logical conversation.
-5. Confirm no runtime request, import, or process dependency on qwenRelay.
+5. Confirm by architecture, request-URL, import, package, and process-spawn inspection that no qwenRelay dependency or call path exists. Do not substitute localhost port monitoring for this dependency review.
 6. Reload the extension and repeat Qwen chat using cached authentication.
 7. Confirm current DeepSeek side-panel, Cursor/Hermes bridge, and DeepSeek web interception remain functional.
 
@@ -188,6 +191,7 @@ Rollback is provider-local: disable or remove the Qwen catalog entry and adapter
 ## Boundaries and stop conditions
 
 - qwenRelay may be inspected for request fields and Baxia behavior but is never edited or called by the shipped integration.
+- The shipped Qwen adapter connects directly to `https://chat.qwen.ai`; qwenRelay is not an intermediary.
 - Muse files, port `8788`, and Muse entrypoints are out of scope.
 - The first Qwen model is `qwen3.7-plus`; dynamic model discovery comes after the vertical slice.
 - No public adapter SDK, provider marketplace, broad rename, or unrelated refactor.
@@ -256,4 +260,3 @@ Final response:
 List exact commands and live evidence. Do not claim tabless success without
 closing every Qwen tab during the test.
 ```
-

@@ -1,9 +1,37 @@
-# Handoff for next agent — DeepSeek++ / ENI / bridge
+# Handoff for next agent — DeepSeek++ / ENI / providers / bridge
 
-**Date:** 2026-07-10 (evening — post FREEZE + upstream merge)  
-**Repo (ONLY):** `/Users/kyin/Projects/deepseek-pp`  
-**Branch:** `main` — **committed** (`bcf7aaf` bridge + `09ee70c` upstream merge)  
-**Git:** 6 commits ahead of `fork/main` (local machine OK; not pushed)  
+## Current addendum — Qwen provider completed 2026-07-12
+
+**Current repo:** `/Users/kyin/Projects/deepseek-pp` only
+**Current implementation branch:** `feature/qwen-provider`
+**Preserved pre-Qwen work:** `wip/pre-qwen-20260712` at `1936e0c889ec1fc432070ae0ab36f4d4f0a09707`
+**Chrome unpacked path:** `/Users/kyin/Projects/deepseek-pp/dist/chrome-mv3`
+**Push/deploy:** neither performed
+
+Read these Qwen documents before changing the provider system:
+
+1. [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) — approved scope and constraints.
+2. [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) — implemented structure and mechanisms.
+3. [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) — exact automated and live acceptance evidence.
+4. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — explicitly deferred provider/workspace work.
+
+Current provider truth:
+
+- The existing side panel switches between DeepSeek and `qwen3.7-plus`.
+- ENI/LIME, memory, Skills, presets, local hands/tools, eyes, receipts, and continuation remain one DeepSeek++ workspace runtime.
+- Provider sessions use an opaque string cursor; DeepSeek and Qwen convert only at their adapter boundaries.
+- Switching creates a fresh provider-native session and transfers the newest bounded visible transcript.
+- Qwen authentication, chat transport, SSE, and image upload are native under `core/qwen/` and connect directly to `chat.qwen.ai`.
+- qwenRelay is read-only source evidence for required Qwen auth/request values. It is not imported, spawned, called, packaged, or used as a service hop. Do not monitor its port as a substitute for reviewing the actual dependency/request graph.
+- Live acceptance passed for tabless cached auth, ENI, bundled Skill, local sandbox continuation, images, and DeepSeek → Qwen → DeepSeek context.
+- The visible side-panel transcript is currently React-memory-only; closing/reloading the panel destroys that combined view. Durable transcript persistence/export is roadmap work.
+
+The remainder of this file is the historical 2026-07-10 DeepSeek bridge baseline. It remains relevant for Cursor/Hermes and DeepSeek regression work, but it must not override the current provider addendum above.
+
+**Date:** 2026-07-10 (evening — post FREEZE + upstream merge)
+**Historical repo:** `/Users/kyin/Projects/deepseek-pp`
+**Historical branch:** `main` — **committed** (`bcf7aaf` bridge + `09ee70c` upstream merge)
+**Git:** 6 commits ahead of `fork/main` (local machine OK; not pushed)
 **Do not invent extra project folders.**
 
 **Full docs index:** [docs/INDEX.md](./INDEX.md) · **Work inventory:** [docs/bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md)

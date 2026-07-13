@@ -25,6 +25,8 @@ Add a setting named **Share continuity across providers**, defaulting to on.
 - No memory schema migration.
 - No provider-specific copies of ENI, Skills, tools, receipts, or continuation logic.
 - No change to the approved default: one shared ENI/LIME workspace across DeepSeek and Qwen.
+- No durable persistence of the side-panel's combined logical transcript during the parity slice. Closing/reloading the panel currently clears the React-memory view.
+- No sanitized DeepSeek++ transcript export yet. A future export must preserve message provider/model metadata and attachment references without including authentication values.
 
 ## Qwen account behavior and native capabilities
 

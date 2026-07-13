@@ -2,13 +2,17 @@
 
 **Repo:** `/Users/kyin/Projects/deepseek-pp` only  
 **Public README:** user-facing features only — no API paths, no architecture dumps.  
-**This tree:** operator / agent documentation of bridge + ENI work.
+**This tree:** operator / agent documentation of provider, bridge, and ENI work.
 
 ## Start here
 
 | Doc | Purpose |
 |-----|---------|
-| [HANDOFF-NEXT-AGENT.md](./HANDOFF-NEXT-AGENT.md) | Next-agent brief (bridge FREEZE + upstream merged) |
+| [HANDOFF-NEXT-AGENT.md](./HANDOFF-NEXT-AGENT.md) | Current provider addendum plus historical bridge handoff |
+| [QWEN-PROVIDER-PLAN.md](./QWEN-PROVIDER-PLAN.md) | Approved and completed Qwen provider scope |
+| [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) | Implemented architecture, ownership, and mechanisms |
+| [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) | Automated/live evidence ledger and closeout |
+| [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) | Deferred provider/workspace continuity features |
 | [bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md) | **What we built** (chronological inventory) |
 | [bridge/ARCHITECTURE.md](./bridge/ARCHITECTURE.md) | How host ↔ extension ↔ DeepSeek connect |
 | [bridge/MODELS.md](./bridge/MODELS.md) | Model IDs and behavior |
@@ -77,3 +81,28 @@ core/deepseek/adapter.ts    web API client (session/PoW/stream)
 ```
 
 Tests: `tests/cursor-bridge-*.test.ts`
+
+## Code map (provider workspace)
+
+```text
+core/chat/
+  provider.ts               internal provider/session/turn contract
+  provider-registry.ts      DeepSeek + Qwen model catalog
+  provider-model-store.ts   persisted selected model
+  agent-prompt.ts           shared ENI/memory/Skill/preset compiler
+  conversation-transfer.ts  bounded cross-provider transcript
+  provider-tool-loop.ts     shared execution + continuation loop
+  tool-protocol.ts          Qwen JSON envelope boundary
+
+core/qwen/
+  auth.ts                   Qwen header/cookie capture and cache
+  provider-adapter.ts       shared contract → Qwen transport
+  transport.ts              native chat.qwen.ai chat + SSE
+  upload.ts                 Qwen STS/OSS image flow
+  upload-limits.ts          Qwen image limit
+
+entrypoints/background.ts                 provider orchestration
+entrypoints/sidepanel/pages/ChatPage.tsx  selector and logical transcript
+```
+
+Tests: `tests/provider-*.test.ts`, `tests/qwen-*.test.ts`, and `tests/sidepanel-interactions.test.ts`
