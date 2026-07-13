@@ -537,7 +537,11 @@ export default function ChatPage() {
   };
 
   const uploadImageFile = async (file: File) => {
-    const validationError = validateImageFile(file, t);
+    const imageUploadMaxBytes = chatModels.find((model) => (
+      model.ref.providerId === activeChatModel?.providerId
+      && model.ref.modelId === activeChatModel.modelId
+    ))?.imageUploadMaxBytes ?? DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES;
+    const validationError = validateImageFile(file, imageUploadMaxBytes, t);
     if (validationError) {
       setError(validationError);
       return;
@@ -1028,6 +1032,7 @@ function getImageAttachmentStatusLabel(
 
 function validateImageFile(
   file: File,
+  maxBytes: number,
   t: ReturnType<typeof useI18n>['t'],
 ): string | null {
   if (!file.type.startsWith('image/')) {
@@ -1036,9 +1041,9 @@ function validateImageFile(
   if (file.size <= 0) {
     return t('sidepanel.chatPage.imageEmpty');
   }
-  if (file.size > DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES) {
+  if (file.size > maxBytes) {
     return t('sidepanel.chatPage.imageTooLarge', {
-      limit: formatImageUploadBytes(DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES),
+      limit: formatImageUploadBytes(maxBytes),
     });
   }
   return null;

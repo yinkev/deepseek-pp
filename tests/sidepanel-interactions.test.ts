@@ -485,7 +485,11 @@ describe('sidepanel interactions', () => {
       if (message.type === 'GET_CHAT_CATALOG') {
         return {
           ok: true,
-          models: [{ ref: qwenModel, label: 'Qwen 3.7 Plus', supportsImages: true }],
+          models: [{
+            ref: qwenModel,
+            label: 'Qwen 3.7 Plus',
+            supportsImages: true,
+          }],
           activeModel: qwenModel,
           statuses: [{ providerId: 'qwen-web', available: true }],
         };
@@ -595,7 +599,12 @@ describe('sidepanel interactions', () => {
       if (message.type === 'GET_CHAT_CATALOG') {
         return {
           ok: true,
-          models: [{ ref: qwenModel, label: 'Qwen 3.7 Plus', supportsImages: true }],
+          models: [{
+            ref: qwenModel,
+            label: 'Qwen 3.7 Plus',
+            supportsImages: true,
+            imageUploadMaxBytes: 20 * 1024 * 1024,
+          }],
           activeModel: qwenModel,
           statuses: [{ providerId: 'qwen-web', available: true }],
         };
@@ -613,6 +622,7 @@ describe('sidepanel interactions', () => {
 
     const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
     const image = new File(['abc'], 'eyes.png', { type: 'image/png' });
+    Object.defineProperty(image, 'size', { value: 9 * 1024 * 1024, configurable: true });
     Object.defineProperty(fileInput, 'files', { value: [image], configurable: true });
     await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })));
     await flushPromises();
@@ -624,7 +634,7 @@ describe('sidepanel interactions', () => {
         dataUrl: 'data:image/png;base64,YWJj',
         name: 'eyes.png',
         mimeType: 'image/png',
-        sizeBytes: 3,
+        sizeBytes: 9 * 1024 * 1024,
       },
     });
 

@@ -237,6 +237,7 @@ import {
 } from '../core/chat/conversation-transfer';
 import {
   CHAT_MODELS,
+  getChatImageUploadMaxBytes,
   isSupportedChatModelRef,
 } from '../core/chat/provider-registry';
 import {
@@ -2567,7 +2568,10 @@ async function handleProviderImageUpload(payload: unknown, excludeTabId?: number
   if (!isSupportedChatModelRef(value.model)) {
     return { ok: false, error: 'unsupported_chat_model' };
   }
-  const request = normalizeDeepSeekImageUploadRequest(payload);
+  const request = normalizeDeepSeekImageUploadRequest(
+    payload,
+    getChatImageUploadMaxBytes(value.model),
+  );
   if (value.model.providerId === 'deepseek-web') {
     const result = await handleDeepSeekImageUpload(payload, excludeTabId);
     if (result.ok === false) return result;
@@ -2606,7 +2610,10 @@ async function handleProviderImageUpload(payload: unknown, excludeTabId?: number
   };
 }
 
-function normalizeDeepSeekImageUploadRequest(payload: unknown): DeepSeekImageUploadRequest {
+function normalizeDeepSeekImageUploadRequest(
+  payload: unknown,
+  maxBytes = DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES,
+): DeepSeekImageUploadRequest {
   const value = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
   const dataUrl = typeof value.dataUrl === 'string' ? value.dataUrl : '';
   const name = typeof value.name === 'string' && value.name.trim() ? value.name.trim() : 'image';
@@ -2630,8 +2637,8 @@ function normalizeDeepSeekImageUploadRequest(payload: unknown): DeepSeekImageUpl
   if (sizeBytes <= 0) {
     throw new Error(`${name} is empty.`);
   }
-  if (sizeBytes > DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES) {
-    throw new Error(`${name} exceeds the ${formatUploadBytes(DEEPSEEK_IMAGE_UPLOAD_MAX_BYTES)} image upload limit.`);
+  if (sizeBytes > maxBytes) {
+    throw new Error(`${name} exceeds the ${formatUploadBytes(maxBytes)} image upload limit.`);
   }
 
   return { dataUrl, name, mimeType, sizeBytes };

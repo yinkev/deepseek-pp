@@ -6,9 +6,15 @@ import { CHAT_MODELS } from '../core/chat/provider-registry';
 
 describe('chat provider adapters', () => {
   it('publishes only the approved DeepSeek and qwen3.7-plus choices', () => {
-    expect(CHAT_MODELS.map((model) => model.ref)).toEqual([
-      { providerId: 'deepseek-web', modelId: 'deepseek-web' },
-      { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+    expect(CHAT_MODELS).toMatchObject([
+      {
+        ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+        imageUploadMaxBytes: 8 * 1024 * 1024,
+      },
+      {
+        ref: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+        imageUploadMaxBytes: 20 * 1024 * 1024,
+      },
     ]);
   });
 

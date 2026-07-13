@@ -9,6 +9,7 @@ export interface ProviderModel {
   ref: ChatModelRef;
   label: string;
   supportsImages: boolean;
+  imageUploadMaxBytes?: number;
 }
 
 export interface ProviderStatus {
