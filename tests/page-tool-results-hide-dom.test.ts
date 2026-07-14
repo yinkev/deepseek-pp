@@ -27,6 +27,25 @@ describe('page tool-results hide DOM path', () => {
     document.body.innerHTML = '';
   });
 
+  it('keeps split user-authored protocol examples visible (markers outside, JSON in pre)', () => {
+    const bubble = document.createElement('div');
+    bubble.className = 'ds-message';
+    appendParagraph(bubble, '[TOOL_RESULTS]');
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.textContent = JSON.stringify([{ tool: 'sandbox_run', ok: true, summary: 'demo' }], null, 2);
+    pre.appendChild(code);
+    bubble.appendChild(pre);
+    appendParagraph(bubble, '[/TOOL_RESULTS]');
+    appendParagraph(bubble, 'Original task: documentation example only');
+    appendParagraph(bubble, CANONICAL_SUFFIX);
+    document.body.appendChild(bubble);
+
+    expect(shouldHideToolResultsMessageBubble(bubble)).toBe(false);
+    expect(hideInternalToolResultsMessages(document)).toBe(0);
+    expect(bubble.style.display).not.toBe('none');
+  });
+
   it('hides a genuine bubble with task code and keeps a pure fenced example visible', () => {
     const genuine = document.createElement('div');
     genuine.className = 'ds-message';

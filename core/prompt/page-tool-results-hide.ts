@@ -60,21 +60,13 @@ export function serializeElementTextWithBlockNewlines(root: ParentNode): string 
 }
 
 export function collectTextOutsidePreCode(root: HTMLElement): string {
-  let text = '';
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement;
-      if (!parent) return NodeFilter.FILTER_REJECT;
-      if (parent.closest('pre, code, script, style')) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  let node = walker.nextNode();
-  while (node) {
-    text += node.nodeValue ?? '';
-    node = walker.nextNode();
+  // Clone and drop pre/code so block-aware serialization still inserts newlines
+  // between paragraphs (raw TreeWalker text nodes glue adjacent <p> content).
+  const clone = root.cloneNode(true) as HTMLElement;
+  for (const el of Array.from(clone.querySelectorAll('pre, code, script, style'))) {
+    el.remove();
   }
-  return text;
+  return serializeElementTextWithBlockNewlines(clone);
 }
 
 export function getToolResultsMessageCandidates(root: ParentNode): HTMLElement[] {

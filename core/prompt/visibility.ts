@@ -43,16 +43,19 @@ export function hasSandboxToolMarkerPrefix(text: string): boolean {
  */
 export function normalizeRenderedToolResultsText(text: string): string {
   let next = text.replace(/\r\n/g, '\n');
-  next = next.replace(/\[TOOL_RESULTS\](?!\n)/g, `${PROVIDER_TOOL_RESULTS_OPEN}\n`);
-  // Insert a newline before close when it is glued to prior payload text.
-  next = next.replace(/([^\n])\[\/TOOL_RESULTS\]/g, `$1\n${PROVIDER_TOOL_RESULTS_CLOSE}`);
+  // Do not rewrite marker literals inside JSON string values. Only repair
+  // structural collapse around the outer envelope boundary.
+  if (next.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}`) && !next.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}\n`)) {
+    next = `${PROVIDER_TOOL_RESULTS_OPEN}\n${next.slice(PROVIDER_TOOL_RESULTS_OPEN.length)}`;
+  }
+  // JSON array/object end or XML close tag glued to the outer close marker.
+  next = next.replace(/(\]|>)\[\/TOOL_RESULTS\]/g, `$1\n${PROVIDER_TOOL_RESULTS_CLOSE}`);
   // Restore the generated blank line before the continuation body when block
   // rendering collapsed it away.
   next = next.replace(
     /\[\/TOOL_RESULTS\]\n?(?=Original task:|Continue answering based on the tool results above\.|请根据上述工具执行结果继续回答。)/g,
     `${PROVIDER_TOOL_RESULTS_CLOSE}\n\n`,
   );
-  next = next.replace(/\[\/TOOL_RESULTS\](?!\n|$)/g, `${PROVIDER_TOOL_RESULTS_CLOSE}\n`);
   return next;
 }
 
@@ -123,8 +126,20 @@ export function shouldHideInternalToolResultsBubble(input: {
 }): boolean {
   if (!isInternalToolResultsContinuationText(input.fullText)) return false;
   if (!input.hasPreCode) return true;
-  return input.textOutsidePreCode.includes(PROVIDER_TOOL_RESULTS_OPEN)
-    || input.textOutsidePreCode.includes(PROVIDER_TOOL_RESULTS_CLOSE);
+
+  // Pure fenced example: entire envelope lives inside pre/code.
+  const outside = input.textOutsidePreCode;
+  const outsideHasMarkers = outside.includes(PROVIDER_TOOL_RESULTS_OPEN)
+    || outside.includes(PROVIDER_TOOL_RESULTS_CLOSE);
+  if (!outsideHasMarkers) return false;
+
+  // Split user docs often put only the JSON payload in pre/code while leaving
+  // markers + Original task + suffix in paragraphs. That full-text classifies
+  // true, but the outside text alone is not a complete structured envelope.
+  // Genuine continuations with task code still have open/payload/close outside.
+  return isInternalToolResultsContinuationText(
+    normalizeRenderedToolResultsText(outside),
+  );
 }
 
 function measureInternalToolResultsEnvelope(fromOpen: string): number | null {
@@ -203,10 +218,32 @@ function measureContinuationBodyLength(afterClose: string): number | null {
 function isStructuredToolResultsPayload(payload: string): boolean {
   const trimmed = payload.trim();
   if (!trimmed) return false;
-  if (/^[\[{]/.test(trimmed)) return true;
-  // Legacy sidepanel: <sandbox_run_result>\n{...}\n</sandbox_run_result>
-  if (/^<\w[\w-]*>/.test(trimmed) && /<\/\w[\w-]*>/.test(trimmed)) return true;
-  return false;
+
+  // Provider loop: JSON array/object of tool results (must actually parse).
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.length >= 0;
+      return parsed !== null && typeof parsed === 'object';
+    } catch {
+      return false;
+    }
+  }
+
+  // Legacy sidepanel: one or more matching <name>...</name> wrappers.
+  let rest = trimmed;
+  let sawBlock = false;
+  while (rest.length > 0) {
+    const openMatch = rest.match(/^<([A-Za-z][\w-]*)>/);
+    if (!openMatch || !openMatch[1]) return false;
+    const tag = openMatch[1];
+    const close = `</${tag}>`;
+    const closeIndex = rest.indexOf(close, openMatch[0].length);
+    if (closeIndex === -1) return false;
+    rest = rest.slice(closeIndex + close.length).replace(/^\s+/, '');
+    sawBlock = true;
+  }
+  return sawBlock;
 }
 
 function isChromeOnlyDilution(before: string, after: string): boolean {

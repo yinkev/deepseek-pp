@@ -61,6 +61,39 @@ describe('internal tool-results continuation detection', () => {
     expect(isInternalToolResultsContinuationText(multilineTask)).toBe(true);
   });
 
+  it('rejects damaged prompts that promote a task close after the true outer close is removed', () => {
+    const intact = buildProviderContinuationPrompt([SAMPLE_EXECUTION], 'normal task');
+    expect(isInternalToolResultsContinuationText(intact)).toBe(true);
+
+    // Remove only the first/true outer close line so a later task marker would
+    // previously be promoted by a loose payload-start check.
+    const lines = intact.split('\n');
+    const firstClose = lines.indexOf('[/TOOL_RESULTS]');
+    expect(firstClose).toBeGreaterThan(-1);
+    lines.splice(firstClose, 1);
+    const damaged = lines.join('\n');
+    expect(isInternalToolResultsContinuationText(damaged)).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '[not-json',
+      '[/TOOL_RESULTS]',
+      '',
+      'Original task: x',
+      CANONICAL_SUFFIX,
+    ].join('\n'))).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '<sandbox_run_result>',
+      '{"ok":true}',
+      '</wrong_result>',
+      '[/TOOL_RESULTS]',
+      '',
+      'Continue answering based on the tool results above.',
+    ].join('\n'))).toBe(false);
+  });
+
   it('classifies production buildProviderContinuationPrompt output including marker-bearing tasks', () => {
     const payloadClose = buildProviderContinuationPrompt(
       [{
