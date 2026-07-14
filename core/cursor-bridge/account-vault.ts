@@ -56,6 +56,15 @@ const memory: BridgeAccountVaultSnapshot = {
 
 let rehydrating = false;
 
+/** Test-only: clear the module-global vault so cases cannot leak tokens. */
+export function __resetBridgeAccountVaultForTests(): void {
+  memory.accounts = {};
+  memory.order = [];
+  memory.rrIndex = 0;
+  memory.defaultAccountId = null;
+  rehydrating = false;
+}
+
 function tokenFingerprint(authorization: string): string {
   const raw = authorization.replace(/^Bearer\s+/i, '').trim();
   let h = 2166136261;

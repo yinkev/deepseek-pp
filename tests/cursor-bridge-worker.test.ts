@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  __resetBridgeAccountVaultForTests,
   __resetBridgeThreadStoreForTests,
   assignBridgeSessionToHarnessProject,
   probeCursorBridgeReadiness,
@@ -13,6 +14,7 @@ let projectStorage: Record<string, unknown>;
 
 beforeEach(() => {
   __resetBridgeThreadStoreForTests();
+  __resetBridgeAccountVaultForTests();
   projectStorage = {};
   vi.stubGlobal('chrome', {
     storage: {
