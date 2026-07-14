@@ -43,18 +43,23 @@ export function hasSandboxToolMarkerPrefix(text: string): boolean {
  */
 export function normalizeRenderedToolResultsText(text: string): string {
   let next = text.replace(/\r\n/g, '\n');
-  // Do not rewrite marker literals inside JSON string values. Only repair
-  // structural collapse around the outer envelope boundary.
+  // Structural repairs only when the outer close is followed by the known
+  // continuation body. Never rewrite marker text that appears mid-string inside
+  // JSON summary/detail/output values.
   if (next.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}`) && !next.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}\n`)) {
     next = `${PROVIDER_TOOL_RESULTS_OPEN}\n${next.slice(PROVIDER_TOOL_RESULTS_OPEN.length)}`;
   }
-  // JSON array/object end or XML close tag glued to the outer close marker.
-  next = next.replace(/(\]|>)\[\/TOOL_RESULTS\]/g, `$1\n${PROVIDER_TOOL_RESULTS_CLOSE}`);
-  // Restore the generated blank line before the continuation body when block
-  // rendering collapsed it away.
+  const continuationLookahead =
+    'Original task:|Continue answering based on the tool results above\\.|请根据上述工具执行结果继续回答。';
+  // Collapsed JSON/XML end glued to outer close, only before continuation body.
   next = next.replace(
-    /\[\/TOOL_RESULTS\]\n?(?=Original task:|Continue answering based on the tool results above\.|请根据上述工具执行结果继续回答。)/g,
-    `${PROVIDER_TOOL_RESULTS_CLOSE}\n\n`,
+    new RegExp(`(\\]|>)\\[\\/TOOL_RESULTS\\]\\n?(?=${continuationLookahead})`, 'g'),
+    `$1\n${PROVIDER_TOOL_RESULTS_CLOSE}\n\n`,
+  );
+  // Close already on its own line but missing the blank line before body.
+  next = next.replace(
+    new RegExp(`(^|\\n)\\[\\/TOOL_RESULTS\\]\\n?(?=${continuationLookahead})`, 'g'),
+    `$1${PROVIDER_TOOL_RESULTS_CLOSE}\n\n`,
   );
   return next;
 }
@@ -230,20 +235,72 @@ function isStructuredToolResultsPayload(payload: string): boolean {
     }
   }
 
-  // Legacy sidepanel: one or more matching <name>...</name> wrappers.
+  // Legacy sidepanel: one or more <name_result>...</name_result> wrappers.
+  // Prefer JSON-body parsing so a close-tag literal inside JSON strings cannot
+  // terminate the wrapper early.
   let rest = trimmed;
   let sawBlock = false;
   while (rest.length > 0) {
-    const openMatch = rest.match(/^<([A-Za-z][\w-]*)>/);
+    const openMatch = rest.match(/^<([A-Za-z][\w-]*_result)>/);
     if (!openMatch || !openMatch[1]) return false;
     const tag = openMatch[1];
+    rest = rest.slice(openMatch[0].length).replace(/^\s+/, '');
+    if (rest.startsWith('{') || rest.startsWith('[')) {
+      const jsonEnd = endIndexOfJsonValue(rest);
+      if (jsonEnd < 0) return false;
+      rest = rest.slice(jsonEnd).replace(/^\s+/, '');
+    } else {
+      // Non-JSON body: require the close tag on its own later boundary.
+      const close = `</${tag}>`;
+      const closeIndex = rest.indexOf(close);
+      if (closeIndex === -1) return false;
+      rest = rest.slice(closeIndex);
+    }
     const close = `</${tag}>`;
-    const closeIndex = rest.indexOf(close, openMatch[0].length);
-    if (closeIndex === -1) return false;
-    rest = rest.slice(closeIndex + close.length).replace(/^\s+/, '');
+    if (!rest.startsWith(close)) return false;
+    rest = rest.slice(close.length).replace(/^\s+/, '');
     sawBlock = true;
   }
   return sawBlock;
+}
+
+/** End index (exclusive) of a JSON value at the start of text, or -1. */
+function endIndexOfJsonValue(text: string): number {
+  if (!text) return -1;
+  const start = text[0];
+  if (start !== '{' && start !== '[') return -1;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      depth += 1;
+      continue;
+    }
+    if (ch === '}' || ch === ']') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+      if (depth < 0) return -1;
+    }
+  }
+  return -1;
 }
 
 function isChromeOnlyDilution(before: string, after: string): boolean {
