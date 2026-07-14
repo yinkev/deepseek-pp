@@ -83,4 +83,25 @@ describe('sidepanel legacy tool stream', () => {
     expect(stream.extractCalls()).toHaveLength(0);
     expect(createSandboxToolDescriptors('en')[0]?.name).toBe('sandbox_run');
   });
+
+  it('parses fallback-only assistant text without any onTextChunk callbacks', async () => {
+    const visible: string[] = [];
+    const stream = createSidepanelLegacyToolStream(descriptors, (delta) => visible.push(delta));
+    stream.finishStream();
+    const fullText = stream.getFullText(sandboxXml);
+    expect(fullText).toBe(sandboxXml);
+    const calls = stream.extractCalls(fullText);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe('sandbox_run');
+    expect(visible.join('')).toBe('');
+
+    const executeTool = vi.fn(async () => ({
+      ok: true,
+      summary: '31',
+      detail: '31',
+    }));
+    const execs = await executeSidepanelToolCalls(calls, executeTool);
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(execs).toHaveLength(1);
+  });
 });

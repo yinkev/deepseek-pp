@@ -3247,7 +3247,7 @@ async function runOfficialApiToolLoop(
         reasoningContent: reasoningAccumulated || turn.reasoningText || undefined,
       },
     ];
-    const toolCalls = stream.extractCalls();
+    const toolCalls = stream.extractCalls(fullText);
 
     if (toolCalls.length === 0) {
       broadcastChatChunk({ text: '', done: true }, excludeTabId);
@@ -3317,7 +3317,7 @@ async function runSidepanelToolLoop(
       return;
     }
 
-    const toolCalls = stream.extractCalls();
+    const toolCalls = stream.extractCalls(fullText);
 
     if (toolCalls.length === 0) {
       broadcastChatChunk({ text: '', done: true }, excludeTabId);

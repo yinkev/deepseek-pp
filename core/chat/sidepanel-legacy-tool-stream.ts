@@ -14,7 +14,8 @@ export function createSidepanelLegacyToolStream(
   onTextChunk: (newText: string, fullText: string) => void;
   finishStream: () => void;
   getFullText: (fallback?: string) => string;
-  extractCalls: () => ToolCall[];
+  /** Prefer the same resolved fullText the caller uses (accumulated || fallback). */
+  extractCalls: (resolvedFullText?: string) => ToolCall[];
 } {
   const toolText = createStreamingToolTextAccumulator(toolDescriptors);
   let visibleLength = 0;
@@ -38,8 +39,9 @@ export function createSidepanelLegacyToolStream(
     getFullText(fallback = '') {
       return accumulated || fallback;
     },
-    extractCalls() {
-      return extractToolCalls(accumulated, { descriptors: toolDescriptors });
+    extractCalls(resolvedFullText?: string) {
+      const raw = resolvedFullText ?? accumulated;
+      return extractToolCalls(raw, { descriptors: toolDescriptors });
     },
   };
 }
