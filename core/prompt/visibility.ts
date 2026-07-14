@@ -42,26 +42,9 @@ export function hasSandboxToolMarkerPrefix(text: string): boolean {
  * newlines in textContent still expose line-bounded tool-results markers.
  */
 export function normalizeRenderedToolResultsText(text: string): string {
-  let next = text.replace(/\r\n/g, '\n');
-  // Structural repairs only when the outer close is followed by the known
-  // continuation body. Never rewrite marker text that appears mid-string inside
-  // JSON summary/detail/output values.
-  if (next.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}`) && !next.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}\n`)) {
-    next = `${PROVIDER_TOOL_RESULTS_OPEN}\n${next.slice(PROVIDER_TOOL_RESULTS_OPEN.length)}`;
-  }
-  const continuationLookahead =
-    'Original task:|Continue answering based on the tool results above\\.|请根据上述工具执行结果继续回答。';
-  // Collapsed JSON/XML end glued to outer close, only before continuation body.
-  next = next.replace(
-    new RegExp(`(\\]|>)\\[\\/TOOL_RESULTS\\]\\n?(?=${continuationLookahead})`, 'g'),
-    `$1\n${PROVIDER_TOOL_RESULTS_CLOSE}\n\n`,
-  );
-  // Close already on its own line but missing the blank line before body.
-  next = next.replace(
-    new RegExp(`(^|\\n)\\[\\/TOOL_RESULTS\\]\\n?(?=${continuationLookahead})`, 'g'),
-    `$1${PROVIDER_TOOL_RESULTS_CLOSE}\n\n`,
-  );
-  return next;
+  // Line endings only. Outer-envelope structure is recovered by the JSON/XML-aware
+  // parser — never rewrite marker text that can appear inside JSON strings.
+  return text.replace(/\r\n/g, '\n');
 }
 
 /**
@@ -148,46 +131,99 @@ export function shouldHideInternalToolResultsBubble(input: {
 }
 
 function measureInternalToolResultsEnvelope(fromOpen: string): number | null {
-  if (!fromOpen.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}\n`)) return null;
+  if (!fromOpen.startsWith(PROVIDER_TOOL_RESULTS_OPEN)) return null;
+  let cursor = PROVIDER_TOOL_RESULTS_OPEN.length;
+  // Allow collapsed open with no newline before payload.
+  if (fromOpen[cursor] === '\n') cursor += 1;
+  // Skip extra blank lines from block serialization.
+  while (fromOpen[cursor] === '\n') cursor += 1;
 
-  // Walk candidate close markers from the payload region only. Prefer the first
-  // close that yields a structured payload AND a valid continuation body so a
-  // later `[/TOOL_RESULTS]` inside Original task: cannot steal the outer boundary.
-  // Payload-internal close literals are skipped because they leave a remainder
-  // that is not a blank line + Original task / legacy suffix.
-  const closeToken = `\n${PROVIDER_TOOL_RESULTS_CLOSE}\n`;
-  let searchFrom = PROVIDER_TOOL_RESULTS_OPEN.length;
-  while (searchFrom < fromOpen.length) {
-    const closeIndex = fromOpen.indexOf(closeToken, searchFrom);
-    if (closeIndex === -1) return null;
-
-    const payload = fromOpen.slice(PROVIDER_TOOL_RESULTS_OPEN.length + 1, closeIndex);
-    if (!isStructuredToolResultsPayload(payload)) {
-      searchFrom = closeIndex + 1;
-      continue;
+  const payloadStart = cursor;
+  const afterOpen = fromOpen.slice(payloadStart);
+  let payloadLength = 0;
+  if (afterOpen.startsWith('{') || afterOpen.startsWith('[')) {
+    payloadLength = endIndexOfJsonValue(afterOpen);
+    if (payloadLength < 0) return null;
+    try {
+      JSON.parse(afterOpen.slice(0, payloadLength));
+    } catch {
+      return null;
     }
-
-    const afterCloseStart = closeIndex + closeToken.length;
-    const remainder = fromOpen.slice(afterCloseStart);
-    // Generated forms always insert a blank line after the close marker.
-    if (!remainder.startsWith('\n') && !remainder.startsWith('\r\n')) {
-      searchFrom = closeIndex + 1;
-      continue;
-    }
-    const afterClose = remainder.replace(/^\r?\n*/, '');
-    if (!afterClose) {
-      searchFrom = closeIndex + 1;
-      continue;
-    }
-    const leadingBlankLength = remainder.length - afterClose.length;
-    const bodyLength = measureContinuationBodyLength(afterClose);
-    if (bodyLength === null) {
-      searchFrom = closeIndex + 1;
-      continue;
-    }
-    return afterCloseStart + leadingBlankLength + bodyLength;
+  } else if (afterOpen.startsWith('<')) {
+    payloadLength = measureLegacyToolResultsPayload(afterOpen);
+    if (payloadLength < 0) return null;
+  } else {
+    return null;
   }
-  return null;
+
+  cursor = payloadStart + payloadLength;
+  // Optional whitespace/newlines between payload and outer close (block DOM).
+  while (
+    fromOpen[cursor] === ' '
+    || fromOpen[cursor] === '\t'
+    || fromOpen[cursor] === '\n'
+    || fromOpen[cursor] === '\r'
+  ) {
+    cursor += 1;
+  }
+  // Collapsed: `][/TOOL_RESULTS]` with no separator.
+  if (!fromOpen.startsWith(PROVIDER_TOOL_RESULTS_CLOSE, cursor)) return null;
+  cursor += PROVIDER_TOOL_RESULTS_CLOSE.length;
+
+  // Prefer a blank line after close; also allow fully collapsed
+  // `[/TOOL_RESULTS]Original task:` / legacy suffix with no newline.
+  let afterClose = fromOpen.slice(cursor);
+  if (afterClose.startsWith('\n') || afterClose.startsWith('\r')) {
+    afterClose = afterClose.replace(/^\r?\n+/, '');
+  } else if (
+    !afterClose.startsWith('Original task:')
+    && !afterClose.startsWith(LEGACY_ENGLISH_CONTINUATION)
+    && !afterClose.startsWith(LEGACY_CHINESE_CONTINUATION)
+  ) {
+    return null;
+  }
+  const bodyLength = measureContinuationBodyLength(afterClose);
+  if (bodyLength === null) return null;
+  const stripped = fromOpen.slice(cursor).length - afterClose.length;
+  return cursor + stripped + bodyLength;
+}
+
+/** Byte length of one or more production legacy tool-result wrappers, or -1. */
+function measureLegacyToolResultsPayload(text: string): number {
+  let i = 0;
+  let saw = false;
+  while (i < text.length) {
+    while (text[i] === ' ' || text[i] === '\n' || text[i] === '\t') i += 1;
+    if (i >= text.length) break;
+    if (text[i] !== '<') return saw ? i : -1;
+    const openMatch = text.slice(i).match(/^<([A-Za-z_][\w.:-]*_result)>/);
+    if (!openMatch || !openMatch[1]) return saw ? i : -1;
+    const tag = openMatch[1];
+    i += openMatch[0].length;
+    while (text[i] === ' ' || text[i] === '\n' || text[i] === '\t') i += 1;
+    if (text[i] !== '{' && text[i] !== '[') return -1;
+    const jsonEnd = endIndexOfJsonValue(text.slice(i));
+    if (jsonEnd < 0) return -1;
+    try {
+      JSON.parse(text.slice(i, i + jsonEnd));
+    } catch {
+      return -1;
+    }
+    i += jsonEnd;
+    while (text[i] === ' ' || text[i] === '\n' || text[i] === '\t') i += 1;
+    const close = `</${tag}>`;
+    if (!text.startsWith(close, i)) return -1;
+    i += close.length;
+    saw = true;
+    let j = i;
+    while (text[j] === ' ' || text[j] === '\n' || text[j] === '\t') j += 1;
+    if (text.startsWith('<', j) && !text.startsWith('</', j)) {
+      i = j;
+      continue;
+    }
+    return i;
+  }
+  return saw ? i : -1;
 }
 
 /** Length of a valid continuation body starting at afterClose, or null. */
@@ -218,50 +254,6 @@ function measureContinuationBodyLength(afterClose: string): number | null {
   }
   if (suffixIndex === -1) return null;
   return lines.slice(0, suffixIndex + 1).join('\n').length;
-}
-
-function isStructuredToolResultsPayload(payload: string): boolean {
-  const trimmed = payload.trim();
-  if (!trimmed) return false;
-
-  // Provider loop: JSON array/object of tool results (must actually parse).
-  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (Array.isArray(parsed)) return parsed.length >= 0;
-      return parsed !== null && typeof parsed === 'object';
-    } catch {
-      return false;
-    }
-  }
-
-  // Legacy sidepanel: one or more <name_result>...</name_result> wrappers.
-  // Prefer JSON-body parsing so a close-tag literal inside JSON strings cannot
-  // terminate the wrapper early.
-  let rest = trimmed;
-  let sawBlock = false;
-  while (rest.length > 0) {
-    const openMatch = rest.match(/^<([A-Za-z][\w-]*_result)>/);
-    if (!openMatch || !openMatch[1]) return false;
-    const tag = openMatch[1];
-    rest = rest.slice(openMatch[0].length).replace(/^\s+/, '');
-    if (rest.startsWith('{') || rest.startsWith('[')) {
-      const jsonEnd = endIndexOfJsonValue(rest);
-      if (jsonEnd < 0) return false;
-      rest = rest.slice(jsonEnd).replace(/^\s+/, '');
-    } else {
-      // Non-JSON body: require the close tag on its own later boundary.
-      const close = `</${tag}>`;
-      const closeIndex = rest.indexOf(close);
-      if (closeIndex === -1) return false;
-      rest = rest.slice(closeIndex);
-    }
-    const close = `</${tag}>`;
-    if (!rest.startsWith(close)) return false;
-    rest = rest.slice(close.length).replace(/^\s+/, '');
-    sawBlock = true;
-  }
-  return sawBlock;
 }
 
 /** End index (exclusive) of a JSON value at the start of text, or -1. */
