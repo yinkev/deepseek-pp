@@ -35,6 +35,21 @@ describe('content tool block styles', () => {
     expect(source).toContain('if (i < minIndex) break;');
   });
 
+  it('includes sandbox cleanup markers without advertising sandbox in the public page catalog', () => {
+    const path = join(process.cwd(), 'entrypoints/content.ts');
+    const source = readFileSync(path, 'utf8');
+
+    expect(source).toContain('PAGE_CLEANUP_SANDBOX_TOOL_NAMES');
+    expect(source).toContain('hasSandboxToolMarkerPrefix');
+    expect(source).toContain('isInternalToolResultsContinuationText');
+    expect(source).toContain('createContentScriptToolResultsMessageHider');
+    expect(source).toContain('internalToolResultsMessageHider.observe(document.body)');
+    expect(source).toContain('data-dpp-hidden-inline-agent-continuation');
+    expect(source).toContain('// Cleanup-only: recognize sandbox tags');
+    expect(source).toContain('pre, code');
+    expect(source).not.toMatch(/currentToolDescriptors\s*=\s*\[[^\]]*createSandboxToolDescriptors/);
+  });
+
   it('uses the shared injected theme variables for readable tool block text', () => {
     const path = join(process.cwd(), 'entrypoints/content.ts');
     const source = readFileSync(path, 'utf8');
@@ -86,9 +101,10 @@ describe('content tool block styles', () => {
     expect(source).toContain('startInlineAgentContinuationMessageHider();');
     expect(source).toContain('INLINE_AGENT_CONTINUATION_PLACEHOLDER');
     expect(source).toContain('isInlineAgentContinuationStructure(text)');
-    expect(source).toContain('hideInlineAgentContinuationMessages(root);');
-    expect(source).toContain("message.style.display = 'none';");
-    expect(source).toContain("data-dpp-hidden-inline-agent-continuation");
+    expect(source).toContain('hideInlineAgentContinuationMessages(root)');
+    expect(source).toContain('createContentScriptToolResultsMessageHider');
+    expect(source).toContain('internalToolResultsMessageHider.observe(document.body)');
+    expect(source).toContain('data-dpp-hidden-inline-agent-continuation');
   });
 
   it('keeps permission banner text on the same injected theme contract', () => {

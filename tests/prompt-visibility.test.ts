@@ -1,0 +1,247 @@
+import { describe, expect, it } from 'vitest';
+import {
+  hasSandboxToolMarkerPrefix,
+  isInternalToolResultsContinuationText,
+  locateInternalToolResultsContinuation,
+  normalizeRenderedToolResultsText,
+  shouldHideInternalToolResultsBubble,
+} from '../core/prompt/visibility';
+
+const CANONICAL_SUFFIX =
+  'Continue from the real tool results. Answer naturally without exposing tool XML unless another tool is required.';
+
+function canonicalEnvelope(task = 'Use sandbox_run to sum the list'): string {
+  return [
+    '[TOOL_RESULTS]',
+    '[{"tool":"sandbox_run","ok":true,"summary":"Sandbox executed"}]',
+    '[/TOOL_RESULTS]',
+    '',
+    `Original task: ${task}`,
+    CANONICAL_SUFFIX,
+  ].join('\n');
+}
+
+describe('internal tool-results continuation detection', () => {
+  it('accepts the canonical provider continuation form', () => {
+    expect(isInternalToolResultsContinuationText(canonicalEnvelope())).toBe(true);
+
+    const jsonEnvelope = [
+      '[TOOL_RESULTS]',
+      '[{"tool":"sandbox_run","ok":true}]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Original task: sum',
+      'Continue from the real tool results. Request another listed tool if needed; otherwise return the natural final answer.',
+    ].join('\n');
+    expect(isInternalToolResultsContinuationText(jsonEnvelope)).toBe(true);
+  });
+
+  it('accepts multiline Original task and fence characters inside the result payload', () => {
+    const multilineTask = [
+      '[TOOL_RESULTS]',
+      '[{"tool":"sandbox_run","ok":true,"detail":"```js\\nconsole.log(1)\\n```"}]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Original task: first line of the user ask',
+      'second line still part of the task',
+      CANONICAL_SUFFIX,
+    ].join('\n');
+    expect(isInternalToolResultsContinuationText(multilineTask)).toBe(true);
+  });
+
+  it('accepts payloads that embed close-marker text and Original task lines that quote the suffix', () => {
+    const payloadWithCloseLiteral = [
+      '[TOOL_RESULTS]',
+      '[{"tool":"sandbox_run","ok":true,"detail":"do not emit [/TOOL_RESULTS] early"}]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Original task: please avoid writing',
+      CANONICAL_SUFFIX,
+      CANONICAL_SUFFIX,
+    ].join('\n');
+    // Last line is the terminal suffix; earlier quoted suffix is part of the task body.
+    expect(isInternalToolResultsContinuationText(payloadWithCloseLiteral)).toBe(true);
+
+    const taskQuotesSuffix = [
+      '[TOOL_RESULTS]',
+      '[{"tool":"sandbox_run","ok":true}]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Original task: the model said',
+      CANONICAL_SUFFIX,
+      'but keep going',
+      CANONICAL_SUFFIX,
+    ].join('\n');
+    expect(isInternalToolResultsContinuationText(taskQuotesSuffix)).toBe(true);
+  });
+
+  it('accepts exact English and Chinese legacy sidepanel forms', () => {
+    // Production legacy loop wraps each execution as <name_result> JSON </name_result>.
+    const legacyEnglish = [
+      '[TOOL_RESULTS]',
+      '<sandbox_run_result>',
+      '{"ok":true,"summary":"31","detail":"31"}',
+      '</sandbox_run_result>',
+      '[/TOOL_RESULTS]',
+      '',
+      'Continue answering based on the tool results above.',
+    ].join('\n');
+    expect(isInternalToolResultsContinuationText(legacyEnglish)).toBe(true);
+
+    const legacyChinese = [
+      '[TOOL_RESULTS]',
+      '<sandbox_run_result>',
+      '{"ok":true,"summary":"31"}',
+      '</sandbox_run_result>',
+      '[/TOOL_RESULTS]',
+      '',
+      '请根据上述工具执行结果继续回答。',
+    ].join('\n');
+    expect(isInternalToolResultsContinuationText(legacyChinese)).toBe(true);
+
+    // Provider-loop JSON array form remains accepted.
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '[{"tool":"memory_save","ok":true}]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Continue answering based on the tool results above.',
+    ].join('\n'))).toBe(true);
+  });
+
+  it('accepts DeepSeek chrome dilution around a genuine envelope', () => {
+    const diluted = ['Just now', canonicalEnvelope(), 'Copy'].join('\n');
+    expect(isInternalToolResultsContinuationText(diluted)).toBe(true);
+    expect(locateInternalToolResultsContinuation(diluted)?.before.trim()).toBe('Just now');
+
+    const chineseChrome = ['刚刚', canonicalEnvelope(), '复制'].join('\n');
+    expect(isInternalToolResultsContinuationText(chineseChrome)).toBe(true);
+  });
+
+  it('accepts block-collapsed marker text after normalize', () => {
+    const collapsed = `[TOOL_RESULTS][][/TOOL_RESULTS]Original task: sum\n${CANONICAL_SUFFIX}`;
+    expect(normalizeRenderedToolResultsText(collapsed)).toContain('[TOOL_RESULTS]\n');
+    expect(normalizeRenderedToolResultsText(collapsed)).toContain('[/TOOL_RESULTS]\n\nOriginal task:');
+    expect(isInternalToolResultsContinuationText(collapsed)).toBe(true);
+  });
+
+  it('rejects incomplete, compact-without-body, extended, prose-wrapped, and whole-envelope fenced forms', () => {
+    expect(isInternalToolResultsContinuationText('[TOOL_RESULTS]')).toBe(false);
+    expect(isInternalToolResultsContinuationText('Please do not use [TOOL_RESULTS] in docs.')).toBe(false);
+    expect(isInternalToolResultsContinuationText('The sum is 31.')).toBe(false);
+
+    expect(isInternalToolResultsContinuationText(
+      '[TOOL_RESULTS]x[/TOOL_RESULTS]Continue answering based on the tool results above.',
+    )).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '[]',
+      '[/TOOL_RESULTS]',
+      '',
+      CANONICAL_SUFFIX,
+    ].join('\n'))).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '[]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Original task: sum',
+      'Continue from the real tool results.',
+    ].join('\n'))).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '[]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Continue answering based on the tool results',
+    ].join('\n'))).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '[TOOL_RESULTS]',
+      '[]',
+      '[/TOOL_RESULTS]',
+      '',
+      'Continue answering based on the tool results above. Thanks!',
+    ].join('\n'))).toBe(false);
+
+    // User prose wrapper is not chrome.
+    expect(isInternalToolResultsContinuationText([
+      'Here is an example of the tool-results format for docs:',
+      canonicalEnvelope(),
+    ].join('\n'))).toBe(false);
+
+    expect(isInternalToolResultsContinuationText([
+      '```',
+      canonicalEnvelope(),
+      '```',
+    ].join('\n'))).toBe(false);
+  });
+
+  it('hides genuine pre/code task bubbles but keeps pure fenced examples', () => {
+    const envelope = canonicalEnvelope('fix this:\nconsole.log(1)');
+    expect(shouldHideInternalToolResultsBubble({
+      fullText: envelope,
+      textOutsidePreCode: envelope,
+      hasPreCode: true,
+    })).toBe(true);
+
+    expect(shouldHideInternalToolResultsBubble({
+      fullText: envelope,
+      textOutsidePreCode: '',
+      hasPreCode: true,
+    })).toBe(false);
+
+    expect(shouldHideInternalToolResultsBubble({
+      fullText: envelope,
+      textOutsidePreCode: envelope,
+      hasPreCode: false,
+    })).toBe(true);
+  });
+
+  it('exercises rendered-DOM shapes: chrome dilution, block adjacency, and pre/code split', () => {
+    // Adjacent paragraphs / missing newlines after block render.
+    const rebuilt = [
+      'Just now',
+      '[TOOL_RESULTS]',
+      '[{"tool":"sandbox_run","ok":true}]',
+      '[/TOOL_RESULTS]',
+      'Original task: please fix',
+      'console.log(1)',
+      CANONICAL_SUFFIX,
+      'Copy',
+    ].join('\n');
+    expect(isInternalToolResultsContinuationText(rebuilt)).toBe(true);
+    expect(shouldHideInternalToolResultsBubble({
+      fullText: rebuilt,
+      textOutsidePreCode: [
+        'Just now',
+        '[TOOL_RESULTS]',
+        '[{"tool":"sandbox_run","ok":true}]',
+        '[/TOOL_RESULTS]',
+        'Original task: please fix',
+        CANONICAL_SUFFIX,
+        'Copy',
+      ].join('\n'),
+      hasPreCode: true,
+    })).toBe(true);
+
+    // Pure fenced user example: envelope only inside pre/code.
+    expect(shouldHideInternalToolResultsBubble({
+      fullText: canonicalEnvelope(),
+      textOutsidePreCode: '',
+      hasPreCode: true,
+    })).toBe(false);
+
+    // Glued block textContent without newlines between markers.
+    const glued = `[TOOL_RESULTS][][/TOOL_RESULTS]Original task: sum\n${CANONICAL_SUFFIX}`;
+    expect(isInternalToolResultsContinuationText(glued)).toBe(true);
+  });
+
+  it('detects sandbox marker prefixes for page cleanup prefilters', () => {
+    expect(hasSandboxToolMarkerPrefix('<sandbox_run>{"language":"javascript"}</sandbox_run>')).toBe(true);
+    expect(hasSandboxToolMarkerPrefix('no tools here')).toBe(false);
+  });
+});

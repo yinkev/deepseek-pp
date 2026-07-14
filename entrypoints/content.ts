@@ -26,7 +26,14 @@ import {
   stripToolCalls,
 } from '../core/interceptor/tool-parser';
 import { augmentRequestBody } from '../core/interceptor/request-augmentation';
-import { containsInternalPromptMarker, sanitizeInternalPromptText } from '../core/prompt';
+import {
+  PAGE_CLEANUP_SANDBOX_TOOL_NAMES,
+  containsInternalPromptMarker,
+  createContentScriptToolResultsMessageHider,
+  hasSandboxToolMarkerPrefix,
+  isInternalToolResultsContinuationText,
+  sanitizeInternalPromptText,
+} from '../core/prompt';
 import { createRestoredArtifactToolResult } from '../core/artifact';
 import type { ResponseCompletePayload, ResponseTokenSpeedPayload } from '../core/interceptor/fetch-hook';
 import { shouldIgnoreEmptyTokenSpeedProgress } from '../core/interceptor/token-speed';
@@ -4168,7 +4175,10 @@ function buildToolMarkerRegex(descriptors: ToolDescriptor[]): RegExp {
 
 function buildToolTagPattern(descriptors: ToolDescriptor[]): string {
   const catalogNames = createToolInvocationCatalog(descriptors).invocationNames;
-  const escaped = [...new Set(catalogNames)].map(escapeRegExp);
+  // Cleanup-only: recognize sandbox tags in the page transcript without advertising
+  // sandbox as an executable page-catalog tool.
+  const names = [...catalogNames, ...PAGE_CLEANUP_SANDBOX_TOOL_NAMES];
+  const escaped = [...new Set(names)].map(escapeRegExp);
   return escaped.length > 0 ? escaped.join('|') : 'memory_save|memory_update|memory_delete';
 }
 
@@ -5950,10 +5960,12 @@ function containsToolMarker(text: string | null | undefined): boolean {
 function containsCleanableText(text: string | null | undefined): boolean {
   if (typeof text !== 'string' || !text) return false;
   if (isInlineAgentContinuationRenderedText(text)) return true;
+  if (isInternalToolResultsContinuationText(text)) return true;
   if (containsInternalPromptMarker(text)) return true;
   if (text.includes('<task_complete>') || text.includes('</task_complete>')) return true;
   if (text.includes(LEGACY_TOOL_CALLS_OPEN_TAG) || text.includes('｜DSML｜')) return true;
-  if (!text.includes('<')) return false;
+  if (text.includes('[TOOL_RESULTS]') || text.includes('[/TOOL_RESULTS]')) return true;
+  if (!text.includes('<') && !text.includes('[TOOL_RESULTS]')) return false;
   if (hasLikelyToolMarkerPrefix(text)) return true;
   if (text.length > CLEANABLE_TEXT_DEEP_SCAN_MAX_CHARS) return false;
   return containsToolMarker(text);
@@ -5975,7 +5987,8 @@ function hasLikelyToolMarkerPrefix(text: string): boolean {
     text.includes('<shell_') ||
     text.includes('</shell_') ||
     text.includes('<task_complete>') ||
-    text.includes('</task_complete>');
+    text.includes('</task_complete>') ||
+    hasSandboxToolMarkerPrefix(text);
 }
 
 function cleanRenderedToolCalls() {
@@ -5986,38 +5999,22 @@ function cleanRenderedToolCalls() {
   }
 }
 
+const internalToolResultsMessageHider = createContentScriptToolResultsMessageHider({
+  isInlineAgentContinuation: (text) => (
+    text.includes(INLINE_AGENT_CONTINUATION_PLACEHOLDER)
+    || isInlineAgentContinuationStructure(text)
+  ),
+});
+
+function hideInlineAgentContinuationMessages(root: ParentNode) {
+  internalToolResultsMessageHider.hideIn(root);
+}
+
 function startInlineAgentContinuationMessageHider() {
   hideInlineAgentContinuationMessages(document);
   inlineAgentContinuationMessageObserver?.disconnect();
-  inlineAgentContinuationMessageObserver = new MutationObserver((mutations) => {
-    const roots = new Set<ParentNode>();
-    for (const mutation of mutations) {
-      if (mutation.type === 'characterData') {
-        const parent = mutation.target.parentElement;
-        if (isInlineAgentContinuationRenderedText(parent?.textContent)) {
-          const root = parent?.closest('.ds-message') ?? parent;
-          if (root) roots.add(root);
-        }
-        continue;
-      }
-
-      for (const node of mutation.addedNodes) {
-        if (node instanceof Element) roots.add(node);
-      }
-    }
-
-    roots.forEach(hideInlineAgentContinuationMessages);
-  });
-  inlineAgentContinuationMessageObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-}
-
-function hideInlineAgentContinuationMessages(root: ParentNode) {
-  const messages = getInlineAgentContinuationMessageCandidates(root);
-  for (const message of messages) {
-    if (!isInlineAgentContinuationRenderedText(message.textContent)) continue;
-    message.setAttribute('data-dpp-hidden-inline-agent-continuation', 'true');
-    message.style.display = 'none';
-  }
+  // Exact production composition under test in page-tool-results-hide-dom.
+  inlineAgentContinuationMessageObserver = internalToolResultsMessageHider.observe(document.body);
 }
 
 function isInlineAgentContinuationRenderedText(text: string | null | undefined): boolean {
@@ -6027,18 +6024,8 @@ function isInlineAgentContinuationRenderedText(text: string | null | undefined):
   // is redundant here — the placeholder covers the history-restored case and
   // the structural check covers the live-rendered case.
   return text.includes(INLINE_AGENT_CONTINUATION_PLACEHOLDER) ||
-    isInlineAgentContinuationStructure(text);
-}
-
-function getInlineAgentContinuationMessageCandidates(root: ParentNode): HTMLElement[] {
-  const messages: HTMLElement[] = [];
-  if (root instanceof HTMLElement && root.matches('.ds-message')) {
-    messages.push(root);
-  }
-  if ('querySelectorAll' in root) {
-    messages.push(...Array.from(root.querySelectorAll<HTMLElement>('.ds-message')));
-  }
-  return messages;
+    isInlineAgentContinuationStructure(text) ||
+    isInternalToolResultsContinuationText(text);
 }
 
 function getToolCleanupRoots(): Element[] {
@@ -6083,7 +6070,9 @@ function stripToolCallTextNodes(root: Element) {
         // Detached artifact cards live outside .dpp-tool-block but must be
         // exempt from tool-call text stripping just like the block itself.
         parent.closest('.dpp-tool-block, .dpp-artifact-results') ||
-        parent.closest('script, style, textarea, input, [contenteditable="true"]')
+        // Preserve user-authored examples in code blocks while still stripping
+        // plain transcript protocol text elsewhere in the message.
+        parent.closest('script, style, textarea, input, [contenteditable="true"], pre, code')
       ) {
         return NodeFilter.FILTER_REJECT;
       }
