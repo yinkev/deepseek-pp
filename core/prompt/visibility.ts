@@ -130,27 +130,48 @@ export function shouldHideInternalToolResultsBubble(input: {
 function measureInternalToolResultsEnvelope(fromOpen: string): number | null {
   if (!fromOpen.startsWith(`${PROVIDER_TOOL_RESULTS_OPEN}\n`)) return null;
 
-  // Prefer the last close marker so JSON/XML payloads may legally contain the
-  // literal string `[/TOOL_RESULTS]` without truncating the outer envelope.
+  // Walk candidate close markers from the payload region only. Prefer the first
+  // close that yields a structured payload AND a valid continuation body so a
+  // later `[/TOOL_RESULTS]` inside Original task: cannot steal the outer boundary.
+  // Payload-internal close literals are skipped because they leave a remainder
+  // that is not a blank line + Original task / legacy suffix.
   const closeToken = `\n${PROVIDER_TOOL_RESULTS_CLOSE}\n`;
-  const closeIndex = fromOpen.lastIndexOf(closeToken);
-  if (closeIndex <= PROVIDER_TOOL_RESULTS_OPEN.length) return null;
+  let searchFrom = PROVIDER_TOOL_RESULTS_OPEN.length;
+  while (searchFrom < fromOpen.length) {
+    const closeIndex = fromOpen.indexOf(closeToken, searchFrom);
+    if (closeIndex === -1) return null;
 
-  const payload = fromOpen.slice(PROVIDER_TOOL_RESULTS_OPEN.length + 1, closeIndex);
-  // Generated payloads are JSON arrays/objects (provider loop) or
-  // `<tool_result>...</tool_result>` XML wrappers (legacy sidepanel loop).
-  // Reject unstructured single-token glue such as bare `x`.
-  if (!isStructuredToolResultsPayload(payload)) return null;
+    const payload = fromOpen.slice(PROVIDER_TOOL_RESULTS_OPEN.length + 1, closeIndex);
+    if (!isStructuredToolResultsPayload(payload)) {
+      searchFrom = closeIndex + 1;
+      continue;
+    }
 
-  const afterCloseStart = closeIndex + closeToken.length;
-  const remainder = fromOpen.slice(afterCloseStart);
-  // Generated forms always insert a blank line after the close marker. Compact
-  // glued text such as `[/TOOL_RESULTS]Continue...` must not match.
-  if (!remainder.startsWith('\n') && !remainder.startsWith('\r\n')) return null;
-  const afterClose = remainder.replace(/^\r?\n*/, '');
-  if (!afterClose) return null;
-  const leadingBlankLength = remainder.length - afterClose.length;
+    const afterCloseStart = closeIndex + closeToken.length;
+    const remainder = fromOpen.slice(afterCloseStart);
+    // Generated forms always insert a blank line after the close marker.
+    if (!remainder.startsWith('\n') && !remainder.startsWith('\r\n')) {
+      searchFrom = closeIndex + 1;
+      continue;
+    }
+    const afterClose = remainder.replace(/^\r?\n*/, '');
+    if (!afterClose) {
+      searchFrom = closeIndex + 1;
+      continue;
+    }
+    const leadingBlankLength = remainder.length - afterClose.length;
+    const bodyLength = measureContinuationBodyLength(afterClose);
+    if (bodyLength === null) {
+      searchFrom = closeIndex + 1;
+      continue;
+    }
+    return afterCloseStart + leadingBlankLength + bodyLength;
+  }
+  return null;
+}
 
+/** Length of a valid continuation body starting at afterClose, or null. */
+function measureContinuationBodyLength(afterClose: string): number | null {
   if (
     afterClose === LEGACY_ENGLISH_CONTINUATION
     || afterClose.startsWith(`${LEGACY_ENGLISH_CONTINUATION}\n`)
@@ -160,8 +181,7 @@ function measureInternalToolResultsEnvelope(fromOpen: string): number | null {
     const legacy = afterClose.startsWith(LEGACY_CHINESE_CONTINUATION)
       ? LEGACY_CHINESE_CONTINUATION
       : LEGACY_ENGLISH_CONTINUATION;
-    // Envelope ends at the exact legacy line; trailing chrome is outside.
-    return afterCloseStart + leadingBlankLength + legacy.length;
+    return legacy.length;
   }
 
   if (!afterClose.startsWith('Original task:')) return null;
@@ -177,8 +197,7 @@ function measureInternalToolResultsEnvelope(fromOpen: string): number | null {
     }
   }
   if (suffixIndex === -1) return null;
-  const body = lines.slice(0, suffixIndex + 1).join('\n');
-  return afterCloseStart + leadingBlankLength + body.length;
+  return lines.slice(0, suffixIndex + 1).join('\n').length;
 }
 
 function isStructuredToolResultsPayload(payload: string): boolean {

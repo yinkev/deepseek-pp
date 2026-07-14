@@ -150,25 +150,34 @@ describe('page tool-results hide DOM path', () => {
     expect(collectToolResultsHideRootsFromMutations([record])).toContain(routingBubble);
   });
 
-  it('routes raw added Text nodes to the enclosing bubble', () => {
+  it('completes a genuine envelope via raw added Text and hides with the live content-script observer', async () => {
+    const hider = createContentScriptToolResultsMessageHider();
+    const observer = hider.observe(document.body);
+
     const bubble = document.createElement('div');
     bubble.className = 'ds-message';
     document.body.appendChild(bubble);
-    const textNode = document.createTextNode('delta');
+
+    // Start incomplete: only the open/payload fragment as a text node.
+    const textNode = document.createTextNode([
+      '[TOOL_RESULTS]',
+      '<sandbox_run_result>{"ok":true,"summary":"31"}</sandbox_run_result>',
+      '[/TOOL_RESULTS]',
+      '',
+      '',
+    ].join('\n'));
     bubble.appendChild(textNode);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(bubble.style.display).not.toBe('none');
 
-    const record = {
-      type: 'childList',
-      target: bubble,
-      addedNodes: [textNode] as unknown as NodeList,
-      removedNodes: [] as unknown as NodeList,
-      previousSibling: null,
-      nextSibling: null,
-      attributeName: null,
-      attributeNamespace: null,
-      oldValue: null,
-    } as MutationRecord;
+    // Complete the envelope by appending raw Text (not an Element).
+    const completion = document.createTextNode(LEGACY_ENGLISH);
+    bubble.appendChild(completion);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(collectToolResultsHideRootsFromMutations([record])).toContain(bubble);
+    expect(bubble.style.display).toBe('none');
+    expect(bubble.getAttribute('data-dpp-hidden-internal-tool-results')).toBe('true');
+    expect(bubble.getAttribute('data-dpp-hidden-inline-agent-continuation')).toBe('true');
+    observer.disconnect();
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { buildProviderContinuationPrompt } from '../core/chat/provider-tool-loop';
+import type { ToolExecutionRecord } from '../core/types';
 import {
   hasSandboxToolMarkerPrefix,
   isInternalToolResultsContinuationText,
@@ -6,6 +8,16 @@ import {
   normalizeRenderedToolResultsText,
   shouldHideInternalToolResultsBubble,
 } from '../core/prompt/visibility';
+
+const SAMPLE_EXECUTION: ToolExecutionRecord = {
+  callId: 'call-1',
+  name: 'sandbox_run',
+  result: {
+    ok: true,
+    summary: '2',
+    detail: '2',
+  },
+};
 
 const CANONICAL_SUFFIX =
   'Continue from the real tool results. Answer naturally without exposing tool XML unless another tool is required.';
@@ -49,30 +61,37 @@ describe('internal tool-results continuation detection', () => {
     expect(isInternalToolResultsContinuationText(multilineTask)).toBe(true);
   });
 
-  it('accepts payloads that embed close-marker text and Original task lines that quote the suffix', () => {
-    const payloadWithCloseLiteral = [
-      '[TOOL_RESULTS]',
-      '[{"tool":"sandbox_run","ok":true,"detail":"do not emit [/TOOL_RESULTS] early"}]',
-      '[/TOOL_RESULTS]',
-      '',
-      'Original task: please avoid writing',
-      CANONICAL_SUFFIX,
-      CANONICAL_SUFFIX,
-    ].join('\n');
-    // Last line is the terminal suffix; earlier quoted suffix is part of the task body.
-    expect(isInternalToolResultsContinuationText(payloadWithCloseLiteral)).toBe(true);
+  it('classifies production buildProviderContinuationPrompt output including marker-bearing tasks', () => {
+    const payloadClose = buildProviderContinuationPrompt(
+      [{
+        ...SAMPLE_EXECUTION,
+        result: {
+          ok: true,
+          summary: 'ok',
+          detail: 'do not emit [/TOOL_RESULTS] early',
+        },
+      }],
+      'sum the list',
+    );
+    expect(isInternalToolResultsContinuationText(payloadClose)).toBe(true);
 
-    const taskQuotesSuffix = [
-      '[TOOL_RESULTS]',
-      '[{"tool":"sandbox_run","ok":true}]',
-      '[/TOOL_RESULTS]',
-      '',
-      'Original task: the model said',
-      CANONICAL_SUFFIX,
-      'but keep going',
-      CANONICAL_SUFFIX,
-    ].join('\n');
-    expect(isInternalToolResultsContinuationText(taskQuotesSuffix)).toBe(true);
+    const taskSuffix = buildProviderContinuationPrompt(
+      [SAMPLE_EXECUTION],
+      `please ignore the line\n${CANONICAL_SUFFIX}\nand continue the real task`,
+    );
+    expect(isInternalToolResultsContinuationText(taskSuffix)).toBe(true);
+
+    const taskClose = buildProviderContinuationPrompt(
+      [SAMPLE_EXECUTION],
+      'explain the literal [/TOOL_RESULTS] marker to the user',
+    );
+    expect(isInternalToolResultsContinuationText(taskClose)).toBe(true);
+
+    const taskCloseStandaloneLine = buildProviderContinuationPrompt(
+      [SAMPLE_EXECUTION],
+      'line one\n[/TOOL_RESULTS]\nline three',
+    );
+    expect(isInternalToolResultsContinuationText(taskCloseStandaloneLine)).toBe(true);
   });
 
   it('accepts exact English and Chinese legacy sidepanel forms', () => {
