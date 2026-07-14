@@ -845,6 +845,154 @@ describe('sidepanel interactions', () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview');
   });
 
+  it('fails closed when the durable conversation record is corrupt and does not overwrite storage', async () => {
+    const corrupt = {
+      schemaVersion: 99,
+      logicalConversationId: 'conversation-corrupt',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = corrupt;
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      return null;
+    });
+    stubChrome(sendMessage);
+    const setCallsBefore = (chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    expect(container.textContent).toContain('unsupported_schema_version');
+    const send = container.querySelector('button[aria-label="发送"]') as HTMLButtonElement | null;
+    expect(send?.disabled).toBe(true);
+    const newSession = findNewSessionButton();
+    expect(newSession?.disabled).toBe(true);
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(corrupt);
+    expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
+  });
+
+  it('fails closed on nested-corrupt messages without normalizing or autosaving', async () => {
+    const nestedCorrupt = {
+      schemaVersion: 1,
+      logicalConversationId: 'conversation-nested-corrupt',
+      messages: [{ role: 'system', text: 'x' }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = nestedCorrupt;
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      return null;
+    });
+    stubChrome(sendMessage);
+    const setCallsBefore = (chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    expect(container.textContent).toContain('nested_corrupt_message_role');
+    const send = container.querySelector('button[aria-label="发送"]') as HTMLButtonElement | null;
+    expect(send?.disabled).toBe(true);
+    expect(findNewSessionButton()?.disabled).toBe(true);
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(nestedCorrupt);
+    expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
+  });
+
+  it('fails closed on nested-corrupt attachments without autosaving', async () => {
+    const nestedCorrupt = {
+      schemaVersion: 1,
+      logicalConversationId: 'conversation-bad-attachment',
+      messages: [{
+        role: 'user',
+        text: 'hello',
+        attachments: [{ kind: 'file', name: 'x', mimeType: 'text/plain' }],
+      }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = nestedCorrupt;
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      return null;
+    });
+    stubChrome(sendMessage);
+    const setCallsBefore = (chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    expect(container.textContent).toContain('nested_corrupt_attachment');
+    expect(findNewSessionButton()?.disabled).toBe(true);
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(nestedCorrupt);
+    expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
+  });
+
+  it('keeps New Session disabled while conversation load is still pending', async () => {
+    const corrupt = {
+      schemaVersion: 99,
+      logicalConversationId: 'conversation-pending',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = corrupt;
+    let releaseLoad: (() => void) | undefined;
+    const loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
+    });
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      return null;
+    });
+    stubChrome(sendMessage);
+    (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockImplementation(async (key: string) => {
+      await loadGate;
+      return { [key]: chromeStorage[key] };
+    });
+    const setCallsBefore = (chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await renderElement(React.createElement(ChatPage));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(findNewSessionButton()?.disabled).toBe(true);
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(corrupt);
+    expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
+
+    releaseLoad?.();
+    await flushPromises();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    expect(findNewSessionButton()?.disabled).toBe(true);
+    expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(corrupt);
+    expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
+  });
+
   it('hides DeepSeek sign-in banner while auth is still loading', async () => {
     let resolveAuth: ((value: { available: boolean; provider: string }) => void) | undefined;
     const sendMessage = vi.fn(async (message: { type: string }) => {
@@ -1013,6 +1161,13 @@ function stubChrome(sendMessage: ReturnType<typeof vi.fn>) {
       },
     },
   });
+}
+
+function findNewSessionButton(): HTMLButtonElement | undefined {
+  return container.querySelector('button[aria-label="新建会话"], button[aria-label="New session"]') as HTMLButtonElement | null
+    ?? Array.from(container.querySelectorAll('button')).find((button) => (
+      button.getAttribute('title') === '新建会话' || button.getAttribute('title') === 'New session'
+    )) as HTMLButtonElement | undefined;
 }
 
 async function enterText(placeholder: string, value: string) {

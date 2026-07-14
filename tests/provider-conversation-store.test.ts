@@ -172,6 +172,117 @@ describe('active provider conversation store', () => {
       name: 'image.png',
       mimeType: 'image/png',
     });
-    await expect(loadActiveChatConversation()).resolves.toEqual(saved);
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'ok',
+      conversation: saved,
+    });
+  });
+
+  it('distinguishes absent storage from invalid or future records without rewriting storage', async () => {
+    await expect(loadActiveChatConversation()).resolves.toEqual({ status: 'absent' });
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+
+    storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = {
+      schemaVersion: 99,
+      logicalConversationId: 'conversation-1',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'invalid',
+      reason: 'unsupported_schema_version',
+    });
+    expect(storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual({
+      schemaVersion: 99,
+      logicalConversationId: 'conversation-1',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+
+    storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-1',
+      messages: { not: 'an-array' },
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'invalid',
+      reason: 'nested_corrupt_messages',
+    });
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+
+    const nestedCorrupt = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-1',
+      messages: [{ role: 'system', text: 'not a valid chat role' }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = nestedCorrupt;
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'invalid',
+      reason: 'nested_corrupt_message_role',
+    });
+    expect(storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(nestedCorrupt);
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+
+    const badAttachment = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-1',
+      messages: [{
+        role: 'user',
+        text: 'hello',
+        attachments: [{ kind: 'file', name: 'x', mimeType: 'text/plain' }],
+      }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = badAttachment;
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'invalid',
+      reason: 'nested_corrupt_attachment',
+    });
+    expect(storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(badAttachment);
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+
+    const overMessages = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-over-messages',
+      messages: Array.from({ length: MAX_PERSISTED_CHAT_MESSAGES + 1 }, (_, index) => ({
+        role: 'user' as const,
+        text: `m${index}`,
+      })),
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = overMessages;
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'invalid',
+      reason: 'over_message_budget',
+    });
+    expect(storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(overMessages);
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+
+    const overCharacters = {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId: 'conversation-over-characters',
+      messages: [{
+        role: 'user' as const,
+        text: 'x'.repeat(MAX_PERSISTED_CHAT_CHARACTERS + 1),
+      }],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = overCharacters;
+    await expect(loadActiveChatConversation()).resolves.toEqual({
+      status: 'invalid',
+      reason: 'over_character_budget',
+    });
+    expect(storage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(overCharacters);
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
   });
 });

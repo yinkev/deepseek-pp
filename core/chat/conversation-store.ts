@@ -35,12 +35,28 @@ export interface ActiveChatConversationInput {
   updatedAt?: number;
 }
 
+/** Distinguishes missing storage from a present but unusable record. */
+export type LoadActiveChatConversationResult =
+  | { status: 'absent' }
+  | { status: 'ok'; conversation: PersistedChatConversation }
+  | { status: 'invalid'; reason: string };
+
 let writeQueue: Promise<void> = Promise.resolve();
 
-export async function loadActiveChatConversation(): Promise<PersistedChatConversation | null> {
+export async function loadActiveChatConversation(): Promise<LoadActiveChatConversationResult> {
   await writeQueue;
   const data = await chrome.storage.local.get(ACTIVE_CHAT_CONVERSATION_STORAGE_KEY) as Record<string, unknown>;
-  return normalizeActiveChatConversation(data[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]);
+  if (!Object.prototype.hasOwnProperty.call(data, ACTIVE_CHAT_CONVERSATION_STORAGE_KEY)
+    || data[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] === undefined) {
+    return { status: 'absent' };
+  }
+
+  const raw = data[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY];
+  const parsed = parseActiveChatConversationRecord(raw);
+  if (!parsed.ok) {
+    return { status: 'invalid', reason: parsed.reason };
+  }
+  return { status: 'ok', conversation: parsed.conversation };
 }
 
 export function saveActiveChatConversation(
@@ -68,6 +84,11 @@ export function saveActiveChatConversation(
   return write;
 }
 
+/**
+ * Lossy normalizer for save paths and unit tests: filters invalid nested
+ * messages/attachments and applies retention budgets. Prefer
+ * parseActiveChatConversationRecord for load-time fail-closed decoding.
+ */
 export function normalizeActiveChatConversation(value: unknown): PersistedChatConversation | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -85,6 +106,169 @@ export function normalizeActiveChatConversation(value: unknown): PersistedChatCo
     createdAt,
     updatedAt,
   };
+}
+
+/**
+ * Strict decoder for durable records. Present nested corruption fails closed
+ * without filtering, truncation, or rewrite.
+ */
+export function parseActiveChatConversationRecord(
+  value: unknown,
+): { ok: true; conversation: PersistedChatConversation } | { ok: false; reason: string } {
+  if (value === undefined || value === null) {
+    return { ok: false, reason: 'missing_record' };
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, reason: 'malformed_record' };
+  }
+
+  const record = value as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(record, 'schemaVersion')) {
+    return { ok: false, reason: 'missing_schema_version' };
+  }
+  if (record.schemaVersion !== ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION) {
+    return { ok: false, reason: 'unsupported_schema_version' };
+  }
+
+  const logicalConversationId = trimmedString(record.logicalConversationId);
+  const createdAt = finiteTimestamp(record.createdAt);
+  const updatedAt = finiteTimestamp(record.updatedAt);
+  if (!logicalConversationId || createdAt === null || updatedAt === null) {
+    return { ok: false, reason: 'invalid_identity_or_timestamps' };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(record, 'messages')) {
+    return { ok: false, reason: 'missing_messages' };
+  }
+  const decodedMessages = decodeMessagesStrict(record.messages);
+  if (!decodedMessages.ok) {
+    return decodedMessages;
+  }
+  if (decodedMessages.messages.length > MAX_PERSISTED_CHAT_MESSAGES) {
+    return { ok: false, reason: 'over_message_budget' };
+  }
+  let totalCharacters = 0;
+  for (const message of decodedMessages.messages) {
+    totalCharacters += message.text.length + (message.reasoningText?.length ?? 0);
+    if (totalCharacters > MAX_PERSISTED_CHAT_CHARACTERS) {
+      return { ok: false, reason: 'over_character_budget' };
+    }
+  }
+
+  return {
+    ok: true,
+    conversation: {
+      schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
+      logicalConversationId,
+      messages: decodedMessages.messages,
+      createdAt,
+      updatedAt,
+    },
+  };
+}
+
+function decodeMessagesStrict(
+  value: unknown,
+): { ok: true; messages: PersistedChatMessage[] } | { ok: false; reason: string } {
+  if (!Array.isArray(value)) {
+    return { ok: false, reason: 'nested_corrupt_messages' };
+  }
+
+  const messages: PersistedChatMessage[] = [];
+  for (const item of value) {
+    const decoded = decodeMessageStrict(item);
+    if (!decoded.ok) return decoded;
+    messages.push(decoded.message);
+  }
+  return { ok: true, messages };
+}
+
+function decodeMessageStrict(
+  value: unknown,
+): { ok: true; message: PersistedChatMessage } | { ok: false; reason: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, reason: 'nested_corrupt_message' };
+  }
+
+  const message = value as Record<string, unknown>;
+  if (message.role !== 'user' && message.role !== 'assistant') {
+    return { ok: false, reason: 'nested_corrupt_message_role' };
+  }
+  if (typeof message.text !== 'string') {
+    return { ok: false, reason: 'nested_corrupt_message_text' };
+  }
+
+  let reasoningText: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(message, 'reasoningText')) {
+    if (typeof message.reasoningText !== 'string') {
+      return { ok: false, reason: 'nested_corrupt_message_reasoning' };
+    }
+    if (message.reasoningText.length > 0) reasoningText = message.reasoningText;
+  }
+
+  let providerId: PersistedChatMessage['providerId'];
+  if (Object.prototype.hasOwnProperty.call(message, 'providerId')) {
+    if (message.providerId !== 'deepseek-web' && message.providerId !== 'qwen-web') {
+      return { ok: false, reason: 'nested_corrupt_message_provider' };
+    }
+    providerId = message.providerId;
+  }
+
+  let modelId: string | undefined;
+  if (Object.prototype.hasOwnProperty.call(message, 'modelId')) {
+    if (typeof message.modelId !== 'string' || message.modelId.trim().length === 0) {
+      return { ok: false, reason: 'nested_corrupt_message_model' };
+    }
+    modelId = message.modelId.trim();
+  }
+
+  let attachments: PersistedChatAttachment[] | undefined;
+  if (Object.prototype.hasOwnProperty.call(message, 'attachments')) {
+    const decodedAttachments = decodeAttachmentsStrict(message.attachments);
+    if (!decodedAttachments.ok) return decodedAttachments;
+    if (decodedAttachments.attachments.length > 0) {
+      attachments = decodedAttachments.attachments;
+    }
+  }
+
+  if (!message.text && !reasoningText && (!attachments || attachments.length === 0)) {
+    return { ok: false, reason: 'nested_corrupt_message_empty' };
+  }
+
+  return {
+    ok: true,
+    message: {
+      role: message.role,
+      text: message.text,
+      ...(reasoningText ? { reasoningText } : {}),
+      ...(providerId ? { providerId } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(attachments ? { attachments } : {}),
+    },
+  };
+}
+
+function decodeAttachmentsStrict(
+  value: unknown,
+): { ok: true; attachments: PersistedChatAttachment[] } | { ok: false; reason: string } {
+  if (!Array.isArray(value)) {
+    return { ok: false, reason: 'nested_corrupt_attachments' };
+  }
+
+  const attachments: PersistedChatAttachment[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return { ok: false, reason: 'nested_corrupt_attachment' };
+    }
+    const attachment = item as Record<string, unknown>;
+    const name = trimmedString(attachment.name);
+    const mimeType = trimmedString(attachment.mimeType);
+    if (attachment.kind !== 'image' || !name || !mimeType) {
+      return { ok: false, reason: 'nested_corrupt_attachment' };
+    }
+    attachments.push({ kind: 'image', name, mimeType });
+  }
+  return { ok: true, attachments };
 }
 
 function normalizeMessages(value: unknown): PersistedChatMessage[] {

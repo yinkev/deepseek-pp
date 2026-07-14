@@ -123,6 +123,7 @@ export default function ChatPage() {
   const [msgSeq, setMsgSeq] = useState(0);
   const [logicalConversationId, setLogicalConversationId] = useState(createLogicalConversationId);
   const [conversationHydrated, setConversationHydrated] = useState(false);
+  const [conversationLoadFailed, setConversationLoadFailed] = useState(false);
   const { confirm, node: confirmNode } = useConfirm();
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -172,6 +173,7 @@ export default function ChatPage() {
     : [];
   const canSendMessage = selectedProviderAvailable
     && conversationHydrated
+    && !conversationLoadFailed
     && !isStreaming
     && !hasUploadingImageAttachment
     && !hasFailedImageAttachment
@@ -237,22 +239,36 @@ export default function ChatPage() {
   useEffect(() => {
     let cancelled = false;
     loadActiveChatConversation()
-      .then((conversation) => {
+      .then((result) => {
         if (cancelled) return;
-        if (conversation) {
-          messagesRef.current = conversation.messages;
-          setMessages(conversation.messages);
-          setLogicalConversationId(conversation.logicalConversationId);
-          conversationCreatedAtRef.current = conversation.createdAt;
+        if (result.status === 'ok') {
+          messagesRef.current = result.conversation.messages;
+          setMessages(result.conversation.messages);
+          setLogicalConversationId(result.conversation.logicalConversationId);
+          conversationCreatedAtRef.current = result.conversation.createdAt;
+          setConversationLoadFailed(false);
+          setConversationHydrated(true);
+          return;
         }
-        setConversationHydrated(true);
+        if (result.status === 'absent') {
+          setConversationLoadFailed(false);
+          setConversationHydrated(true);
+          return;
+        }
+        // Present but invalid/future: fail closed. Do not hydrate, autosave, or overwrite.
+        setConversationLoadFailed(true);
+        setConversationHydrated(false);
+        setError(translateRef.current('sidepanel.chatPage.conversationLoadFailed', {
+          error: result.reason,
+        }));
       })
       .catch((err) => {
         if (cancelled) return;
+        setConversationLoadFailed(true);
+        setConversationHydrated(false);
         setError(translateRef.current('sidepanel.chatPage.conversationLoadFailed', {
           error: err instanceof Error ? err.message : String(err),
         }));
-        setConversationHydrated(true);
       });
     return () => {
       cancelled = true;
@@ -260,7 +276,7 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (!conversationHydrated) return;
+    if (!conversationHydrated || conversationLoadFailed) return;
     const timeout = window.setTimeout(() => {
       void saveActiveChatConversation({
         logicalConversationId,
@@ -273,7 +289,7 @@ export default function ChatPage() {
       });
     }, 200);
     return () => window.clearTimeout(timeout);
-  }, [conversationHydrated, logicalConversationId, messages]);
+  }, [conversationHydrated, conversationLoadFailed, logicalConversationId, messages]);
 
   useEffect(() => {
     imageAttachmentsRef.current = imageAttachments;
@@ -493,6 +509,8 @@ export default function ChatPage() {
   };
 
   const newSession = async () => {
+    // Block until load settles; also blocks fail-closed invalid state (hydrated stays false).
+    if (!conversationHydrated || conversationLoadFailed) return;
     // Confirm before discarding an in-progress conversation.
     if (messages.length > 0) {
       const ok = await confirm({
@@ -788,6 +806,7 @@ export default function ChatPage() {
             <button
               type="button"
               onClick={newSession}
+              disabled={!conversationHydrated || conversationLoadFailed}
               className="ds-chat-icon-button"
               title={t('sidepanel.chatPage.newSessionTitle')}
               aria-label={t('sidepanel.chatPage.newSessionTitle')}

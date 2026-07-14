@@ -22,7 +22,17 @@ This ledger verifies the durable active-conversation slice that follows the comp
 
 ## Storage contract
 
-The workspace owns one record in `chrome.storage.local`:
+Fail-closed load rule: a **missing** key opens a fresh conversation; a **present** invalid/future/corrupt record must reject visibly without overwrite. Valid schema v1 restores normally.
+
+Fork-local keys related to this slice (also registered in persistence compatibility docs):
+
+| Key | Role |
+|---|---|
+| `deepseek_pp_active_chat_conversation` | Active logical transcript (schema v1) |
+| `activeChatModelRef` | Selected provider/model ref for sidepanel chat |
+| `qwenCachedAuth` | Cached Qwen browser auth material (sensitive) |
+
+The workspace owns one active transcript record in `chrome.storage.local`:
 
 ```text
 key: deepseek_pp_active_chat_conversation
