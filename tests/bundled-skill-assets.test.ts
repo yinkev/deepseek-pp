@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBundledSkillAssetStore } from '../core/skill/bundled-assets';
 
-const manifest = JSON.stringify({
+const catalog = JSON.stringify({
   schemaVersion: 1,
   groups: {
     officecli: ['skills/officecli/SKILL.md'],
@@ -18,9 +18,9 @@ function response(body: string, status = 200) {
 }
 
 describe('bundled Skill asset boundary', () => {
-  it('validates the manifest and caches each requested asset exactly once', async () => {
+  it('validates the catalog and caches each requested asset exactly once', async () => {
     const fetch = vi.fn(async (url: string) => {
-      if (url.endsWith('/manifest.json')) return response(manifest);
+      if (url.endsWith('/catalog.json')) return response(catalog);
       if (url.endsWith('/deep-discuss/SKILL.md')) return response('Deep Discuss');
       return response('', 404);
     });
@@ -39,7 +39,7 @@ describe('bundled Skill asset boundary', () => {
   });
 
   it('rejects unregistered and traversal paths before resource access', async () => {
-    const fetch = vi.fn(async () => response(manifest));
+    const fetch = vi.fn(async () => response(catalog));
     const store = createBundledSkillAssetStore({
       getUrl: (path) => `chrome-extension://test/${path}`,
       fetch,
@@ -52,11 +52,11 @@ describe('bundled Skill asset boundary', () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it('fails visibly on corrupt manifests and retries after transient fetch failure', async () => {
+  it('fails visibly on corrupt catalogs and retries after transient fetch failure', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(response('', 503))
       .mockResolvedValueOnce(response('{"schemaVersion":2,"groups":{}}'))
-      .mockResolvedValueOnce(response(manifest));
+      .mockResolvedValueOnce(response(catalog));
     const store = createBundledSkillAssetStore({
       getUrl: (path) => `chrome-extension://test/${path}`,
       fetch,

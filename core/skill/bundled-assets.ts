@@ -1,9 +1,9 @@
 import type { BundledSkillGroup } from './bundled-loader';
 
 const BUNDLED_SKILL_ASSET_ROOT = 'bundled-skills';
-const BUNDLED_SKILL_MANIFEST_PATH = `${BUNDLED_SKILL_ASSET_ROOT}/manifest.json`;
+const BUNDLED_SKILL_CATALOG_PATH = `${BUNDLED_SKILL_ASSET_ROOT}/catalog.json`;
 
-interface BundledSkillAssetManifest {
+interface BundledSkillAssetCatalog {
   schemaVersion: 1;
   groups: Record<BundledSkillGroup, readonly string[]>;
 }
@@ -22,7 +22,7 @@ export function createBundledSkillAssetStore(
   dependencies: BundledSkillAssetStoreDependencies,
 ): BundledSkillAssetStore {
   const textPromises = new Map<string, Promise<string>>();
-  let manifestPromise: Promise<BundledSkillAssetManifest> | null = null;
+  let catalogPromise: Promise<BundledSkillAssetCatalog> | null = null;
 
   const readText = (path: string): Promise<string> => {
     const existing = textPromises.get(path);
@@ -40,15 +40,15 @@ export function createBundledSkillAssetStore(
     return promise;
   };
 
-  const getManifest = (): Promise<BundledSkillAssetManifest> => {
-    if (manifestPromise) return manifestPromise;
-    const promise = readText(BUNDLED_SKILL_MANIFEST_PATH)
-      .then((raw) => decodeBundledSkillAssetManifest(JSON.parse(raw)));
-    manifestPromise = promise;
+  const getCatalog = (): Promise<BundledSkillAssetCatalog> => {
+    if (catalogPromise) return catalogPromise;
+    const promise = readText(BUNDLED_SKILL_CATALOG_PATH)
+      .then((raw) => decodeBundledSkillAssetCatalog(JSON.parse(raw)));
+    catalogPromise = promise;
     void promise.catch(() => {
-      if (manifestPromise === promise) {
-        manifestPromise = null;
-        textPromises.delete(BUNDLED_SKILL_MANIFEST_PATH);
+      if (catalogPromise === promise) {
+        catalogPromise = null;
+        textPromises.delete(BUNDLED_SKILL_CATALOG_PATH);
       }
     });
     return promise;
@@ -57,24 +57,24 @@ export function createBundledSkillAssetStore(
   const store: BundledSkillAssetStore = {
     async read(group: BundledSkillGroup, relativePath: string) {
       assertSafeAssetPath(relativePath);
-      const manifest = await getManifest();
-      if (!manifest.groups[group].includes(relativePath)) {
+      const catalog = await getCatalog();
+      if (!catalog.groups[group].includes(relativePath)) {
         throw new Error(`Bundled Skill asset is not registered: ${group}/${relativePath}`);
       }
       return readText(`${BUNDLED_SKILL_ASSET_ROOT}/${group}/${relativePath}`);
     },
     async list(group: BundledSkillGroup, prefix = '') {
       assertSafeAssetPrefix(prefix);
-      const manifest = await getManifest();
-      return manifest.groups[group].filter((path) => path.startsWith(prefix));
+      const catalog = await getCatalog();
+      return catalog.groups[group].filter((path) => path.startsWith(prefix));
     },
   };
   return Object.freeze(store);
 }
 
-function decodeBundledSkillAssetManifest(value: unknown): BundledSkillAssetManifest {
+function decodeBundledSkillAssetCatalog(value: unknown): BundledSkillAssetCatalog {
   if (!isPlainObject(value) || value.schemaVersion !== 1 || !isPlainObject(value.groups)) {
-    throw new Error('Bundled Skill asset manifest must use schemaVersion 1');
+    throw new Error('Bundled Skill asset catalog must use schemaVersion 1');
   }
   const officecli = decodeAssetPaths(value.groups.officecli, 'officecli');
   const specDrivenDevelop = decodeAssetPaths(
@@ -87,7 +87,7 @@ function decodeBundledSkillAssetManifest(value: unknown): BundledSkillAssetManif
     || !groupNames.includes('officecli')
     || !groupNames.includes('spec-driven-develop')
   ) {
-    throw new Error('Bundled Skill asset manifest contains unsupported groups');
+    throw new Error('Bundled Skill asset catalog contains unsupported groups');
   }
   return Object.freeze({
     schemaVersion: 1,
@@ -100,7 +100,7 @@ function decodeBundledSkillAssetManifest(value: unknown): BundledSkillAssetManif
 
 function decodeAssetPaths(value: unknown, group: BundledSkillGroup): string[] {
   if (!Array.isArray(value)) {
-    throw new Error(`Bundled Skill asset manifest group must be an array: ${group}`);
+    throw new Error(`Bundled Skill asset catalog group must be an array: ${group}`);
   }
   const paths = value.map((path, index) => {
     if (typeof path !== 'string') {
@@ -110,7 +110,7 @@ function decodeAssetPaths(value: unknown, group: BundledSkillGroup): string[] {
     return path;
   });
   if (new Set(paths).size !== paths.length) {
-    throw new Error(`Bundled Skill asset manifest contains duplicate paths: ${group}`);
+    throw new Error(`Bundled Skill asset catalog contains duplicate paths: ${group}`);
   }
   return paths;
 }

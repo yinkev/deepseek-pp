@@ -45,7 +45,7 @@ describe('bundled Skill initial path', () => {
       'canvas-design',
     ]);
     expect(fetchAsset.mock.calls.map(([url]) => String(url))).toEqual([
-      getBundledSkillAssetUrl('bundled-skills/manifest.json'),
+      getBundledSkillAssetUrl('bundled-skills/catalog.json'),
       getBundledSkillAssetUrl(
         'bundled-skills/spec-driven-develop/deep-discuss/SKILL.md',
       ),

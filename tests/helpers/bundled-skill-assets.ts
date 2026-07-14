@@ -26,7 +26,7 @@ export async function fetchBundledSkillAsset(input: string | URL | Request): Pro
     return new Response('', { status: 404 });
   }
   const path = url.pathname.slice(1);
-  if (path === 'bundled-skills/manifest.json') {
+  if (path === 'bundled-skills/catalog.json') {
     return new Response(JSON.stringify({ schemaVersion: 1, groups }), { status: 200 });
   }
 

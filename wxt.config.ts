@@ -190,11 +190,11 @@ function copyBundledSkillAssets(
     }
   }
 
-  const manifestFileName = 'bundled-skills/manifest.json';
-  const manifestPath = resolve(outputDir, manifestFileName);
-  mkdirSync(dirname(manifestPath), { recursive: true });
-  writeFileSync(manifestPath, `${JSON.stringify({ schemaVersion: 1, groups }, null, 2)}\n`);
-  publicAssets.push({ type: 'asset', fileName: manifestFileName });
+  const catalogFileName = 'bundled-skills/catalog.json';
+  const catalogPath = resolve(outputDir, catalogFileName);
+  mkdirSync(dirname(catalogPath), { recursive: true });
+  writeFileSync(catalogPath, `${JSON.stringify({ schemaVersion: 1, groups }, null, 2)}\n`);
+  publicAssets.push({ type: 'asset', fileName: catalogFileName });
 }
 
 function collectAssetPaths(

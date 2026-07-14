@@ -42,31 +42,31 @@ const failures = [];
 
 for (const target of targets) {
   const outputDir = resolve(rootDir, 'dist', target);
-  const manifestPath = resolve(outputDir, 'bundled-skills/manifest.json');
+  const catalogPath = resolve(outputDir, 'bundled-skills/catalog.json');
   const backgroundPath = resolve(outputDir, 'background.js');
-  if (!existsSync(manifestPath) || !existsSync(backgroundPath)) {
+  if (!existsSync(catalogPath) || !existsSync(backgroundPath)) {
     failures.push(`${target}: build output is missing; run its browser build first`);
     continue;
   }
 
-  let manifest;
+  let catalog;
   try {
-    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    catalog = JSON.parse(readFileSync(catalogPath, 'utf8'));
   } catch (error) {
-    failures.push(`${target}: cannot parse bundled Skill manifest: ${error.message}`);
+    failures.push(`${target}: cannot parse bundled Skill catalog: ${error.message}`);
     continue;
   }
-  if (manifest.schemaVersion !== 1 || !manifest.groups) {
-    failures.push(`${target}: bundled Skill manifest must use schemaVersion 1`);
+  if (catalog.schemaVersion !== 1 || !catalog.groups) {
+    failures.push(`${target}: bundled Skill catalog must use schemaVersion 1`);
     continue;
   }
 
   let assetCount = 0;
   let assetRawBytes = 0;
   for (const [group, expectedPaths] of Object.entries(expectedGroups)) {
-    const actualPaths = manifest.groups[group];
+    const actualPaths = catalog.groups[group];
     if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
-      failures.push(`${target}: ${group} asset manifest does not match source inventory`);
+      failures.push(`${target}: ${group} asset catalog does not match source inventory`);
       continue;
     }
     for (const path of expectedPaths) {

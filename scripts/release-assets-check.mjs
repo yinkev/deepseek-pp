@@ -37,6 +37,7 @@ for (const zip of extensionZips) {
   assertFile(zip.path, `${zip.browser} zip`);
   if (!existsSync(zip.path)) continue;
 
+  assertSingleExtensionManifest(zip.browser, zip.path);
   const manifest = readZipJson(zip.path, 'manifest.json');
   if (!manifest) continue;
   if (manifest.version !== version) {
@@ -142,6 +143,17 @@ function assertZipDoesNotContain(zipFile, entry, message) {
   if (listing.some((item) => item === entry || item.startsWith(entry))) failures.push(message);
 }
 
+function assertSingleExtensionManifest(browser, zipFile) {
+  const manifestEntries = readZipListing(zipFile)
+    .filter((entry) => entry.split('/').at(-1) === 'manifest.json')
+    .sort(comparePaths);
+  assertExactEntries(
+    manifestEntries,
+    ['manifest.json'],
+    `${browser} zip Chrome Web Store manifest files`,
+  );
+}
+
 function inspectPyodidePackage(browser, zipFile) {
   const buildDir = resolve(distDir, `${browser}-mv3/pyodide`);
   if (!existsSync(buildDir)) {
@@ -243,28 +255,28 @@ function inspectPyodidePackage(browser, zipFile) {
 
 function inspectBundledSkillPackage(browser, zipFile) {
   const buildDir = resolve(distDir, `${browser}-mv3/bundled-skills`);
-  const buildManifestPath = resolve(buildDir, 'manifest.json');
-  if (!existsSync(buildManifestPath)) {
-    failures.push(`${browser} build bundled Skill manifest is missing: ${buildManifestPath}`);
+  const buildCatalogPath = resolve(buildDir, 'catalog.json');
+  if (!existsSync(buildCatalogPath)) {
+    failures.push(`${browser} build bundled Skill catalog is missing: ${buildCatalogPath}`);
     return;
   }
 
   const expectedPayloadEntries = Object.entries(bundledSkillGroups)
     .flatMap(([group, paths]) => paths.map((path) => `${group}/${path}`))
     .sort(comparePaths);
-  const expectedBuildEntries = ['manifest.json', ...expectedPayloadEntries].sort(comparePaths);
+  const expectedBuildEntries = ['catalog.json', ...expectedPayloadEntries].sort(comparePaths);
   assertExactEntries(collectFiles(buildDir), expectedBuildEntries, `${browser} build bundled Skill assets`);
 
-  const buildManifest = JSON.parse(readFileSync(buildManifestPath, 'utf8'));
-  assertBundledSkillManifest(buildManifest, `${browser} build bundled Skill manifest`);
+  const buildCatalog = JSON.parse(readFileSync(buildCatalogPath, 'utf8'));
+  assertBundledSkillCatalog(buildCatalog, `${browser} build bundled Skill catalog`);
 
   const zipEntries = readZipListing(zipFile)
     .filter((entry) => entry.startsWith('bundled-skills/') && !entry.endsWith('/'))
     .map((entry) => entry.slice('bundled-skills/'.length))
     .sort(comparePaths);
   assertExactEntries(zipEntries, expectedBuildEntries, `${browser} zip bundled Skill assets`);
-  const zipManifest = readZipJson(zipFile, 'bundled-skills/manifest.json');
-  if (zipManifest) assertBundledSkillManifest(zipManifest, `${browser} zip bundled Skill manifest`);
+  const zipCatalog = readZipJson(zipFile, 'bundled-skills/catalog.json');
+  if (zipCatalog) assertBundledSkillCatalog(zipCatalog, `${browser} zip bundled Skill catalog`);
 
   let rawBytes = 0;
   for (const [group, paths] of Object.entries(bundledSkillGroups)) {
@@ -292,15 +304,15 @@ function inspectBundledSkillPackage(browser, zipFile) {
   console.log(`[bundled-skills:${browser}] count=${expectedPayloadEntries.length} rawBytes=${rawBytes}`);
 }
 
-function assertBundledSkillManifest(manifest, label) {
-  if (manifest?.schemaVersion !== 1 || !manifest.groups) {
+function assertBundledSkillCatalog(catalog, label) {
+  if (catalog?.schemaVersion !== 1 || !catalog.groups) {
     failures.push(`${label} must use schemaVersion 1`);
     return;
   }
   for (const [group, expectedPaths] of Object.entries(bundledSkillGroups)) {
-    assertExactEntries(manifest.groups[group] ?? [], expectedPaths, `${label} ${group}`);
+    assertExactEntries(catalog.groups[group] ?? [], expectedPaths, `${label} ${group}`);
   }
-  const unexpectedGroups = Object.keys(manifest.groups)
+  const unexpectedGroups = Object.keys(catalog.groups)
     .filter((group) => !(group in bundledSkillGroups));
   if (unexpectedGroups.length > 0) {
     failures.push(`${label} has unexpected groups: ${unexpectedGroups.join(', ')}`);
