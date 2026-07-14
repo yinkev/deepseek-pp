@@ -1,6 +1,32 @@
 # Handoff for next agent — DeepSeek++ / ENI / providers / bridge
 
-## Current addendum — providers and durable conversation state, 2026-07-12
+## Current addendum — Wave 1 sandbox / tool-results / fail-closed, 2026-07-13
+
+**Current repo:** `/Users/kyin/Projects/Deepseek-pp` only  
+**Current implementation branch:** `codex/provider-conversation-persistence`  
+**HEAD at closeout doc freeze:** `ad7c7d91` (ahead of `fork/codex/provider-conversation-persistence` by 9; **not pushed**)  
+**Chrome unpacked path:** `/Users/kyin/Projects/Deepseek-pp/dist/chrome-mv3`  
+**Push/deploy:** neither performed (user: commit only)
+
+**Read first for this wave:**
+
+1. [sessions/2026-07-13-wave1-sandbox-tool-results-closeout.md](./sessions/2026-07-13-wave1-sandbox-tool-results-closeout.md) — meticulous day ledger: commits, SOL #1–#12, live smoke, do-not list.
+2. [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) — durable transcript schema (fail-closed load now required).
+3. [roadmap/DEEPSEEK-PP-FINAL-VISION.md](./roadmap/DEEPSEEK-PP-FINAL-VISION.md) — product north star.
+
+### Wave 1 truth (2026-07-13)
+
+- Sidepanel **legacy** DeepSeek loops execute `sandbox_run` via shared sidepanel tool catalog + `createSidepanelLegacyToolStream`; streamed tool XML is suppressed; `extractCalls(fullText)` covers fallback-only XML.
+- Page content hides internal sandbox / `[TOOL_RESULTS]` continuations with **JSON/XML-aware** envelope parsing; normalizer is **CRLF→LF only** (no marker rewrite). Split user-authored protocol examples stay visible.
+- Active conversation load is **fail-closed**: storage status `absent` → fresh chat; `invalid` (present corrupt/future) → no hydrate, no autosave overwrite.
+- SOL reverify ladder: FAIL #1–#11; **#12 PASS_WITH_WARNINGS** at `35f6ad33`; test matrix pin `ad7c7d91`.
+- Live user smoke (sidepanel + page) passed with unfakeable JSON `{"t":1750807910634,"r":887,"sum":31}`.
+- CLIProxy missing `deepseek_web_route_logger.js` stderr is historical noise; current jshandler uses existing `omlx_prompt_inspector.js`. **Do not delete** config/plugins for that line.
+- Deferred: Qwen response-id/cursor (needs fixtures); multi-chat history/export; fork push until user asks.
+
+---
+
+## Prior addendum — providers and durable conversation state, 2026-07-12
 
 **Current repo:** `/Users/kyin/Projects/deepseek-pp` only
 **Current implementation branch:** `codex/provider-conversation-persistence`
@@ -16,7 +42,8 @@ Read these documents before changing the provider system:
 3. [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) — implemented structure and mechanisms.
 4. [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) — exact automated and live acceptance evidence.
 5. [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) — durable transcript schema, lifecycle, and verification.
-6. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — Horizon B detail for delivered and deferred conversation continuity work.
+6. [sessions/2026-07-13-wave1-sandbox-tool-results-closeout.md](./sessions/2026-07-13-wave1-sandbox-tool-results-closeout.md) — Wave 1 sandbox/hide/fail-closed closeout (2026-07-13).
+7. [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) — Horizon B detail for delivered and deferred conversation continuity work.
 
 Execution style is outcome-driven: plan TDD and implementation slices internally, work through them autonomously, and report at horizon acceptance gates. Do not return a list of routine micro-decisions or ask the user what subtask should come next.
 

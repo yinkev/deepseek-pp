@@ -14,6 +14,7 @@
 | [QWEN-PROVIDER-ARCHITECTURE.md](./QWEN-PROVIDER-ARCHITECTURE.md) | Implemented architecture, ownership, and mechanisms |
 | [QWEN-PROVIDER-VERIFICATION.md](./QWEN-PROVIDER-VERIFICATION.md) | Automated/live evidence ledger and closeout |
 | [PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md](./PROVIDER-CONVERSATION-PERSISTENCE-VERIFICATION.md) | Durable active-conversation schema, lifecycle, and verification |
+| [sessions/2026-07-13-wave1-sandbox-tool-results-closeout.md](./sessions/2026-07-13-wave1-sandbox-tool-results-closeout.md) | **2026-07-13 closeout:** legacy sandbox exec, page tool-results hide, fail-closed load, SOL #1–#12 ladder, live dual-surface smoke |
 | [roadmap/provider-workspace-continuity.md](./roadmap/provider-workspace-continuity.md) | Horizon B detail: delivered persistence foundation and deferred continuity controls |
 | [bridge/PLATFORM-WORK-LOG.md](./bridge/PLATFORM-WORK-LOG.md) | **What we built** (chronological inventory) |
 | [bridge/ARCHITECTURE.md](./bridge/ARCHITECTURE.md) | How host ↔ extension ↔ DeepSeek connect |
