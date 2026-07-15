@@ -1,5 +1,6 @@
 export const MCP_PROTOCOL_CONTRACT = {
   requestVersion: '2025-06-18',
+  supportedVersions: ['2024-11-05', '2025-03-26', '2025-06-18'],
   nativeEnvelopeProtocol: 'deepseek-pp-mcp-native',
   nativeEnvelopeVersion: 1,
   transportKinds: ['http', 'sse', 'streamable_http', 'stdio_bridge', 'native_messaging'],
@@ -11,6 +12,18 @@ export const MCP_PROTOCOL_NEGOTIATION_FIXTURES = [
     name: 'known protocol version',
     serverVersion: MCP_PROTOCOL_CONTRACT.requestVersion,
     currentOutput: MCP_PROTOCOL_CONTRACT.requestVersion,
+    classification: 'legal',
+  },
+  {
+    name: 'supported 2025-03-26 protocol version',
+    serverVersion: '2025-03-26',
+    currentOutput: '2025-03-26',
+    classification: 'legal',
+  },
+  {
+    name: 'supported 2024-11-05 protocol version',
+    serverVersion: '2024-11-05',
+    currentOutput: '2024-11-05',
     classification: 'legal',
   },
   {

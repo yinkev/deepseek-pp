@@ -3,6 +3,7 @@ import {
   MCP_NATIVE_ENVELOPE_PROTOCOL,
   MCP_NATIVE_ENVELOPE_VERSION,
   MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
   callMcpTool,
   createMcpNativeMessagingTransport,
   createMcpRequest,
@@ -36,6 +37,7 @@ afterEach(() => {
 describe('MCP and Native external contract', () => {
   it('freezes the request protocol, five transports, and Native envelope identity', () => {
     expect(MCP_PROTOCOL_VERSION).toBe(MCP_PROTOCOL_CONTRACT.requestVersion);
+    expect([...MCP_SUPPORTED_PROTOCOL_VERSIONS]).toEqual(MCP_PROTOCOL_CONTRACT.supportedVersions);
     expect(MCP_NATIVE_ENVELOPE_PROTOCOL).toBe(MCP_PROTOCOL_CONTRACT.nativeEnvelopeProtocol);
     expect(MCP_NATIVE_ENVELOPE_VERSION).toBe(MCP_PROTOCOL_CONTRACT.nativeEnvelopeVersion);
     expect(MCP_PROTOCOL_CONTRACT.transportKinds).toEqual([

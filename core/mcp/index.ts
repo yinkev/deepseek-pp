@@ -1,5 +1,6 @@
 export {
   MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants';
 
 export {

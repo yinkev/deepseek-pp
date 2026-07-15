@@ -1,14 +1,17 @@
 import type { ToolExecutionRecord } from '../types';
-import { INCOMPLETE_TOOL_CALL_ERROR_CODE } from '../tool/execution-error';
 
 export { INCOMPLETE_TOOL_CALL_ERROR_CODE } from '../tool/execution-error';
 
+/**
+ * An incomplete streamed call is a recovery-only execution record. It must be
+ * included so the inline agent can see the failure and re-emit a closed call;
+ * executeToolCall exits on call.parseError before any provider is reached.
+ */
 export function selectContinuableToolExecutions(
   executions: readonly ToolExecutionRecord[],
 ): ToolExecutionRecord[] {
   return executions.filter((execution) =>
     !execution.pending &&
-    execution.result.error?.code !== INCOMPLETE_TOOL_CALL_ERROR_CODE &&
     (
       execution.provider?.kind === 'mcp' ||
       execution.provider?.id === 'web' ||

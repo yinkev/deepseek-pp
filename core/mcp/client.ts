@@ -22,7 +22,10 @@ import type {
   McpToolDefinition,
 } from './types';
 import { getExtensionVersion } from '../version';
-import { MCP_PROTOCOL_VERSION } from './constants';
+import {
+  MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
+} from './constants';
 import { createMcpDescriptorId, createMcpInvocationName } from './descriptor-identity';
 
 const CLIENT_NAME = 'DeepSeek++';
@@ -90,7 +93,12 @@ export async function initializeMcpServer(
   const protocolVersion = hasAdvertisedProtocolVersion
     ? advertisedProtocolVersion
     : MCP_PROTOCOL_VERSION;
-  if (typeof protocolVersion !== 'string' || protocolVersion !== MCP_PROTOCOL_VERSION) {
+  if (
+    typeof protocolVersion !== 'string' ||
+    !MCP_SUPPORTED_PROTOCOL_VERSIONS.includes(
+      protocolVersion as typeof MCP_SUPPORTED_PROTOCOL_VERSIONS[number],
+    )
+  ) {
     throw new McpProtocolError(
       'mcp_protocol_version_unsupported',
       'Unsupported MCP protocol version.',
