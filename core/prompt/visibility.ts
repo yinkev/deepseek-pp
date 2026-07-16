@@ -23,7 +23,26 @@ const PROVIDER_CANONICAL_SUFFIXES = [
   'Continue from the real tool results. Request another listed tool if needed; otherwise return the natural final answer.',
 ] as const;
 const LEGACY_ENGLISH_CONTINUATION = 'Continue answering based on the tool results above.';
-const LEGACY_CHINESE_CONTINUATION = '请根据上述工具执行结果继续回答。';
+const LEGACY_CHINESE_CONTINUATION = String.fromCodePoint(
+  0x8bf7, 0x6839, 0x636e, 0x4e0a, 0x8ff0, 0x5de5, 0x5177, 0x6267,
+  0x884c, 0x7ed3, 0x679c, 0x7ee7, 0x7eed, 0x56de, 0x7b54, 0x3002,
+);
+const DEEPSEEK_CHROME_LOCALIZED_CRUMBS = [
+  String.fromCodePoint(0x91cd, 0x65b0, 0x751f, 0x6210),
+  String.fromCodePoint(0x521a, 0x521a),
+  String.fromCodePoint(0x590d, 0x5236),
+  String.fromCodePoint(0x5206, 0x4eab),
+  String.fromCodePoint(0x91cd, 0x8bd5),
+];
+const DEEPSEEK_CHROME_RELATIVE_TIME_UNITS = [
+  String.fromCodePoint(0x79d2),
+  String.fromCodePoint(0x5206, 0x949f, 0x524d),
+  String.fromCodePoint(0x5c0f, 0x65f6, 0x524d),
+];
+const DEEPSEEK_CHROME_LINE_PATTERN = new RegExp(
+  `^(just now|copy|copied|share|regenerate|${DEEPSEEK_CHROME_LOCALIZED_CRUMBS.join('|')}|retry|\\d+\\s*(s|m|h|min|sec|ago|${DEEPSEEK_CHROME_RELATIVE_TIME_UNITS.join('|')})?)$`,
+  'i',
+);
 
 /** Cleanup-only sandbox tag names for page history/DOM stripping (not an executable catalog). */
 export const PAGE_CLEANUP_SANDBOX_TOOL_NAMES = SANDBOX_TOOL_NAMES;
@@ -310,7 +329,7 @@ function isDeepSeekChromeLine(line: string): boolean {
   }
   // Timestamps, action-row labels, and other short UI crumbs documented as
   // diluting live .ds-message textContent.
-  return /^(just now|copy|copied|share|regenerate|重新生成|刚刚|复制|分享|retry|重试|\d+\s*(s|m|h|min|sec|ago|秒|分钟前|小时前)?)$/i.test(line);
+  return DEEPSEEK_CHROME_LINE_PATTERN.test(line);
 }
 
 export function markVisibleUserPrompt(prompt: string): string {
