@@ -1,4 +1,3 @@
-import type { TokenMetricSource } from '../interceptor/token-speed';
 import {
   normalizeUsageRangeDays,
   summarizeUsage,
@@ -6,31 +5,47 @@ import {
 } from './stats';
 import type {
   UsageRangeDays,
-  UsageRecordSource,
   UsageSummary,
   UsageTurnInput,
   UsageTurnRecord,
 } from './types';
+import { decodeUsageRecords, encodeUsageRecords } from './codec';
+import { createCoalescingMutationQueue } from '../persistence/coalescing-mutation-queue';
+import { normalizeUsageTurnInput } from './input-codec';
+import type { TokenMetricSource } from '../deepseek/stream-metrics';
 
-const STORAGE_KEY = 'deepseek_pp_usage_turns_v1';
+export const USAGE_STORAGE_KEY = 'deepseek_pp_usage_turns_v1';
 const MAX_RECORDS = 5_000;
 const RETENTION_DAYS = 180;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const usageOperations = createCoalescingMutationQueue<UsageTurnRecord, UsageTurnRecord>(
+  persistUsageBurst,
+);
 
 export async function recordUsageTurn(input: UsageTurnInput): Promise<UsageTurnRecord> {
   const incoming = normalizeUsageTurnInput(input);
-  const records = await getUsageRecords();
-  const existingIndex = records.findIndex((record) => record.id === incoming.id);
-  const nextRecord = existingIndex >= 0
-    ? mergeUsageRecord(records[existingIndex], incoming)
-    : incoming;
+  return usageOperations.mutate(incoming);
+}
 
-  const nextRecords = existingIndex >= 0
-    ? [...records.slice(0, existingIndex), nextRecord, ...records.slice(existingIndex + 1)]
-    : [...records, nextRecord];
+async function persistUsageBurst(
+  incomingRecords: readonly UsageTurnRecord[],
+): Promise<UsageTurnRecord[]> {
+  let records = await readUsageRecordsAlreadyOwned();
+  const results: UsageTurnRecord[] = [];
+  for (const incoming of incomingRecords) {
+    const existingIndex = records.findIndex((record) => record.id === incoming.id);
+    const nextRecord = existingIndex >= 0
+      ? mergeUsageRecord(records[existingIndex], incoming)
+      : incoming;
 
-  await saveUsageRecords(pruneUsageRecords(nextRecords));
-  return nextRecord;
+    records = pruneUsageRecords(existingIndex >= 0
+      ? [...records.slice(0, existingIndex), nextRecord, ...records.slice(existingIndex + 1)]
+      : [...records, nextRecord]);
+    results.push(nextRecord);
+  }
+
+  await saveUsageRecordsAlreadyOwned(records);
+  return results;
 }
 
 export async function getUsageSummary(rangeDaysInput: unknown): Promise<UsageSummary> {
@@ -40,76 +55,23 @@ export async function getUsageSummary(rangeDaysInput: unknown): Promise<UsageSum
 }
 
 export async function clearUsageRecords(): Promise<void> {
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await usageOperations.barrier(async () => {
+    await readUsageRecordsAlreadyOwned();
+    await chrome.storage.local.remove(USAGE_STORAGE_KEY);
+  });
 }
 
 export async function getUsageRecords(): Promise<UsageTurnRecord[]> {
-  const data = await chrome.storage.local.get(STORAGE_KEY) as Record<string, unknown>;
-  const raw = data[STORAGE_KEY];
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item) => normalizeStoredUsageRecord(item))
-    .filter((item): item is UsageTurnRecord => item !== null)
-    .sort((a, b) => a.recordedAt - b.recordedAt);
-}
-
-function normalizeUsageTurnInput(input: UsageTurnInput): UsageTurnRecord {
-  if (!input || typeof input !== 'object') {
-    throw new Error('Usage turn payload must be an object.');
-  }
-
-  const id = normalizeString(input.id);
-  if (!id) throw new Error('Usage turn id is required.');
-
-  const recordedAt = normalizePositiveNumber(input.recordedAt, Date.now());
-  const totalTokens = normalizeNonNegativeInteger(input.totalTokens);
-  if (totalTokens === null) throw new Error('Usage turn totalTokens must be a non-negative number.');
-
-  return {
-    id,
-    recordedAt,
-    day: toLocalDayKey(recordedAt),
-    source: normalizeUsageRecordSource(input.source),
-    chatSessionId: normalizeString(input.chatSessionId),
-    assistantMessageId: normalizeNullableInteger(input.assistantMessageId),
-    modelType: normalizeString(input.modelType),
-    totalTokens,
-    tokenSource: normalizeMetricSource(input.tokenSource),
-    tps: normalizePositiveNumber(input.tps, 0),
-    speedSource: normalizeMetricSource(input.speedSource),
-    elapsedMs: normalizePositiveNumber(input.elapsedMs, 0),
-    messageCount: normalizePositiveInteger(input.messageCount, 2),
-  };
-}
-
-function normalizeStoredUsageRecord(raw: unknown): UsageTurnRecord | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const value = raw as Partial<UsageTurnRecord>;
-  const id = normalizeString(value.id);
-  const recordedAt = normalizePositiveNumber(value.recordedAt, 0);
-  const totalTokens = normalizeNonNegativeInteger(value.totalTokens);
-  if (!id || recordedAt <= 0 || totalTokens === null) return null;
-
-  return {
-    id,
-    recordedAt,
-    day: normalizeString(value.day) ?? toLocalDayKey(recordedAt),
-    source: normalizeUsageRecordSource(value.source),
-    chatSessionId: normalizeString(value.chatSessionId),
-    assistantMessageId: normalizeNullableInteger(value.assistantMessageId),
-    modelType: normalizeString(value.modelType),
-    totalTokens,
-    tokenSource: normalizeMetricSource(value.tokenSource),
-    tps: normalizePositiveNumber(value.tps, 0),
-    speedSource: normalizeMetricSource(value.speedSource),
-    elapsedMs: normalizePositiveNumber(value.elapsedMs, 0),
-    messageCount: normalizePositiveInteger(value.messageCount, 2),
-  };
+  return usageOperations.barrier(async () => {
+    const records = await readUsageRecordsAlreadyOwned();
+    return [...records].sort((a, b) => a.recordedAt - b.recordedAt);
+  });
 }
 
 function mergeUsageRecord(existing: UsageTurnRecord, incoming: UsageTurnRecord): UsageTurnRecord {
   const preferIncomingTokens = shouldPreferIncomingMetric(existing.tokenSource, incoming.tokenSource, incoming.recordedAt, existing.recordedAt);
   const preferIncomingSpeed = shouldPreferIncomingMetric(existing.speedSource, incoming.speedSource, incoming.recordedAt, existing.recordedAt);
+  const preferIncomingMetadata = incoming.recordedAt >= existing.recordedAt;
   const recordedAt = Math.max(existing.recordedAt, incoming.recordedAt);
 
   return {
@@ -117,10 +79,16 @@ function mergeUsageRecord(existing: UsageTurnRecord, incoming: UsageTurnRecord):
     id: existing.id,
     recordedAt,
     day: toLocalDayKey(recordedAt),
-    source: incoming.source,
-    chatSessionId: incoming.chatSessionId ?? existing.chatSessionId,
-    assistantMessageId: incoming.assistantMessageId ?? existing.assistantMessageId,
-    modelType: incoming.modelType ?? existing.modelType,
+    source: preferIncomingMetadata ? incoming.source : existing.source,
+    chatSessionId: preferIncomingMetadata
+      ? incoming.chatSessionId ?? existing.chatSessionId
+      : existing.chatSessionId ?? incoming.chatSessionId,
+    assistantMessageId: preferIncomingMetadata
+      ? incoming.assistantMessageId ?? existing.assistantMessageId
+      : existing.assistantMessageId ?? incoming.assistantMessageId,
+    modelType: preferIncomingMetadata
+      ? incoming.modelType ?? existing.modelType
+      : existing.modelType ?? incoming.modelType,
     totalTokens: preferIncomingTokens ? incoming.totalTokens : existing.totalTokens,
     tokenSource: preferIncomingTokens ? incoming.tokenSource : existing.tokenSource,
     tps: preferIncomingSpeed ? incoming.tps : existing.tps,
@@ -150,41 +118,13 @@ function pruneUsageRecords(records: readonly UsageTurnRecord[]): UsageTurnRecord
     .sort((a, b) => a.recordedAt - b.recordedAt);
 }
 
-async function saveUsageRecords(records: readonly UsageTurnRecord[]): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEY]: [...records] });
+async function readUsageRecordsAlreadyOwned(): Promise<UsageTurnRecord[]> {
+  const data = await chrome.storage.local.get(USAGE_STORAGE_KEY) as Record<string, unknown>;
+  return decodeUsageRecords(data[USAGE_STORAGE_KEY]);
 }
 
-function normalizeString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-function normalizePositiveNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function normalizePositiveInteger(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0
-    ? Math.round(value)
-    : fallback;
-}
-
-function normalizeNonNegativeInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-    ? Math.round(value)
-    : null;
-}
-
-function normalizeNullableInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null;
-}
-
-function normalizeMetricSource(value: unknown): TokenMetricSource {
-  return value === 'server' ? 'server' : 'estimated';
-}
-
-function normalizeUsageRecordSource(value: unknown): UsageRecordSource {
-  if (value === 'sidepanel-web' || value === 'sidepanel-api') return value;
-  return 'deepseek-web';
+async function saveUsageRecordsAlreadyOwned(records: readonly UsageTurnRecord[]): Promise<void> {
+  await chrome.storage.local.set({ [USAGE_STORAGE_KEY]: encodeUsageRecords(records) });
 }
 
 export type { UsageRangeDays };

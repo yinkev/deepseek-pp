@@ -3,6 +3,7 @@ import { SHELL_MCP_NATIVE_HOST, SHELL_MCP_SERVER_NAME } from '../core/shell';
 
 vi.mock('../core/mcp/store', () => ({
   getAllMcpServers: vi.fn(),
+  getMcpToolCache: vi.fn(),
   updateMcpServer: vi.fn(),
 }));
 
@@ -13,7 +14,7 @@ vi.mock('../core/mcp/discovery', () => ({
 }));
 
 import { executeMcpToolCall, getMcpToolDescriptors, refreshMcpServerDiscovery } from '../core/mcp/discovery';
-import { getAllMcpServers, updateMcpServer } from '../core/mcp/store';
+import { getAllMcpServers, getMcpToolCache, updateMcpServer } from '../core/mcp/store';
 import type { McpServerConfig, McpToolCacheEntry } from '../core/mcp/types';
 import {
   importLocalSkillSource as importLocalSkillSourceWithRuntime,
@@ -21,6 +22,7 @@ import {
   previewLocalSkillSource as previewLocalSkillSourceWithRuntime,
 } from '../core/skill/local-importer';
 import type { LocalSkillImportResponse, LocalSkillImportResult } from '../core/types';
+import type { LocalStateMutationStage } from '../core/persistence/local-state-mutation';
 import type { ToolCall, ToolResult } from '../core/types';
 
 const SKILL_STORAGE_KEY = 'deepseek_pp_skills';
@@ -31,6 +33,9 @@ const importerDeps = {
   executeToolCall: (call: ToolCall) => (
     executeMcpToolCall as unknown as (value: ToolCall) => Promise<ToolResult>
   )(call),
+  async runLocalStateMutation<T>(stage: LocalStateMutationStage<T>): Promise<T> {
+    return (await stage())();
+  },
 };
 
 const previewLocalSkillSource = (rootPath: string) =>
@@ -64,6 +69,10 @@ beforeEach(() => {
     allowlist: patch.allowlist ?? shellServer.allowlist,
   }));
   vi.mocked(refreshMcpServerDiscovery).mockResolvedValue({} as never);
+  vi.mocked(getMcpToolCache).mockResolvedValue(createShellDiscovery([
+    'local_skill_preview',
+    'local_folder_pick',
+  ]));
   vi.mocked(getMcpToolDescriptors).mockResolvedValue([]);
   vi.mocked(executeMcpToolCall).mockResolvedValue(createLocalSkillToolResult());
 });

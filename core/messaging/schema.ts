@@ -8,6 +8,7 @@ export const BRIDGE_READY_TYPE = 'DPP_BRIDGE_READY';
 
 export const BRIDGE_MESSAGE_TYPES = [
   'SYNC_HOOK_STATE',
+  'SYNC_HOOK_STATE_REQUEST',
   'AUGMENT_REQUEST_BODY',
   'AUGMENT_REQUEST_BODY_EXTEND_TIMEOUT',
   'AUGMENT_REQUEST_BODY_RESULT',
@@ -20,6 +21,7 @@ export const BRIDGE_MESSAGE_TYPES = [
   'RESPONSE_TOKEN_SPEED',
   'MEMORIES_USED',
   'HEADERS_CAPTURED',
+  'NAVIGATION_CHANGED',
   BRIDGE_READY_TYPE,
 ] as const;
 
@@ -31,10 +33,12 @@ export const BRIDGE_SOURCES = {
 export const BRIDGE_HANDSHAKE_TYPES = {
   request: 'DPP_BRIDGE_REQUEST',
   init: 'DPP_BRIDGE_INIT',
+  disconnect: 'DPP_BRIDGE_DISCONNECT',
 } as const;
 
 export const BRIDGE_TYPE_SOURCES = {
   SYNC_HOOK_STATE: BRIDGE_SOURCES.content,
+  SYNC_HOOK_STATE_REQUEST: BRIDGE_SOURCES.mainWorld,
   AUGMENT_REQUEST_BODY: BRIDGE_SOURCES.mainWorld,
   AUGMENT_REQUEST_BODY_EXTEND_TIMEOUT: BRIDGE_SOURCES.content,
   AUGMENT_REQUEST_BODY_RESULT: BRIDGE_SOURCES.content,
@@ -47,6 +51,7 @@ export const BRIDGE_TYPE_SOURCES = {
   RESPONSE_TOKEN_SPEED: BRIDGE_SOURCES.mainWorld,
   MEMORIES_USED: BRIDGE_SOURCES.mainWorld,
   HEADERS_CAPTURED: BRIDGE_SOURCES.mainWorld,
+  NAVIGATION_CHANGED: BRIDGE_SOURCES.mainWorld,
   DPP_BRIDGE_READY: BRIDGE_SOURCES.mainWorld,
 } as const satisfies Record<BridgeMessageType, string>;
 
@@ -66,7 +71,9 @@ export interface BridgeHandshakeCheck {
   actualTopLevel?: boolean;
   requireTopLevel?: boolean;
   requireTransferredPort?: boolean;
+  forbidTransferredPorts?: boolean;
   transferredPortCount?: number;
+  allowWhileConnected?: boolean;
 }
 
 export interface ValidatedBridgeMessage {
@@ -106,7 +113,10 @@ const BRIDGE_TYPES: ReadonlySet<string> = new Set(BRIDGE_MESSAGE_TYPES);
  * untrusted until validateBridgeMessage has decoded its full legal shape.
  */
 export function isBridgeHandshakeMessage(check: BridgeHandshakeCheck): boolean {
-  if (check.actualOrigin !== check.expectedOrigin || check.alreadyConnected) return false;
+  if (
+    check.actualOrigin !== check.expectedOrigin
+    || (check.alreadyConnected && !check.allowWhileConnected)
+  ) return false;
   if (!isPlainRecord(check.value)) return false;
   if (
     check.expectedWindowSource !== undefined &&
@@ -115,6 +125,7 @@ export function isBridgeHandshakeMessage(check: BridgeHandshakeCheck): boolean {
   if (check.requireTopLevel && check.actualTopLevel !== true) return false;
   if (check.value.source !== check.expectedSource || check.value.type !== check.expectedType) return false;
   if (check.requireTransferredPort && check.transferredPortCount !== 1) return false;
+  if (check.forbidTransferredPorts && (check.transferredPortCount ?? 0) !== 0) return false;
   return true;
 }
 
@@ -200,6 +211,7 @@ const BRIDGE_PAYLOAD_VALIDATORS: Record<
     message.skillSummaries.every(isSkillSummary) &&
     (message.skillPopupCopy === undefined || isSkillPopupCopy(message.skillPopupCopy))
   ),
+  SYNC_HOOK_STATE_REQUEST: () => true,
   AUGMENT_REQUEST_BODY: (message) => (
     isNonEmptyString(message.id) &&
     typeof message.body === 'string' &&
@@ -233,6 +245,7 @@ const BRIDGE_PAYLOAD_VALIDATORS: Record<
   HEADERS_CAPTURED: (message) => (
     message.headers === null || isStringRecord(message.headers)
   ),
+  NAVIGATION_CHANGED: () => true,
   DPP_BRIDGE_READY: () => true,
 };
 

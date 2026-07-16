@@ -1,6 +1,6 @@
 # Chrome Web Store Submission Runbook
 
-Last updated: 2026-07-11
+Last updated: 2026-07-14
 
 This runbook covers the parts that can be prepared from the repository and the parts that must be confirmed in the Chrome Web Store Developer Dashboard.
 
@@ -14,7 +14,7 @@ Official references:
 
 ## Current Status
 
-- Chrome MV3 package exists at `dist/deepseek-plus-plus-1.10.0-chrome.zip`.
+- Chrome MV3 package exists at `dist/deepseek-plus-plus-1.11.0-chrome.zip`.
 - Package root contains `manifest.json`.
 - Package size is below the Chrome Web Store package limit.
 - Required icon exists at `assets/chrome-web-store-icon-128.png`.
@@ -48,7 +48,7 @@ npm run zip:chrome
 Upload:
 
 ```text
-dist/deepseek-plus-plus-1.10.0-chrome.zip
+dist/deepseek-plus-plus-1.11.0-chrome.zip
 ```
 
 ## Store Listing Fields
@@ -166,6 +166,12 @@ Shows an optional DS++ Chat floating launcher on normal web pages so users can o
 
 ```text
 Allows side-panel chat to send user-entered prompts to the official DeepSeek API when the user configures their own DeepSeek API Key. The extension stores the API Key locally and does not use this host unless the user enables the API-key path.
+```
+
+#### Host permissions: `*://cn.bing.com/*`, `*://www.bing.com/*`
+
+```text
+Allows the built-in web search tool to send a user-requested search query to Bing and return the resulting titles, links, and snippets to the active DeepSeek conversation. These hosts are used only when the user enables or invokes web search; DeepSeek++ does not use them for background browsing or analytics.
 ```
 
 #### Host permissions: `https://accounts.google.com/*`, `https://oauth2.googleapis.com/*`, `https://www.googleapis.com/*`

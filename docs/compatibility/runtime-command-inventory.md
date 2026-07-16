@@ -1,19 +1,19 @@
 # Runtime Command Name Inventory
 
-Compatibility-run baseline: v1.10.0, commit `165ec46`, with 119 live-router names and 89 `MessageAction` names. Current authority: fork merge of `origin/main@16eec9a` plus provider/Cursor live-only commands. This annex is the name-level authority for `RT-001`; it freezes the 125 live names and 91 declared names while documenting, rather than accepting, the router/union split.
+Compatibility-run baseline: v1.10.0, commit `165ec46`, with 119 live-router names and 89 `MessageAction` names. Current authority: `origin/main@02e5b68` typed-handler cutover plus the fork provider/Cursor commands, after T2.2 added the released `CREATE_TOOL_AUTHORIZATION` / `CLOSE_TOOL_AUTHORIZATION` lifecycle. This annex is the name-level authority for `RT-001`; it freezes the 125 live names and 91 declared names while documenting, rather than accepting, the router/union split.
 
 ## Invariants
 
-- The production registry owns 125 live commands exactly once: two typed handlers and 123 transitional cases in `entrypoints/background.ts::handleLegacyMessage`.
+- The production registry owns 125 live commands exactly once through typed handlers; no transitional case or legacy router remains.
 - `core/types.ts::MessageAction` declares 91 unique command names.
 - Eighty-nine names are shared, 36 are live-router-only, and two are declared-only.
 - A live name and its legal behavior remain compatible until an explicit migration changes the contract.
 - `TOOL_CALL_EXECUTED` and `MEMORIES_UPDATED` are client-only notifications, not live background commands; direct background dispatch rejects them with `runtime_command_unknown`.
-- R3.1 / #351 establishes the typed handler seam and explicit unknown-command failure. R4.1–R4.4 replace the remaining 123-case transitional switch by vertical family.
+- R3.1 / #351 establishes the typed handler seam and explicit unknown-command failure. R4.1–R4.4 migrate their exact `57 / 29 / 16 / 17` upstream command slices; the fork provider/Cursor handler group owns four additional commands without changing the frozen live-name surface.
 - The ownership ledger below is authoritative for cutover scope. A live command appears exactly once; a task must not absorb a command assigned to another Issue.
-- Fork-only live-only commands remain outside `MessageAction`: `GET_CURSOR_BRIDGE_STATUS`, `GET_CHAT_CATALOG`, `SET_ACTIVE_CHAT_MODEL`, and `UPLOAD_CHAT_IMAGE`.
+- Fork-only live-only commands remain outside `MessageAction`, but are fully owned by the typed registry: `GET_CURSOR_BRIDGE_STATUS`, `GET_CHAT_CATALOG`, `SET_ACTIVE_CHAT_MODEL`, and `UPLOAD_CHAT_IMAGE`. The two payload commands decode through the provider runtime codec; none use direct payload casts.
 
-The production ownership model and the future cutover ledger serve different purposes. `core/messaging/runtime-command-contracts.ts` is the single 127-name metadata and current-owner authority (`2 typed / 123 legacy / 2 client-only`), consumed by the dispatch registry; the Issue sections below exclusively assign each of the 125 live commands to its final migration task (`2 / 57 / 30 / 19 / 17`). Contract tests parse both models and fail on a duplicate, missing, or cross-owner name.
+The production ownership model and the cutover ledger serve different purposes. `core/messaging/runtime-command-contracts.ts` is the single 127-name metadata and current-owner authority (`125 typed / 0 legacy / 2 client-only`), consumed by the dispatch registry; the sections below retain migration ownership (`2 / 57 / 29 / 16 / 17 / 4`). Contract tests fail on a duplicate, missing, or cross-owner name.
 
 ## Replanned Cutover Ownership — 125 Live Commands
 
@@ -86,7 +86,7 @@ SAVE_PET
 CLEAR_PET
 ```
 
-### R4.2 / #361 — MCP, tool, browser control, and sandbox (30)
+### R4.2 / #361 — MCP, tool, browser control, and sandbox (29)
 
 ```text
 GET_MCP_SERVERS
@@ -118,10 +118,9 @@ RUN_ARTIFACT_CODE
 GET_TOOL_CALL_HISTORY
 CLEAR_TOOL_CALL_HISTORY
 GET_PLATFORM_CAPABILITIES
-GET_CURSOR_BRIDGE_STATUS
 ```
 
-### R4.3 / #362 — DeepSeek, chat, multimodal, and export (19)
+### R4.3 / #362 — DeepSeek, chat, multimodal, and export (16)
 
 ```text
 GET_DEEPSEEK_API_KEY_STATUS
@@ -133,11 +132,8 @@ CLEAR_MULTIMODAL_SETTINGS
 ANALYZE_MULTIMODAL_MEDIA
 CHAT_SUBMIT_PROMPT
 UPLOAD_DEEPSEEK_IMAGE
-UPLOAD_CHAT_IMAGE
 CHAT_NEW_SESSION
 GET_AUTH_STATUS
-GET_CHAT_CATALOG
-SET_ACTIVE_CHAT_MODEL
 GET_OFFICIAL_API_CHAT_CONFIG
 SAVE_OFFICIAL_API_CHAT_CONFIG
 EXPORT_DEEPSEEK_CONVERSATIONS
@@ -165,6 +161,15 @@ SET_AUTOMATION_STATUS
 DELETE_AUTOMATION
 RUN_AUTOMATION_NOW
 SCENARIOS_UPDATED
+```
+
+### Fork provider and Cursor typed handlers (4)
+
+```text
+GET_CURSOR_BRIDGE_STATUS
+UPLOAD_CHAT_IMAGE
+GET_CHAT_CATALOG
+SET_ACTIVE_CHAT_MODEL
 ```
 
 `TOOL_CALL_EXECUTED` and `MEMORIES_UPDATED` remain declared-only compatibility records. They are not counted in the 125 live command owners and R3.1 must classify them explicitly rather than invent handlers.
@@ -445,4 +450,4 @@ MEMORIES_UPDATED
 
 ## Validation Method
 
-`tests/runtime-command-contract.test.ts` uses the TypeScript AST to derive the 123 literal cases inside `handleLegacyMessage`, combines them with the two typed registry commands, and derives literal `type` fields and payload presence from `MessageAction`. It compares those results with this inventory, the production 127-name contract map, and the frozen `125/91/89/36/2` plus `79/46/72` topology. It also parses all five future cutover sections and proves their `2/57/30/19/17` counts, unique 125-name union, and equality with the live surface. Separate serializable specimens cover each request/response/error family without creating another command-name authority. R3.1 freezes the typed bootstrap request/response/error contracts and explicit unknown/client-only rejection; R4.1–R4.4 own decoded schemas and handler cutover for the remaining 123 commands.
+`tests/runtime-command-contract.test.ts` derives the typed registry and literal `MessageAction` names, then compares them with this inventory and the production 127-name contract map. It freezes `125/91/89/36/2`, current `82/43` payload access, `125/0/2` ownership, and `82 decoded / 0 direct-cast / 0 delegated`; it also proves the `2/57/29/16/17/4` cutover partition. `SCENARIOS_UPDATED` is the only released payload-less command extended with an optional request, preserving its old call and response. Serializable specimens cover every request/response/error family without creating another command-name authority.

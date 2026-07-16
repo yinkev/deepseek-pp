@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createStreamingToolCallParser } from '../core/interceptor/streaming-tool-call-parser';
 import { createArtifactToolDescriptors } from '../core/artifact';
 import { isExternalizedToolPayload } from '../core/tool/externalized-payload';
+import { ToolProviderRegistry, type RuntimeToolProvider } from '../core/tool/provider-registry';
+import { createRuntimeToolRuntime } from '../core/tool/runtime';
 
 describe('createStreamingToolCallParser', () => {
   const descriptors = createArtifactToolDescriptors('en');
@@ -108,5 +110,79 @@ describe('createStreamingToolCallParser', () => {
     expect(end.completed).toHaveLength(1);
     expect(isExternalizedToolPayload(end.completed[0].payload)).toBe(true);
     expect(end.completed[0].raw).toContain('externalized');
+  });
+
+  it('emits one same-id non-executable failure when EOF leaves a call unclosed', () => {
+    const parser = createStreamingToolCallParser(descriptors);
+    const start = parser.append('<artifact_create>{"filename":"unfinished.html"');
+
+    const terminal = parser.flush();
+
+    expect(terminal.completed).toHaveLength(0);
+    expect(terminal.failed).toHaveLength(1);
+    expect(terminal.failed[0]).toMatchObject({
+      id: start.started[0].id,
+      name: 'artifact_create',
+      payload: {},
+      parseError: {
+        code: 'tool_call_incomplete',
+        retryable: false,
+      },
+    });
+    expect(terminal.failed[0].raw).not.toContain('</artifact_create>');
+    expect(parser.flush()).toEqual({ started: [], completed: [], failed: [], streamed: [] });
+  });
+
+  it('keeps the externalized payload reference on an incomplete terminal event for cleanup', () => {
+    const parser = createStreamingToolCallParser(descriptors);
+    const payload = JSON.stringify({
+      filename: 'unfinished.html',
+      content: 'x'.repeat(70_000),
+    });
+
+    parser.append('<artifact_create>');
+    const streamed = parser.append(payload);
+    const terminal = parser.flush();
+
+    expect(streamed.streamed.length).toBeGreaterThan(0);
+    expect(terminal.failed).toHaveLength(1);
+    expect(isExternalizedToolPayload(terminal.failed[0].payload)).toBe(true);
+    expect(terminal.failed[0].parseError?.code).toBe('tool_call_incomplete');
+  });
+
+  it('never sends an incomplete terminal call to a tool provider', async () => {
+    const descriptor = descriptors[0];
+    const providerExecute = vi.fn();
+    const provider: RuntimeToolProvider = {
+      registration: { kind: descriptor.provider.kind, id: descriptor.provider.id },
+      listTools: async () => [descriptor],
+      execute: providerExecute,
+    };
+    const runtime = createRuntimeToolRuntime(new ToolProviderRegistry([provider]));
+    const parser = createStreamingToolCallParser([descriptor]);
+    parser.append(`<${descriptor.invocationName}>{"filename":"unfinished.html"`);
+    const failure = parser.flush().failed[0];
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async () => ({})),
+          set: vi.fn(async () => undefined),
+        },
+      },
+    });
+
+    try {
+      await expect(runtime.executeToolCall(failure, {
+        kind: 'trusted',
+        trigger: 'agent_run',
+        requestId: 'request-unclosed',
+      }, 'en')).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'tool_call_incomplete' },
+      });
+      expect(providerExecute).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

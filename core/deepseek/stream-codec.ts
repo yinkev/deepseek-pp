@@ -1,4 +1,11 @@
 import type { SSEEvent } from '../types';
+import { normalizeDeepSeekMessageId } from './request-codec';
+
+export type { SSEEvent } from '../types';
+
+export function normalizeSseNewlines(chunk: string): string {
+  return chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
 
 export interface ResponseStreamUsageStats {
   modelType?: string | null;
@@ -7,58 +14,293 @@ export interface ResponseStreamUsageStats {
   accumulatedTokenUsage?: number | null;
 }
 
-export function normalizeSseNewlines(chunk: string): string {
-  return chunk.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+export interface DeepSeekStreamSummary {
+  assistantText: string;
+  responseMessageId: number | null;
+  requestMessageId: number | null;
+  finished: boolean;
+}
+
+export interface DeepSeekStreamParseDebug {
+  events: Array<{
+    op?: string;
+    path?: string;
+    sample?: string;
+    delta?: string;
+    extracted?: string | null;
+    raw?: string;
+  }>;
+  finalText: string;
+  rawEvents: string[];
+}
+
+export let lastStreamParseDebug: DeepSeekStreamParseDebug = createEmptyStreamParseDebug();
+
+const responseAssemblers = new WeakMap<DeepSeekStreamSummary, ResponseTextAssembler>();
+
+export function getLastStreamParseDebug(): DeepSeekStreamParseDebug {
+  return lastStreamParseDebug;
+}
+
+export interface DeepSeekSseByteDecoder {
+  push(bytes: Uint8Array): SSEEvent[];
+  finish(): SSEEvent[];
+}
+
+export interface DeepSeekSseTextDecoder {
+  push(text: string): SSEEvent[];
+  finish(): SSEEvent[];
+}
+
+export interface DeepSeekSseFrame {
+  readonly block: string;
+  readonly separator: string;
+  readonly event: SSEEvent | null;
+  readonly parsed: unknown | null;
+}
+
+export interface DeepSeekSseFrameDecoder {
+  push(text: string): DeepSeekSseFrame[];
+  finish(): DeepSeekSseFrame[];
+}
+
+export function createDeepSeekStreamSummary(): DeepSeekStreamSummary {
+  const summary: DeepSeekStreamSummary = {
+    assistantText: '',
+    responseMessageId: null,
+    requestMessageId: null,
+    finished: false,
+  };
+  responseAssemblers.set(summary, new ResponseTextAssembler());
+  lastStreamParseDebug = createEmptyStreamParseDebug();
+  return summary;
+}
+
+export function createDeepSeekSseByteDecoder(): DeepSeekSseByteDecoder {
+  const decoder = new TextDecoder();
+  const textDecoder = createDeepSeekSseTextDecoder();
+
+  return {
+    push(bytes) {
+      return textDecoder.push(decoder.decode(bytes, { stream: true }));
+    },
+    finish() {
+      const decoded = decoder.decode();
+      const events = decoded ? textDecoder.push(decoded) : [];
+      return events.concat(textDecoder.finish());
+    },
+  };
+}
+
+export function createDeepSeekSseTextDecoder(): DeepSeekSseTextDecoder {
+  const frameDecoder = createDeepSeekSseFrameDecoder();
+
+  return {
+    push(text) {
+      return parseSSEFrames(frameDecoder.push(text));
+    },
+    finish() {
+      return parseSSEFrames(frameDecoder.finish());
+    },
+  };
+}
+
+export function createDeepSeekSseFrameDecoder(): DeepSeekSseFrameDecoder {
+  let buffer = '';
+  let scanFrom = 0;
+
+  const drain = (final = false): DeepSeekSseFrame[] => {
+    const frames: DeepSeekSseFrame[] = [];
+    const boundaryPattern = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+    boundaryPattern.lastIndex = scanFrom;
+    let offset = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = boundaryPattern.exec(buffer)) !== null) {
+      const separator = match[0];
+      const endsWithAmbiguousCr = !final
+        && match.index + separator.length === buffer.length
+        && separator.endsWith('\r');
+      if (endsWithAmbiguousCr) break;
+      frames.push(createDeepSeekSseFrame(buffer.slice(offset, match.index), separator));
+      offset = match.index + separator.length;
+    }
+
+    buffer = buffer.slice(offset);
+    scanFrom = Math.max(0, buffer.length - 3);
+    return frames;
+  };
+
+  return {
+    push(text) {
+      buffer += text;
+      return drain();
+    },
+    finish() {
+      const frames = drain(true);
+      if (buffer) frames.push(createDeepSeekSseFrame(buffer, ''));
+      buffer = '';
+      scanFrom = 0;
+      return frames;
+    },
+  };
+}
+
+export function consumeDeepSeekSseEvents(
+  events: readonly SSEEvent[],
+  summary: DeepSeekStreamSummary,
+  options: {
+    retainAssistantText?: boolean;
+    onParsed?: (parsed: unknown, event: SSEEvent) => void;
+  } = {},
+): string {
+  const appendedText: string[] = [];
+
+  for (const event of events) {
+    const parsed = parseSSEData(event.data);
+    if (!parsed) continue;
+    consumeParsedDeepSeekSseEvent(parsed, event, summary, options, appendedText);
+  }
+
+  return appendedText.join('');
+}
+
+export function consumeDeepSeekSseFrames(
+  frames: readonly DeepSeekSseFrame[],
+  summary: DeepSeekStreamSummary,
+  options: {
+    retainAssistantText?: boolean;
+    onParsed?: (parsed: unknown, event: SSEEvent) => void;
+  } = {},
+): string {
+  const appendedText: string[] = [];
+  for (const frame of frames) {
+    if (!frame.event || !frame.parsed) continue;
+    consumeParsedDeepSeekSseEvent(frame.parsed, frame.event, summary, options, appendedText);
+  }
+  return appendedText.join('');
 }
 
 export function parseSSEChunk(chunk: string): SSEEvent[] {
+  const decoder = createDeepSeekSseFrameDecoder();
+  return parseSSEFrames(decoder.push(chunk).concat(decoder.finish()));
+}
+
+function parseSSEFrames(frames: readonly DeepSeekSseFrame[]): SSEEvent[] {
   const events: SSEEvent[] = [];
-  const normalized = normalizeSseNewlines(chunk);
-  const blocks = normalized.split('\n\n');
-
-  for (const block of blocks) {
-    if (!block.trim()) continue;
-
-    const event: Partial<SSEEvent> = {};
-    const dataLines: string[] = [];
-    const lines = block.split('\n');
-
-    for (const line of lines) {
-      if (line.startsWith('id:')) {
-        event.id = line.slice(3).trim();
-      } else if (line.startsWith('event:')) {
-        event.type = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
-        dataLines.push(line.slice(5).trim());
-      }
-    }
-
-    if (dataLines.length === 0) continue;
-
-    // DeepSeek emits one JSON object per data line / event.
-    // If framing is wrong (CRLF, partial splits), multiple JSON data lines can
-    // land in one block. Concatenating them yields invalid JSON and drops tokens.
-    // Prefer one SSEEvent per JSON data line when each line is its own object.
-    const jsonLike = dataLines.every((line) => line.startsWith('{') || line.startsWith('['));
-    if (jsonLike && dataLines.length > 1) {
-      for (const data of dataLines) {
-        events.push({
-          type: event.type ?? 'message',
-          data,
-          id: event.id,
-        });
-      }
+  for (const frame of frames) {
+    if (!frame.event) continue;
+    const dataLines = frame.event.data.split('\n');
+    const independentlyJsonEncoded = dataLines.length > 1
+      && dataLines.every((line) => line.startsWith('{') || line.startsWith('['));
+    if (!independentlyJsonEncoded) {
+      events.push(frame.event);
       continue;
     }
+    for (const data of dataLines) {
+      events.push({ ...frame.event, data });
+    }
+  }
+  return events;
+}
 
-    events.push({
-      type: event.type ?? 'message',
-      data: dataLines.join('\n'),
-      id: event.id,
-    });
+function createDeepSeekSseFrame(block: string, separator: string): DeepSeekSseFrame {
+  const event = parseSSEBlock(block);
+  let parsedResolved = false;
+  let parsed: unknown | null = null;
+  return {
+    block,
+    separator,
+    event,
+    get parsed() {
+      if (!parsedResolved) {
+        parsed = event ? parseSSEData(event.data) : null;
+        parsedResolved = true;
+      }
+      return parsed;
+    },
+  };
+}
+
+function parseSSEBlock(block: string): SSEEvent | null {
+  if (!block.trim()) return null;
+
+  const event: Partial<SSEEvent> = {};
+  for (const line of block.split(/\r\n|\r|\n/)) {
+    const colonIndex = line.indexOf(':');
+    const field = colonIndex === -1 ? line : line.slice(0, colonIndex);
+    let value = colonIndex === -1 ? '' : line.slice(colonIndex + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+
+    if (field === 'id') {
+      event.id = value;
+    } else if (field === 'event') {
+      event.type = value;
+    } else if (field === 'data') {
+      event.data = event.data != null ? `${event.data}\n${value}` : value;
+    }
   }
 
-  return events;
+  if (event.data === undefined) return null;
+  return {
+    type: event.type ?? 'message',
+    data: event.data,
+    id: event.id,
+  };
+}
+
+function consumeParsedDeepSeekSseEvent(
+  parsed: unknown,
+  event: SSEEvent,
+  summary: DeepSeekStreamSummary,
+  options: {
+    retainAssistantText?: boolean;
+    onParsed?: (parsed: unknown, event: SSEEvent) => void;
+  },
+  appendedText: string[],
+): void {
+  collectDeepSeekMessageIds(parsed, summary);
+  options.onParsed?.(parsed, event);
+  if (lastStreamParseDebug.rawEvents.length < 50) {
+    lastStreamParseDebug.rawEvents.push(event.data.slice(0, 500));
+  }
+
+  const record = parsed && typeof parsed === 'object'
+    ? parsed as Record<string, unknown>
+    : {};
+  const path = typeof record.p === 'string' ? record.p : undefined;
+  const op = typeof record.o === 'string' ? record.o : undefined;
+  let sample: string | undefined;
+  if (typeof record.v === 'string') sample = record.v.slice(0, 80);
+  else if (record.v != null) {
+    try {
+      sample = JSON.stringify(record.v).slice(0, 120);
+    } catch {
+      sample = '[unserializable]';
+    }
+  }
+
+  let assembler = responseAssemblers.get(summary);
+  if (!assembler) {
+    assembler = new ResponseTextAssembler();
+    responseAssemblers.set(summary, assembler);
+  }
+  const extracted = extractResponseTextFromParsed(parsed);
+  const delta = assembler.apply(parsed);
+  if (delta) appendedText.push(delta);
+  if (options.retainAssistantText !== false) summary.assistantText = assembler.text;
+  if (lastStreamParseDebug.events.length < 40) {
+    lastStreamParseDebug.events.push({
+      op,
+      path,
+      sample,
+      delta: delta || undefined,
+      extracted,
+    });
+  }
+  lastStreamParseDebug.finalText = assembler.text;
+
+  if (isStreamFinishedFromParsed(parsed)) summary.finished = true;
 }
 
 export function parseSSEData(data: string): unknown | null {
@@ -67,6 +309,30 @@ export function parseSSEData(data: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+export function replaceDeepSeekSseFrameData(
+  frame: DeepSeekSseFrame,
+  data: string,
+): string {
+  const parts = frame.block.split(/(\r\n|\r|\n)/);
+  let replaced = false;
+  let output = '';
+
+  for (let index = 0; index < parts.length; index += 2) {
+    const line = parts[index] ?? '';
+    const lineEnding = parts[index + 1] ?? '';
+    if (!line.startsWith('data:')) {
+      output += line + lineEnding;
+      continue;
+    }
+    if (!replaced) {
+      output += `data: ${data}${lineEnding}`;
+      replaced = true;
+    }
+  }
+
+  return replaced ? output : frame.block;
 }
 
 export function extractResponseUsageStatsFromParsed(
@@ -94,20 +360,12 @@ function isTextPatchPath(path: unknown): path is string {
 
 function isResponsePatchPath(path: unknown): path is string {
   if (typeof path !== 'string') return false;
-  // Absolute response paths
   if (path === 'response' || path.startsWith('response/')) return true;
-  // Relative paths nested under a response BATCH (common for the first tokens).
-  // e.g. {"p":"response","o":"BATCH","v":[{"p":"fragments/-1/content","v":"Hi"}]}
-  if (
-    path === 'content'
+  return path === 'content'
     || path === 'text'
     || path === 'markdown'
     || path === 'delta'
-    || path.startsWith('fragments/')
-  ) {
-    return true;
-  }
-  return false;
+    || path.startsWith('fragments/');
 }
 
 export function isThinkingPatchPath(path: unknown): path is string {
@@ -129,7 +387,6 @@ export function extractTextFromParsed(parsed: any): string | null {
     return parsed.v;
   }
   // Format 2: {"p":"...", "o":"APPEND"|"SET", "v":"text"} — explicit write/append
-  // DeepSeek often SETs the first fragment content, then APPENDs the rest.
   if (parsed.p && (parsed.o === 'APPEND' || parsed.o === 'SET') && typeof parsed.v === 'string') {
     return parsed.v;
   }
@@ -159,7 +416,6 @@ export function extractResponseTextFromParsed(parsed: any): string | null {
   if (!parsed.p && typeof parsed.v === 'string') {
     return parsed.v;
   }
-  // Nested snapshot: {"v":{"response":{"fragments":[{"content":"..."}]}}}
   if (!parsed.p && parsed.v && typeof parsed.v === 'object' && !Array.isArray(parsed.v)) {
     const nested = extractTextFromResponseSnapshot(parsed.v);
     if (nested) return nested;
@@ -174,14 +430,15 @@ export function extractResponseTextFromParsed(parsed: any): string | null {
   if (isResponseTextPatchPath(parsed.p) && typeof parsed.v === 'string' && !parsed.o) {
     return parsed.v;
   }
-  // SET whole response object (often carries initial fragments with opening text)
   if (
     (parsed.p === 'response' || parsed.p === 'response/fragments')
     && (parsed.o === 'SET' || parsed.o === 'APPEND' || !parsed.o)
     && parsed.v
     && typeof parsed.v === 'object'
   ) {
-    const nested = extractTextFromResponseSnapshot(parsed.p === 'response/fragments' ? { fragments: parsed.v } : parsed.v);
+    const nested = extractTextFromResponseSnapshot(
+      parsed.p === 'response/fragments' ? { fragments: parsed.v } : parsed.v,
+    );
     if (nested) return nested;
   }
   if (isResponseFragmentsAppendPatch(parsed)) {
@@ -203,23 +460,12 @@ function extractTextFromResponseSnapshot(value: unknown): string | null {
   const response = record.response && typeof record.response === 'object'
     ? record.response as Record<string, unknown>
     : record;
-
   const fragments = response.fragments;
-  if (Array.isArray(fragments)) {
-    const parts = fragments
-      .map((frag) => extractFragmentText(frag))
-      .filter((part): part is string => part !== null);
-    if (parts.length > 0) return parts.join('');
-  }
-
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((frag) => extractFragmentText(frag))
-      .filter((part): part is string => part !== null);
-    if (parts.length > 0) return parts.join('');
-  }
-
-  return null;
+  if (!Array.isArray(fragments)) return null;
+  const parts = fragments
+    .map((fragment) => extractFragmentText(fragment))
+    .filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join('') : null;
 }
 
 export function extractResponseTextForTokenSpeed(parsed: unknown): string | null {
@@ -253,21 +499,17 @@ export function extractResponseTextForTokenSpeed(parsed: unknown): string | null
 }
 
 function isFragmentsPath(path: unknown): path is string {
-  if (typeof path !== 'string') return false;
-  // Absolute: response/fragments
-  // Relative under BATCH(response): fragments
-  // Nested: anything ending with /fragments
-  return path === 'fragments' || path === 'response/fragments' || path.endsWith('/fragments');
+  return typeof path === 'string'
+    && (path === 'fragments' || path === 'response/fragments' || path.endsWith('/fragments'));
 }
 
 function isFragmentsAppendPatch(parsed: any): boolean {
-  return isFragmentsPath(parsed?.p) &&
-    parsed.o === 'APPEND' &&
-    Array.isArray(parsed.v);
+  return isFragmentsPath(parsed?.p)
+    && parsed.o === 'APPEND'
+    && Array.isArray(parsed.v);
 }
 
 function isResponseFragmentsAppendPatch(parsed: any): boolean {
-  // Same as fragments append: relative "fragments" is common as first tokens inside BATCH.
   return isFragmentsAppendPatch(parsed);
 }
 
@@ -279,12 +521,7 @@ function extractFragmentText(fragment: unknown): string | null {
   return null;
 }
 
-
-/**
- * Stateful assembler for DeepSeek response patches.
- * SET replaces fragment content (emitting only the new suffix when cumulative);
- * APPEND always appends. Prevents both opening loss and SET duplication.
- */
+/** Stateful DeepSeek response patch assembler that avoids cumulative SET duplication. */
 export class ResponseTextAssembler {
   private content = '';
 
@@ -292,36 +529,25 @@ export class ResponseTextAssembler {
     return this.content;
   }
 
-  /** Apply one parsed SSE data object; returns newly visible delta for streaming. */
   apply(parsed: unknown): string {
-    const ops = flattenResponseTextOps(parsed);
+    const operations = flattenResponseTextOps(parsed);
     let delta = '';
-    for (const op of ops) {
-      if (!op.text) continue;
-      if (op.mode === 'append') {
-        this.content += op.text;
-        delta += op.text;
+    for (const operation of operations) {
+      if (!operation.text) continue;
+      if (operation.mode === 'append') {
+        this.content += operation.text;
+        delta += operation.text;
         continue;
       }
-      // set / replace
-      if (op.text === this.content) continue;
-      if (op.text.startsWith(this.content)) {
-        const extra = op.text.slice(this.content.length);
-        this.content = op.text;
-        delta += extra;
+      if (operation.text === this.content) continue;
+      if (operation.text.startsWith(this.content)) {
+        delta += operation.text.slice(this.content.length);
+        this.content = operation.text;
         continue;
       }
-      if (this.content.startsWith(op.text)) {
-        // Shrink — keep longer already-emitted text for clients that already saw it.
-        continue;
-      }
-      // Non-prefix replace (rare): treat as append of full set when empty, else replace silently for final text.
-      if (!this.content) {
-        this.content = op.text;
-        delta += op.text;
-      } else {
-        this.content = op.text;
-      }
+      if (this.content.startsWith(operation.text)) continue;
+      if (!this.content) delta += operation.text;
+      this.content = operation.text;
     }
     return delta;
   }
@@ -331,34 +557,29 @@ export class ResponseTextAssembler {
   }
 }
 
-type TextOp = { mode: 'append' | 'set'; text: string };
+type TextOperation = { mode: 'append' | 'set'; text: string };
 
-function flattenResponseTextOps(parsed: unknown): TextOp[] {
+function flattenResponseTextOps(parsed: unknown): TextOperation[] {
   if (!parsed || typeof parsed !== 'object') return [];
   const value = parsed as Record<string, unknown>;
 
   if (value.o === 'BATCH' && Array.isArray(value.v)) {
     return value.v.flatMap((item) => flattenResponseTextOps(item));
   }
-
-  // Bare string append (DeepSeek shorthand)
   if (!value.p && typeof value.v === 'string') {
     return [{ mode: 'append', text: value.v }];
   }
-
   if (!value.p && value.v && typeof value.v === 'object' && !Array.isArray(value.v)) {
     const nested = extractTextFromResponseSnapshot(value.v);
     return nested ? [{ mode: 'set', text: nested }] : [];
   }
-
   if (isResponseFragmentsAppendPatch(value)) {
     const text = (value.v as unknown[])
-      .map((frag) => extractFragmentText(frag))
+      .map((fragment) => extractFragmentText(fragment))
       .filter((part): part is string => Boolean(part))
       .join('');
     return text ? [{ mode: 'append', text }] : [];
   }
-
   if (
     (value.p === 'response' || value.p === 'response/fragments')
     && value.v
@@ -367,19 +588,16 @@ function flattenResponseTextOps(parsed: unknown): TextOp[] {
     const nested = extractTextFromResponseSnapshot(
       value.p === 'response/fragments' ? { fragments: value.v } : value.v,
     );
-    if (nested) {
-      const mode = value.o === 'APPEND' ? 'append' : 'set';
-      return [{ mode, text: nested }];
-    }
+    if (nested) return [{ mode: value.o === 'APPEND' ? 'append' : 'set', text: nested }];
   }
-
   if (isResponseTextPatchPath(value.p) && typeof value.v === 'string') {
-    if (value.o === 'SET') return [{ mode: 'set', text: value.v }];
-    // APPEND or missing o → append
-    return [{ mode: 'append', text: value.v }];
+    return [{ mode: value.o === 'SET' ? 'set' : 'append', text: value.v }];
   }
-
   return [];
+}
+
+function createEmptyStreamParseDebug(): DeepSeekStreamParseDebug {
+  return { events: [], finalText: '', rawEvents: [] };
 }
 
 export function isStreamFinishedFromParsed(parsed: any): boolean {
@@ -500,4 +718,44 @@ function readFiniteNumber(value: unknown): number | null {
 function readNonNegativeNumber(value: unknown): number | null {
   const number = readFiniteNumber(value);
   return number !== null && number >= 0 ? number : null;
+}
+
+function collectDeepSeekMessageIds(parsed: unknown, summary: DeepSeekStreamSummary): void {
+  if (!parsed || typeof parsed !== 'object') return;
+  const value = parsed as Record<string, unknown>;
+
+  const responseId = firstMessageId(value.response_message_id, value.responseMessageId);
+  if (responseId !== null) summary.responseMessageId = responseId;
+
+  const requestId = firstMessageId(value.request_message_id, value.requestMessageId);
+  if (requestId !== null) summary.requestMessageId = requestId;
+
+  if (value.o === 'BATCH' && Array.isArray(value.v)) {
+    for (const item of value.v) collectDeepSeekMessageIds(item, summary);
+  }
+
+  if (typeof value.p === 'string') {
+    if (value.p.includes('response_message_id')) {
+      const id = firstMessageId(value.v);
+      if (id !== null) summary.responseMessageId = id;
+    }
+    if (value.p.includes('request_message_id')) {
+      const id = firstMessageId(value.v);
+      if (id !== null) summary.requestMessageId = id;
+    }
+  }
+
+  if (Array.isArray(value.v)) {
+    for (const item of value.v) collectDeepSeekMessageIds(item, summary);
+  } else if (value.v && typeof value.v === 'object') {
+    collectDeepSeekMessageIds(value.v, summary);
+  }
+}
+
+function firstMessageId(...values: unknown[]): number | null {
+  for (const value of values) {
+    const id = normalizeDeepSeekMessageId(value);
+    if (id !== null) return id;
+  }
+  return null;
 }

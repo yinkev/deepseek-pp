@@ -6,7 +6,7 @@ import {
 import type { ToolExecutionRecord } from '../core/types';
 
 describe('inline agent execution policy', () => {
-  it('excludes pending and response-interrupted tool starts', () => {
+  it('keeps incomplete calls as recovery failures but excludes pending starts', () => {
     const completed = makeExecution();
     const pending = makeExecution({ pending: true });
     const interrupted = makeExecution({
@@ -21,7 +21,10 @@ describe('inline agent execution policy', () => {
       },
     });
 
-    expect(selectContinuableToolExecutions([pending, interrupted, completed])).toEqual([completed]);
+    expect(selectContinuableToolExecutions([pending, interrupted, completed])).toEqual([
+      interrupted,
+      completed,
+    ]);
   });
 
   it('preserves released continuation for completed failures and supported providers', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractResponseTextFromParsed,
   ResponseTextAssembler,
-} from '../core/interceptor/sse-parser';
+} from '../core/deepseek/stream-codec';
 
 describe('ResponseTextAssembler', () => {
   it('captures relative BATCH fragment create + append (classic Multi-turn chop)', () => {

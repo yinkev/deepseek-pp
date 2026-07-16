@@ -6,19 +6,29 @@ import { addCustomScenario, getAllScenarios } from '../core/scenario/store';
 import { getAllSkills, replaceAllCustomSkills } from '../core/skill/registry';
 import {
   parseValidatedArray,
-  validateGitHubSkillSource,
-  validateSkillImportSource,
-  validatePreset,
-  validateSkill,
   validateStoredMemory,
 } from '../core/sync/schema';
+import { decodePreset as validatePreset } from '../core/preset/codec';
+import {
+  decodeGitHubSkillSource as validateGitHubSkillSource,
+  decodeSkill as validateSkill,
+  decodeSkillImportSource as validateSkillImportSource,
+} from '../core/skill/codec';
 import type { GitHubSkillSource, LocalSkillSource, Memory, Skill, SystemPromptPreset } from '../core/types';
+import {
+  fetchBundledSkillAsset,
+  getBundledSkillAssetUrl,
+} from './helpers/bundled-skill-assets';
 
 let storage: Record<string, unknown>;
 
 beforeEach(() => {
   storage = {};
+  vi.stubGlobal('fetch', fetchBundledSkillAsset);
   vi.stubGlobal('chrome', {
+    runtime: {
+      getURL: getBundledSkillAssetUrl,
+    },
     storage: {
       local: {
         get: vi.fn(async (key: string | string[] | null | undefined) => {

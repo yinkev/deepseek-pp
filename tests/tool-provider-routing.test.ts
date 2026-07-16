@@ -22,10 +22,16 @@ vi.mock('../core/tool/history', () => ({
   appendToolCallHistory: vi.fn(),
 }));
 
-import { executeMcpToolCall, getMcpToolDescriptors } from '../core/mcp/discovery';
+import {
+  executeMcpToolCall,
+  getMcpToolDescriptors,
+} from '../core/mcp/discovery';
 import { deleteMemory } from '../core/memory/store';
-import { createSandboxToolDescriptors } from '../core/sandbox';
-import { executeRuntimeToolCall, getRuntimeToolDescriptors } from '../core/tool/runtime';
+import { createSandboxToolDescriptors, executeSandboxToolCall } from '../core/sandbox';
+import {
+  executeRuntimeToolCall,
+  getRuntimeToolDescriptors,
+} from './helpers/production-tool-runtime';
 
 describe('tool provider routing', () => {
   beforeEach(() => {
@@ -86,9 +92,13 @@ describe('tool provider routing', () => {
       },
       'en',
       {
-        sandbox: {
-          runtime: sandboxRuntime,
+        injectedProvider: {
           descriptors,
+          execute: (call, _descriptor, { locale }) => executeSandboxToolCall(
+            sandboxRuntime,
+            call,
+            locale,
+          ),
         },
       },
     );
@@ -116,9 +126,13 @@ describe('tool provider routing', () => {
       },
       'en',
       {
-        sandbox: {
-          runtime: sandboxRuntime,
+        injectedProvider: {
           descriptors,
+          execute: (call, _descriptor, { locale }) => executeSandboxToolCall(
+            sandboxRuntime,
+            call,
+            locale,
+          ),
         },
       },
     );
@@ -128,6 +142,95 @@ describe('tool provider routing', () => {
 
     const publicDescriptors = await getRuntimeToolDescriptors('en');
     expect(publicDescriptors.some((descriptor) => descriptor.id === 'local:sandbox:sandbox_run')).toBe(false);
+  });
+
+  it('rejects an injected descriptor sharing a real registry descriptor ID before execution', async () => {
+    vi.mocked(getMcpToolDescriptors).mockResolvedValue([]);
+    const registryDescriptor = (await getRuntimeToolDescriptors('en'))
+      .find((descriptor) => descriptor.id === 'local:memory:memory_delete');
+    expect(registryDescriptor).toBeTruthy();
+    const injectedExecute = vi.fn(async (): Promise<ToolResult> => ({
+      ok: true,
+      summary: 'Injected executor must not run',
+    }));
+    const collidingDescriptor = {
+      ...createSandboxToolDescriptors('en')[0],
+      id: registryDescriptor!.id,
+    };
+
+    await expect(executeRuntimeToolCall(
+      makeCall(registryDescriptor!),
+      {
+        kind: 'trusted',
+        trigger: 'test',
+        requestId: 'request-injected-id-collision',
+        chatSessionId: null,
+      },
+      'en',
+      {
+        injectedProvider: {
+          descriptors: [collidingDescriptor],
+          execute: injectedExecute,
+        },
+      },
+    )).rejects.toMatchObject({ code: 'tool_descriptor_duplicate' });
+    expect(injectedExecute).not.toHaveBeenCalled();
+    expect(deleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('rejects an injected descriptor sharing a real registry invocation name before execution', async () => {
+    vi.mocked(getMcpToolDescriptors).mockResolvedValue([]);
+    const registryDescriptor = (await getRuntimeToolDescriptors('en'))
+      .find((descriptor) => descriptor.id === 'local:memory:memory_delete');
+    expect(registryDescriptor).toBeTruthy();
+    const injectedExecute = vi.fn(async (): Promise<ToolResult> => ({
+      ok: true,
+      summary: 'Injected executor must not run',
+    }));
+    const collidingDescriptor = {
+      ...createSandboxToolDescriptors('en')[0],
+      invocationName: registryDescriptor!.invocationName,
+    };
+
+    await expect(executeRuntimeToolCall(
+      makeSandboxCall(collidingDescriptor),
+      {
+        kind: 'trusted',
+        trigger: 'sidepanel_chat',
+        requestId: 'request-injected-invocation-collision',
+        chatSessionId: null,
+      },
+      'en',
+      {
+        injectedProvider: {
+          descriptors: [collidingDescriptor],
+          execute: injectedExecute,
+        },
+      },
+    )).rejects.toMatchObject({ code: 'tool_invocation_duplicate' });
+    expect(injectedExecute).not.toHaveBeenCalled();
+    expect(deleteMemory).not.toHaveBeenCalled();
+  });
+
+  it('preserves the production local-to-MCP descriptor order', async () => {
+    const descriptor = makeCollidingMcpDescriptor();
+    vi.mocked(getMcpToolDescriptors).mockResolvedValue([descriptor]);
+
+    const descriptors = await getRuntimeToolDescriptors('en');
+
+    expect(descriptors).toEqual(expect.arrayContaining([descriptor]));
+    expect(descriptors.map((item) => item.name)).toEqual([
+      'memory_save',
+      'memory_update',
+      'memory_delete',
+      'web_search',
+      'web_fetch',
+      'artifact_create',
+      'artifact_bundle_create',
+      'skill_draft_create',
+      'memory_import_preview',
+      'memory_delete',
+    ]);
   });
 });
 

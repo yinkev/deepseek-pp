@@ -29,7 +29,7 @@
   <a href="#feature-overview">Feature Overview</a> ·
   <a href="#use-cases">Use Cases</a> ·
   <a href="#installation">Installation</a> ·
-  <a href="#1100-release-highlights">1.10.0 Highlights</a>
+  <a href="#1110-release-highlights">1.11.0 Highlights</a>
 </p>
 
 ## Product Positioning
@@ -46,7 +46,7 @@ Language can follow the browser or be set to English or Simplified Chinese. Deep
 - [Feature Overview](#feature-overview)
 - [Use Cases](#use-cases)
 - [Core Features](#core-features)
-- [1.10.0 Release Highlights](#1100-release-highlights)
+- [1.11.0 Release Highlights](#1110-release-highlights)
 - [Installation](#installation)
 - [Friendly Links](#friendly-links)
 
@@ -299,7 +299,26 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
   <img src="assets/screenshot-sidepanel-automation.png" width="300" alt="Automation task side panel">
 </p>
 
-## 1.10.0 Release Highlights
+## 1.11.0 Release Highlights
+
+1.11.0 completes a PC-browser reliability and compatibility refactor, improving data safety, sync recovery, automation reliability, chat and tool stability, and everyday loading performance.
+
+| Area | Main changes |
+|------|--------------|
+| PC browser support | Official support now covers Chrome, Edge, and Firefox on PC. The Android template, build scripts, and mobile support entry points have been removed, and no Android package is provided. |
+| Data and upgrade compatibility | Memories, Skills, presets, projects, saved items, MCP, automation, usage, and tool history now use clearer version and validation rules while preserving existing storage identities. Corrupt data and unknown future versions fail visibly without silently overwriting the original content. |
+| Sync and automation recovery | Sync uploads publish complete generations, downloads are staged with rollback, and automation gains stronger cancellation, execution-lease, and duplicate-run protection. |
+| Chat and tool stability | Runtime messages, DeepSeek requests, streamed tool calls, MCP transports, and Native Host inputs use stricter boundaries, making reload behavior and failures more predictable. |
+| Everyday performance | High-frequency storage writes are coalesced, page listeners and lifecycles are centrally owned, and side-panel routes, bundled Skill resources, and the Python runtime load on demand. The initial Chat screen bundle is about 23% smaller and the Chat route about 84% smaller. |
+| Permission changes | Chrome and Edge permissions are unchanged. Firefox adds `identity` only for user-approved Google Drive or OneDrive OAuth sign-in. |
+
+<details>
+<summary>Show historical release highlights (1.10.0 - 0.2.0)</summary>
+
+<details>
+<summary>Show 1.10.0 release highlights</summary>
+
+### 1.10.0 Release Highlights
 
 1.10.0 improves local Skill imports and on-demand resource access, making large Skill file status, reader requirements, and recovery guidance clearer while improving MCP proxy parameter accuracy.
 
@@ -313,8 +332,7 @@ npm run shell:install -- --browser chrome --extension-id <extension-id>
 
 Thanks to [@zhangweildlh](https://github.com/zhangweildlh) for reporting the local Skill resource wording issue and providing reproduction material.
 
-<details>
-<summary>Show historical release highlights (1.0.9 - 0.2.0)</summary>
+</details>
 
 <details>
 <summary>Show 1.0.9 release highlights</summary>

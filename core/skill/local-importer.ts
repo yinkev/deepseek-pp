@@ -1,5 +1,5 @@
 import { getMcpToolDescriptors, refreshMcpServerDiscovery } from '../mcp/discovery';
-import { getAllMcpServers, updateMcpServer } from '../mcp/store';
+import { getAllMcpServers, getMcpToolCache, updateMcpServer } from '../mcp/store';
 import { buildShellAllowlistUpgrade, isShellMcpServer } from '../shell';
 import type {
   LocalSkillImportRequest,
@@ -13,12 +13,14 @@ import type {
   Skill,
 } from '../types';
 import type { McpServerConfig } from '../mcp/types';
+import type { LocalStateMutationRunner } from '../persistence/local-state-mutation';
 import type { JsonValue, ToolResult } from '../tool/types';
 import type { ToolCall } from '../tool/types';
 import {
   getAllSkillSources,
-  getSkillLibrary,
-  upsertLocalSkillSource,
+  getSkillCollisionCandidates,
+  stageUpsertLocalSkillSourceAlreadyLocked,
+  type SkillCollisionCandidate,
 } from './registry';
 
 const MAX_SKILL_BYTES = 120_000;
@@ -90,13 +92,15 @@ interface ParsedSkillDoc {
 
 interface ExistingSkillContext {
   occupiedNames: Set<string>;
-  byName: Map<string, Skill>;
-  bySourcePath: Map<string, Skill>;
+  byName: Map<string, SkillCollisionCandidate>;
+  bySourcePath: Map<string, SkillCollisionCandidate>;
 }
 
 export interface LocalSkillImporterDeps {
   executeToolCall(call: ToolCall): Promise<ToolResult>;
 }
+
+export interface LocalSkillImportDeps extends LocalSkillImporterDeps, LocalStateMutationRunner {}
 
 export async function previewLocalSkillSource(
   rootPath: string,
@@ -124,7 +128,7 @@ export async function pickLocalSkillFolder(
 
 export async function importLocalSkillSource(
   request: LocalSkillImportRequest,
-  deps: LocalSkillImporterDeps,
+  deps: LocalSkillImportDeps,
 ): Promise<LocalSkillImportResponse> {
   if (request.selectedPaths.length === 0) {
     throw new Error('Select at least one local Skill before importing.');
@@ -176,7 +180,9 @@ export async function importLocalSkillSource(
       lastCheckedAt: now,
     } : undefined,
   }));
-  const result = await upsertLocalSkillSource(source, incomingSkills);
+  const result = await deps.runLocalStateMutation(() => (
+    stageUpsertLocalSkillSourceAlreadyLocked(source, incomingSkills)
+  ));
 
   return {
     ok: true,
@@ -335,13 +341,13 @@ function loadLocalSkill(
 
 async function createExistingSkillContext(sourceId: string): Promise<ExistingSkillContext> {
   const [skills, sources] = await Promise.all([
-    getSkillLibrary(),
+    getSkillCollisionCandidates(),
     getAllSkillSources(),
   ]);
   const validSourceIds = new Set(sources.map((source) => source.id));
   validSourceIds.add(sourceId);
   const byName = new Map(skills.map((skill) => [skill.name, skill]));
-  const bySourcePath = new Map<string, Skill>();
+  const bySourcePath = new Map<string, SkillCollisionCandidate>();
   for (const skill of skills) {
     if (skill.source === 'remote' && skill.remote && validSourceIds.has(skill.remote.sourceId)) {
       bySourcePath.set(`${skill.remote.sourceId}:${skill.remote.path}`, skill);
@@ -435,9 +441,14 @@ async function executeShellMcpTool(
   payload: Record<string, unknown>,
   deps: LocalSkillImporterDeps,
 ): Promise<ToolResult> {
+  const descriptorId = `mcp:${server.id}:${name}`;
+  const cache = await getMcpToolCache(server.id);
+  if (!cache?.descriptors.some((descriptor) => descriptor.id === descriptorId)) {
+    await refreshMcpServerDiscovery(server.id);
+  }
   const call = {
     name,
-    descriptorId: `mcp:${server.id}:${name}`,
+    descriptorId,
     provider: {
       kind: 'mcp' as const,
       id: server.id,

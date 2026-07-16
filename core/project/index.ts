@@ -12,21 +12,27 @@ export type {
 export { PROJECT_CONTEXT_SCHEMA_VERSION } from './types';
 
 export {
+  createEmptyProjectContextState,
+  decodeCurrentDeepSeekConversation,
+  decodeProjectContext,
+  decodeProjectContextState,
+  decodeProjectConversation,
+} from './codec';
+
+export {
   addConversationToProject,
   bindPendingProjectConversation,
   createProjectContext,
-  deleteProjectContext,
-  deleteProjectContextAndMemories,
   ensureProjectContextByName,
+  stageDeleteProjectContextAndMemoriesAlreadyLocked,
   formatProjectPromptContext,
   getProjectContextState,
+  getProjectContextStateAlreadyLocked,
   getProjectForConversation,
   getProjectPromptContextForConversation,
-  normalizeProjectContextState,
   PROJECT_CONTEXT_STORAGE_KEY,
   refreshProjectConversation,
   removeConversationFromProject,
-  saveProjectContextState,
   setPendingProjectContext,
   updateProjectContext,
 } from './store';

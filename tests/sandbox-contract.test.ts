@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import * as t from '@babel/types';
 import { describe, expect, it } from 'vitest';
 import {
   executeSandboxToolCall,
@@ -12,6 +13,7 @@ import {
   SANDBOX_MESSAGE_TYPES,
   SANDBOX_OFFSCREEN_PORT,
 } from '../core/sandbox';
+import { decodeToolRuntimePayload } from '../core/messaging/tool-runtime-request-codec';
 import type { ToolCall } from '../core/tool/types';
 import {
   SANDBOX_BOUNDARY_REGRESSION_CASES,
@@ -22,6 +24,7 @@ import {
   SANDBOX_NORMALIZATION_CASES,
   SANDBOX_REJECTED_REQUESTS,
 } from './fixtures/runtime-contract/sandbox';
+import { parseTypeScriptSource, walkSourceAst } from './helpers/typescript-source';
 
 const sandboxSources = [
   'core/sandbox/tool.ts',
@@ -244,32 +247,88 @@ describe('sandbox compatibility contract', () => {
     }
   });
 
-  it('normalizes RUN_ARTIFACT_CODE before creating an offscreen document', () => {
-    const background = readFileSync('entrypoints/background.ts', 'utf8');
-    const start = background.indexOf('async function runBrowserSandboxToolResult');
-    const normalize = background.indexOf('normalizeSandboxRunRequest(request)', start);
-    const dispatch = background.indexOf('requestOffscreenSandboxRun(normalizedRequest)', start);
-
-    expect(start).toBeGreaterThan(-1);
-    expect(normalize).toBeGreaterThan(start);
-    expect(dispatch).toBeGreaterThan(normalize);
+  it('normalizes RUN_ARTIFACT_CODE at the typed handler boundary', () => {
+    expect(decodeToolRuntimePayload('RUN_ARTIFACT_CODE', {
+      language: 'javascript',
+      code: 'return 42;',
+    })).toEqual({
+      ok: true,
+      payload: {
+        language: 'javascript',
+        code: 'return 42;',
+        input: undefined,
+        timeoutMs: 5_000,
+      },
+    });
+    expect(decodeToolRuntimePayload('RUN_ARTIFACT_CODE', {
+      language: 'ruby',
+      code: 'puts 42',
+    })).toMatchObject({
+      ok: false,
+      detail: 'language must be javascript, typescript, python, or html',
+    });
   });
 
-  it('sidepanel catalog composition and legacy loops include sandbox and suppress tool XML', () => {
-    const background = readFileSync('entrypoints/background.ts', 'utf8');
-    const sidepanel = readFileSync('core/tool/sidepanel.ts', 'utf8');
-    expect(sidepanel).toContain('export function composeSidepanelChatToolDescriptors');
-    expect(sidepanel).toContain('createSandboxToolDescriptors');
-    expect(background).toContain('composeSidepanelChatToolDescriptors');
-    expect(background).toContain('createSidepanelLegacyToolStream');
-    expect(background).toContain('executeSidepanelToolCalls');
-    // Provider path and DeepSeek legacy prompt path both use the shared composer.
-    expect(background.match(/composeSidepanelChatToolDescriptors\(/g)?.length).toBeGreaterThanOrEqual(2);
-    // Legacy loops must not rebroadcast fullText on the no-tool path.
-    expect(background).not.toMatch(/toolCalls\.length === 0\) \{\s*broadcastChatChunk\(\{ text: fullText/);
+  it('sidepanel catalog composition and provider loops include sandbox and suppress tool XML', () => {
+    const backgroundPath = 'entrypoints/background.ts';
+    const sidepanelPath = 'core/tool/sidepanel.ts';
+    const providerLoopPath = 'core/chat/provider-tool-loop.ts';
+    const background = readFileSync(backgroundPath, 'utf8');
+    const sidepanel = readFileSync(sidepanelPath, 'utf8');
+    const providerLoop = readFileSync(providerLoopPath, 'utf8');
+    const composeCatalog = getFunctionSource(sidepanelPath, sidepanel, 'composeSidepanelChatToolDescriptors');
+    const chatRuntimeService = getVariableSource(backgroundPath, background, 'chatRuntimeService');
+    const submitProviderPrompt = getFunctionSource(backgroundPath, background, 'handleProviderChatSubmitPrompt');
+    const buildDeepSeekPrompt = getFunctionSource(backgroundPath, background, 'buildSidepanelPrompt');
+    const runLoop = getFunctionSource(providerLoopPath, providerLoop, 'runProviderToolLoop');
+    const streamVisibleTurn = getFunctionSource(providerLoopPath, providerLoop, 'streamVisibleProviderTurn');
+    const parseTurn = getFunctionSource(providerLoopPath, providerLoop, 'streamParsedProviderTurn');
+
+    expect(composeCatalog).toContain('createSandboxToolDescriptors(locale)');
+    // Both provider paths pass the shared sandbox-inclusive catalog to their execution loops.
+    expect(submitProviderPrompt).toContain('const toolDescriptors = composeSidepanelChatToolDescriptors(');
+    expect(submitProviderPrompt).toMatch(/runProviderToolLoop\(\{[\s\S]*?toolDescriptors,[\s\S]*?executeTool:/);
+    expect(chatRuntimeService).toContain('buildPrompt: buildSidepanelPrompt');
+    expect(buildDeepSeekPrompt).toContain('const enabledDescriptors = composeSidepanelChatToolDescriptors(');
+    expect(buildDeepSeekPrompt).toContain('toolDescriptors: enabledDescriptors,');
+    expect(buildDeepSeekPrompt).toContain('return { augmented, enabledDescriptors };');
+    // Raw assistant text drives call extraction, while the returned final text follows stripped output.
+    expect(runLoop).toContain('streamParsedProviderTurn(input, prompt, session, attachments)');
+    expect(runLoop).toContain('finalVisibleText: loop.turn.visibleText');
+    expect(parseTurn).toContain('calls: extractToolCalls(turn.assistantText');
+    expect(parseTurn).toContain('visibleText: stripToolCalls(turn.assistantText');
+    expect(streamVisibleTurn).toContain('const accumulator = createStreamingToolTextAccumulator(input.toolDescriptors);');
+    expect(streamVisibleTurn).toContain('emitGrowth(accumulator.append(text));');
+    expect(streamVisibleTurn).toContain('emitGrowth(accumulator.flush());');
   });
 
 });
+
+function getFunctionSource(path: string, source: string, name: string): string {
+  const program = parseTypeScriptSource(path, source);
+  const ranges: Array<{ start: number; end: number }> = [];
+  walkSourceAst(program, (node) => {
+    if (!t.isFunctionDeclaration(node) || node.id?.name !== name) return;
+    if (typeof node.start !== 'number' || typeof node.end !== 'number') return;
+    ranges.push({ start: node.start, end: node.end });
+  });
+  const range = ranges[0];
+  if (!range) throw new Error(`Function ${name} not found in ${path}`);
+  return source.slice(range.start, range.end);
+}
+
+function getVariableSource(path: string, source: string, name: string): string {
+  const program = parseTypeScriptSource(path, source);
+  const ranges: Array<{ start: number; end: number }> = [];
+  walkSourceAst(program, (node) => {
+    if (!t.isVariableDeclarator(node) || !t.isIdentifier(node.id, { name })) return;
+    if (typeof node.start !== 'number' || typeof node.end !== 'number') return;
+    ranges.push({ start: node.start, end: node.end });
+  });
+  const range = ranges[0];
+  if (!range) throw new Error(`Variable ${name} not found in ${path}`);
+  return source.slice(range.start, range.end);
+}
 
 function sandboxCall(name: string, payload: Record<string, unknown>): ToolCall {
   return {

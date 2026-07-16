@@ -1,5 +1,36 @@
 import { PROJECT_V1_STATE, PROJECT_V2_STATE } from './project';
-import { SAVED_ITEMS_V1_STATE } from './saved-items';
+import { SAVED_ITEMS_REJECTED_STATES, SAVED_ITEMS_V1_STATE } from './saved-items';
+
+export const SYNC_CONFIG_STORAGE_FIXTURES = {
+  providerlessWebdavV0: {
+    url: 'https://dav.contract.test/root',
+    username: 'contract-user',
+    password: 'contract-password',
+    remotePath: 'DeepSeekPP',
+    lastSyncAt: null,
+    additiveField: { preserve: true },
+  },
+  gdriveV1: {
+    provider: 'gdrive',
+    clientId: 'contract-client',
+    clientSecret: 'contract-secret',
+    refreshToken: 'contract-refresh',
+    lastSyncAt: 1_700_000_000_000,
+    schemaVersion: 1,
+    revision: 9,
+    additiveField: { preserve: true },
+  },
+  future: {
+    provider: 'webdav',
+    url: 'https://dav.contract.test/root',
+    username: 'contract-user',
+    password: 'contract-password',
+    remotePath: 'DeepSeekPP',
+    lastSyncAt: null,
+    schemaVersion: 99,
+    revision: 10,
+  },
+} as const;
 
 export const SYNC_MEMORY_RECORD = {
   id: 77,
@@ -14,6 +45,14 @@ export const SYNC_MEMORY_RECORD = {
   updatedAt: 610,
   accessCount: 3,
   lastAccessedAt: 620,
+} as const;
+
+export const SYNC_MEMORY_MISSING_SCOPE_ADDITIVE_RECORD = {
+  ...SYNC_MEMORY_RECORD,
+  id: 78,
+  syncId: 'sync-remote-78',
+  description: '',
+  remoteAdditiveField: { preserve: true },
 } as const;
 
 export const SYNC_SKILL = {
@@ -145,17 +184,17 @@ export const SYNC_LOCAL_APPLY_JOURNAL_V1_FIXTURE = {
   },
 } as const;
 
-export const SYNC_CURRENT_GAPS = [
+export const SYNC_VERSIONING_FIXTURES = [
   {
-    name: 'released project v1 sync state is rejected instead of migrated',
+    name: 'released project v1 sync state migrates losslessly',
     file: 'project-context.json',
     content: JSON.stringify(PROJECT_V1_STATE),
-    target: 'migrate-v1-without-overwrite-after-T3.3',
+    expected: 'lossless-migration',
   },
   {
-    name: 'explicit future saved-items sync state is rejected while the local decoder downgrades it',
+    name: 'explicit future saved-items sync state is rejected everywhere',
     file: 'saved-items.json',
-    content: JSON.stringify({ schemaVersion: 2, items: SAVED_ITEMS_V1_STATE.items }),
-    target: 'unify-future-version-rejection-after-T3.3',
+    content: JSON.stringify(SAVED_ITEMS_REJECTED_STATES.future),
+    expected: 'reject-without-overwrite',
   },
 ] as const;

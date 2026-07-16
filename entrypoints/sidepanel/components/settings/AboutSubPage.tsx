@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '../../i18n';
 import { SettingsSection } from './primitives';
-import type { SettingsState } from './useSettingsState';
+import type { SettingsState } from '../../controllers/useSettingsController';
+import { sidepanelRuntimeClient } from '../../runtime-client';
 
 interface BridgeStatus {
   threadCount: number;
@@ -23,10 +24,10 @@ export default function AboutSubPage({ state }: { state: SettingsState }) {
 
   useEffect(() => {
     let cancelled = false;
-    chrome.runtime
-      .sendMessage({ type: 'GET_CURSOR_BRIDGE_STATUS' })
-      .then((res: { ok?: boolean; status?: BridgeStatus } | undefined) => {
-        if (!cancelled && res?.ok && res.status) setBridge(res.status);
+    sidepanelRuntimeClient
+      .request({ type: 'GET_CURSOR_BRIDGE_STATUS' })
+      .then((res) => {
+        if (!cancelled) setBridge(res.status);
       })
       .catch(() => {});
     return () => {

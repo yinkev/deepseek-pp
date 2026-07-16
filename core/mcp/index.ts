@@ -1,5 +1,6 @@
 export {
   MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants';
 
 export {
@@ -14,8 +15,6 @@ export type {
 export {
   McpProtocolError,
   callMcpTool,
-  createMcpDescriptorId,
-  createMcpInvocationName,
   createMcpNotification,
   createMcpProtocolClient,
   createMcpRequest,
@@ -24,6 +23,11 @@ export {
   normalizeMcpToolDescriptor,
   unwrapMcpResponse,
 } from './client';
+
+export {
+  createMcpDescriptorId,
+  createMcpInvocationName,
+} from './descriptor-identity';
 
 export {
   ensureMcpServerDiscovery,
@@ -45,6 +49,16 @@ export {
   sanitizeMcpServerConfig,
   updateMcpServer,
 } from './store';
+
+export {
+  McpStorageContractError,
+  createEmptyMcpStorageState,
+  decodeMcpStorageState,
+  encodeMcpStorageState,
+  MCP_STORAGE_KEY,
+  MCP_STORAGE_VERSION,
+  type McpStorageContractErrorCode,
+} from './storage-codec';
 
 export {
   McpTransportError,

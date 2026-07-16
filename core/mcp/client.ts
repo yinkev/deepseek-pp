@@ -22,7 +22,11 @@ import type {
   McpToolDefinition,
 } from './types';
 import { getExtensionVersion } from '../version';
-import { MCP_PROTOCOL_VERSION } from './constants';
+import {
+  MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
+} from './constants';
+import { createMcpDescriptorId, createMcpInvocationName } from './descriptor-identity';
 
 const CLIENT_NAME = 'DeepSeek++';
 
@@ -80,6 +84,39 @@ export async function initializeMcpServer(
     },
   );
   const result = unwrapMcpResponse(response, 'mcp_initialize_failed');
+  const rawResult = result as unknown as Record<string, unknown>;
+  const hasAdvertisedProtocolVersion = Object.prototype.hasOwnProperty.call(
+    rawResult,
+    'protocolVersion',
+  );
+  const advertisedProtocolVersion = rawResult.protocolVersion;
+  const protocolVersion = hasAdvertisedProtocolVersion
+    ? advertisedProtocolVersion
+    : MCP_PROTOCOL_VERSION;
+  if (
+    typeof protocolVersion !== 'string' ||
+    !MCP_SUPPORTED_PROTOCOL_VERSIONS.includes(
+      protocolVersion as typeof MCP_SUPPORTED_PROTOCOL_VERSIONS[number],
+    )
+  ) {
+    throw new McpProtocolError(
+      'mcp_protocol_version_unsupported',
+      'Unsupported MCP protocol version.',
+      {
+        details: {
+          requestedProtocolVersion: MCP_PROTOCOL_VERSION,
+          advertisedProtocolVersion,
+        },
+      },
+    );
+  }
+  const initialization = {
+    protocolVersion,
+    capabilities: jsonRecordValue(rawResult.capabilities),
+    serverInfo: clientInfoValue(rawResult.serverInfo),
+    instructions: stringValue(rawResult.instructions),
+  };
+  transport.commitInitialization?.(initialization);
 
   if (transport.notify) {
     await transport.notify(createMcpNotification('notifications/initialized'), {
@@ -88,13 +125,7 @@ export async function initializeMcpServer(
     });
   }
 
-  const rawResult = result as unknown as Record<string, unknown>;
-  return {
-    protocolVersion: stringValue(rawResult.protocolVersion) || MCP_PROTOCOL_VERSION,
-    capabilities: jsonRecordValue(rawResult.capabilities),
-    serverInfo: clientInfoValue(rawResult.serverInfo),
-    instructions: stringValue(rawResult.instructions),
-  };
+  return initialization;
 }
 
 export async function listMcpTools(
@@ -103,6 +134,8 @@ export async function listMcpTools(
   options?: { signal?: AbortSignal },
 ): Promise<ToolDescriptor[]> {
   const tools: ToolDescriptor[] = [];
+  const maxToolCount = Math.max(0, Math.floor(server.limits.maxToolCount));
+  if (maxToolCount === 0) return tools;
   let cursor: string | undefined;
 
   do {
@@ -116,9 +149,12 @@ export async function listMcpTools(
     );
     const result = unwrapMcpResponse(response, 'mcp_tools_list_failed') as McpListToolsResult;
     const nextTools = Array.isArray(result.tools) ? result.tools : [];
-    tools.push(...nextTools.map((tool) => normalizeMcpToolDescriptor(server, tool)));
+    const remaining = maxToolCount - tools.length;
+    tools.push(...nextTools
+      .slice(0, remaining)
+      .map((tool) => normalizeMcpToolDescriptor(server, tool)));
     cursor = typeof result.nextCursor === 'string' && result.nextCursor ? result.nextCursor : undefined;
-  } while (cursor && tools.length < server.limits.maxToolCount);
+  } while (cursor && tools.length < maxToolCount);
 
   return applyMcpToolPolicy(tools, server);
 }
@@ -278,14 +314,6 @@ export function unwrapMcpResponse<TResult>(
   return response.result as TResult;
 }
 
-export function createMcpDescriptorId(serverId: string, toolName: string): string {
-  return `mcp:${serverId}:${toolName}`;
-}
-
-export function createMcpInvocationName(serverId: string, toolName: string): string {
-  return `mcp_${sanitizeName(serverId)}_${sanitizeName(toolName)}`.slice(0, 96);
-}
-
 function getMcpToolResultSummary(call: ToolCall, result: McpCallToolResult): string {
   if (call.name === 'python_exec') return result.isError ? '工具返回错误' : '工具已执行';
   return result.isError ? 'MCP 工具返回错误' : 'MCP 工具已执行';
@@ -302,14 +330,14 @@ function normalizeMcpToolResult(
   const output = normalizeToolOutput(result);
   const rendered = stringifyOutput(output);
   const limit = maxResultBytes ?? server.limits.maxResultBytes;
-  const truncated = rendered.length > limit;
-  const detail = truncated ? rendered.slice(0, limit) : rendered;
-  const errorMessage = result.isError ? extractMcpErrorMessage(result, detail) : undefined;
+  const detailSource = result.isError ? extractMcpErrorMessage(result, rendered) : rendered;
+  const detailProjection = truncateUtf8ToByteLimit(detailSource, limit);
+  const detail = detailProjection.value;
 
   return {
     ok: result.isError !== true,
     summary: getMcpToolResultSummary(call, result),
-    detail: result.isError ? (errorMessage || detail) : detail,
+    detail,
     name: call.name,
     provider: call.provider,
     descriptorId: call.descriptorId,
@@ -317,11 +345,11 @@ function normalizeMcpToolResult(
     startedAt,
     completedAt,
     durationMs: completedAt - startedAt,
-    truncated,
+    truncated: detailProjection.truncated,
     error: result.isError
       ? {
         code: 'mcp_tool_result_error',
-        message: errorMessage || detail || 'MCP tool returned isError=true.',
+        message: detail || 'MCP tool returned isError=true.',
         retryable: false,
         details: {
           externalOutcome: 'confirmed',
@@ -330,6 +358,23 @@ function normalizeMcpToolResult(
       }
       : undefined,
   };
+}
+
+function truncateUtf8ToByteLimit(value: string, maxBytes: number): { value: string; truncated: boolean } {
+  const limit = Number.isFinite(maxBytes) ? Math.max(0, Math.floor(maxBytes)) : 0;
+  const bytes = new TextEncoder().encode(value);
+  if (bytes.byteLength <= limit) return { value, truncated: false };
+
+  let boundary = limit;
+  while (boundary > 0 && isUtf8ContinuationByte(bytes[boundary])) boundary -= 1;
+  return {
+    value: new TextDecoder().decode(bytes.subarray(0, boundary)),
+    truncated: true,
+  };
+}
+
+function isUtf8ContinuationByte(value: number | undefined): boolean {
+  return value !== undefined && (value & 0b1100_0000) === 0b1000_0000;
 }
 
 function extractMcpErrorMessage(result: McpCallToolResult, fallback: string): string {
@@ -437,10 +482,4 @@ function stringifyOutput(value: JsonValue): string {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
-}
-
-function sanitizeName(value: string): string {
-  const normalized = value.trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
-  const safe = normalized || 'tool';
-  return /^[A-Za-z_]/.test(safe) ? safe : `t_${safe}`;
 }

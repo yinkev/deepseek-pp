@@ -1,3 +1,5 @@
+import type { OfficialApiChatConfig } from './official-api-config-contract';
+
 export type ProviderId = 'deepseek-web' | 'qwen-web';
 
 export interface ChatModelRef {
@@ -37,6 +39,7 @@ export interface ProviderTurnInput {
   prompt: string;
   thinkingEnabled: boolean;
   attachments?: ProviderAttachment[];
+  officialApiConfig?: OfficialApiChatConfig;
   signal?: AbortSignal;
 }
 
@@ -56,6 +59,6 @@ export interface ChatProviderAdapter {
   readonly providerId: ProviderId;
   getStatus(): Promise<ProviderStatus>;
   listModels(): ProviderModel[];
-  createSession(model: ChatModelRef): Promise<ProviderSession>;
+  createSession(model: ChatModelRef, signal?: AbortSignal): Promise<ProviderSession>;
   streamTurn(input: ProviderTurnInput, events: ProviderEvents): Promise<ProviderTurn>;
 }

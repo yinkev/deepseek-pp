@@ -12,6 +12,7 @@ import {
 } from '../core/chat/conversation-store';
 import PromptControlPanel from '../entrypoints/sidepanel/components/PromptControlPanel';
 import LocalSkillImportPanel from '../entrypoints/sidepanel/components/LocalSkillImportPanel';
+import ScenarioManager from '../entrypoints/sidepanel/components/ScenarioManager';
 import ChatPage from '../entrypoints/sidepanel/pages/ChatPage';
 import SavedPage from '../entrypoints/sidepanel/pages/SavedPage';
 
@@ -132,6 +133,188 @@ describe('sidepanel interactions', () => {
     await clickButton('插入到对话');
 
     expect(container.textContent).toContain('插入到对话失败：请先在 chat.deepseek.com 登录，或刷新 DeepSeek 页面后重试。');
+  });
+
+  it('shows saved-item repository failures instead of rendering a fake empty state', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_SAVED_ITEMS') {
+        return { ok: false, error: 'savedItems.schemaVersion is not supported' };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(SavedPage));
+    await flushPromises();
+
+    expect(container.textContent)
+      .toContain('保存项操作失败：savedItems.schemaVersion is not supported');
+    expect(container.textContent).not.toContain('暂无保存项');
+  });
+
+  it('retains the last valid saved item when an update payload is corrupt', async () => {
+    const item = {
+      id: 'saved-1',
+      syncId: 'sync-1',
+      kind: 'snippet',
+      title: 'Keep confirmed item',
+      content: 'Last confirmed content.',
+      tags: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const sendMessage = vi.fn(async (message: { type: string }) => (
+      message.type === 'GET_SAVED_ITEMS' ? [item] : null
+    ));
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(SavedPage));
+    await flushPromises();
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'SAVED_ITEMS_UPDATED',
+        savedItems: [{ id: 'corrupt' }],
+      }));
+    });
+
+    expect(container.textContent).toContain('Keep confirmed item');
+    expect(container.textContent).toContain('savedItemsUpdate[0]');
+    expect(container.textContent).not.toContain('暂无保存项');
+  });
+
+  it('does not let an older saved-item read replace a newer update event', async () => {
+    let resolveInitialRead!: (value: unknown) => void;
+    const initialRead = new Promise<unknown>((resolve) => {
+      resolveInitialRead = resolve;
+    });
+    const sendMessage = vi.fn((message: { type: string }) => (
+      message.type === 'GET_SAVED_ITEMS' ? initialRead : Promise.resolve(null)
+    ));
+    stubChrome(sendMessage);
+    await renderElement(React.createElement(SavedPage));
+
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'SAVED_ITEMS_UPDATED',
+        savedItems: [{
+          id: 'saved-new',
+          syncId: 'sync-new',
+          kind: 'snippet',
+          title: 'Newer saved item',
+          content: 'Newer content.',
+          tags: [],
+          createdAt: 2,
+          updatedAt: 2,
+        }],
+      }));
+    });
+    expect(container.textContent).toContain('Newer saved item');
+
+    await act(async () => {
+      resolveInitialRead([{
+        id: 'saved-old',
+        syncId: 'sync-old',
+        kind: 'snippet',
+        title: 'Older saved item',
+        content: 'Older content.',
+        tags: [],
+        createdAt: 1,
+        updatedAt: 1,
+      }]);
+      await initialRead;
+    });
+    expect(container.textContent).toContain('Newer saved item');
+    expect(container.textContent).not.toContain('Older saved item');
+  });
+
+  it('keeps a saved item visible when repository deletion fails', async () => {
+    const item = {
+      id: 'saved-1',
+      syncId: 'sync-1',
+      kind: 'snippet',
+      title: 'Keep me',
+      content: 'Do not remove this item on failure.',
+      tags: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_SAVED_ITEMS') return [item];
+      if (message.type === 'DELETE_SAVED_ITEM') {
+        return { ok: false, error: 'delete blocked' };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(SavedPage));
+    await flushPromises();
+    await clickButtonByLabel('删除');
+    await clickButton('删除');
+    await flushPromises();
+
+    expect(container.textContent).toContain('保存项操作失败：delete blocked');
+    expect(container.textContent).toContain('Keep me');
+  });
+
+  it('shows scenario repository failures instead of silently loading built-ins', async () => {
+    const sendMessage = vi.fn(async () => ({
+      ok: false,
+      error: 'scenarios.schemaVersion is not supported',
+    }));
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ScenarioManager));
+    await flushPromises();
+
+    expect(container.textContent)
+      .toContain('场景操作失败：scenarios.schemaVersion is not supported');
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SCENARIOS_UPDATED',
+      payload: { operation: 'get' },
+    });
+  });
+
+  it('reports a committed Scenario separately when background menu refresh fails', async () => {
+    let scenarios = [{
+      id: 'summarize',
+      label: '总结',
+      template: '总结 {text}',
+      builtIn: true,
+      enabled: true,
+    }];
+    const sendMessage = vi.fn(async (message: {
+      type: string;
+      payload?: { operation?: string; scenario?: typeof scenarios[number] };
+    }) => {
+      if (message.payload?.operation === 'get') return { ok: true, scenarios };
+      if (message.payload?.operation === 'save' && message.payload.scenario) {
+        scenarios = [message.payload.scenario];
+        return { ok: false, error: 'menu offline' };
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ScenarioManager));
+    await flushPromises();
+    const firstToggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(firstToggle).toBeTruthy();
+    await act(async () => firstToggle?.click());
+    await flushPromises();
+
+    expect(scenarios[0])
+      .toMatchObject({ id: 'summarize', enabled: false });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'SCENARIOS_UPDATED',
+      payload: {
+        operation: 'save',
+        scenario: expect.objectContaining({ id: 'summarize', enabled: false }),
+      },
+    });
+    expect(container.textContent)
+      .toContain('场景已保存，但后台右键菜单刷新失败：menu offline');
+    expect(container.textContent).not.toContain('场景操作失败：menu offline');
   });
 
   it('persists prompt control select changes instead of reverting to defaults', async () => {
@@ -482,6 +665,191 @@ describe('sidepanel interactions', () => {
     expect((submit?.payload as { logicalConversationId?: string }).logicalConversationId).toBeTruthy();
   });
 
+  it('ignores provider chunks targeted at another sidepanel instance', async () => {
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') return providerCatalog();
+      if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    await enterText('给 DeepSeek++ 发送消息', 'route this turn');
+    await clickButtonByLabel('发送');
+    const submit = sendMessage.mock.calls.find(
+      ([message]) => message.type === 'CHAT_SUBMIT_PROMPT',
+    )?.[0];
+    const payload = submit?.payload as {
+      logicalConversationId: string;
+      streamTargetId: string;
+    };
+
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        logicalConversationId: payload.logicalConversationId,
+        streamTargetId: 'another-sidepanel',
+        text: 'wrong panel text',
+        done: false,
+      }));
+    });
+    expect(container.textContent).not.toContain('wrong panel text');
+
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        logicalConversationId: payload.logicalConversationId,
+        streamTargetId: payload.streamTargetId,
+        text: 'correct panel text',
+        done: false,
+      }));
+    });
+    expect(container.textContent).toContain('correct panel text');
+  });
+
+  it('ignores a stale provider-selection failure after the latest selection succeeds', async () => {
+    const first = deferred<{ ok: true; model: { providerId: 'qwen-web'; modelId: 'qwen3.7-plus' } }>();
+    const second = deferred<{ ok: true; model: { providerId: 'deepseek-web'; modelId: 'deepseek-web' } }>();
+    let selectionRequest = 0;
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') return providerCatalog();
+      if (message.type === 'SET_ACTIVE_CHAT_MODEL') {
+        selectionRequest += 1;
+        return selectionRequest === 1 ? first.promise : second.promise;
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="提供商和模型"]')!;
+    await act(async () => {
+      setSelectValue(providerSelect, 'qwen-web/qwen3.7-plus');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      setSelectValue(providerSelect, 'deepseek-web/deepseek-web');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    second.resolve({
+      ok: true,
+      model: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+    });
+    await flushPromises();
+    first.reject(new Error('stale provider failure'));
+    await flushPromises();
+
+    expect(providerSelect.value).toBe('deepseek-web/deepseek-web');
+    expect(container.textContent).not.toContain('stale provider failure');
+  });
+
+  it('serializes stale success before rolling back the latest failed selection', async () => {
+    const first = deferred<{ ok: true; model: { providerId: 'qwen-web'; modelId: 'qwen3.7-plus' } }>();
+    const second = deferred<{ ok: true; model: { providerId: 'deepseek-web'; modelId: 'deepseek-web' } }>();
+    let selectionRequest = 0;
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') return providerCatalog();
+      if (message.type === 'SET_ACTIVE_CHAT_MODEL') {
+        selectionRequest += 1;
+        return selectionRequest === 1 ? first.promise : second.promise;
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    const providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="提供商和模型"]')!;
+    await act(async () => {
+      setSelectValue(providerSelect, 'qwen-web/qwen3.7-plus');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      setSelectValue(providerSelect, 'deepseek-web/deepseek-web');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    first.resolve({
+      ok: true,
+      model: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+    });
+    await flushPromises();
+    second.reject(new Error('latest provider failure'));
+    await flushPromises();
+
+    expect(providerSelect.value).toBe('qwen-web/qwen3.7-plus');
+    expect(container.textContent).toContain('latest provider failure');
+  });
+
+  it('serializes provider selection across unmount and remount', async () => {
+    const first = deferred<{ ok: true; model: { providerId: 'qwen-web'; modelId: 'qwen3.7-plus' } }>();
+    const second = deferred<{ ok: true; model: { providerId: 'deepseek-web'; modelId: 'deepseek-web' } }>();
+    let selectionRequest = 0;
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'GET_CHAT_CATALOG') return providerCatalog();
+      if (message.type === 'SET_ACTIVE_CHAT_MODEL') {
+        selectionRequest += 1;
+        return selectionRequest === 1 ? first.promise : second.promise;
+      }
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    let providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="提供商和模型"]')!;
+    await act(async () => {
+      setSelectValue(providerSelect, 'qwen-web/qwen3.7-plus');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      root?.unmount();
+      root = null;
+    });
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+    providerSelect = container.querySelector<HTMLSelectElement>('select[aria-label="提供商和模型"]')!;
+    await act(async () => {
+      setSelectValue(providerSelect, 'deepseek-web/deepseek-web');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(selectionRequest).toBe(1);
+
+    first.resolve({
+      ok: true,
+      model: { providerId: 'qwen-web', modelId: 'qwen3.7-plus' },
+    });
+    await flushPromises();
+    expect(selectionRequest).toBe(2);
+    second.resolve({
+      ok: true,
+      model: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+    });
+    await flushPromises();
+
+    expect(providerSelect.value).toBe('deepseek-web/deepseek-web');
+  });
+
   it('restores the durable provider transcript and reuses its logical conversation id', async () => {
     chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = {
       schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
@@ -550,7 +918,6 @@ describe('sidepanel interactions', () => {
       },
     });
   });
-
   it('persists streamed provider messages after the debounce', async () => {
     vi.useFakeTimers();
     const sendMessage = vi.fn(async (message: { type: string }) => {
@@ -613,7 +980,6 @@ describe('sidepanel interactions', () => {
       ],
     });
   });
-
   it('replaces the durable transcript when a new session is confirmed', async () => {
     chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] = {
       schemaVersion: ACTIVE_CHAT_CONVERSATION_SCHEMA_VERSION,
@@ -650,7 +1016,6 @@ describe('sidepanel interactions', () => {
     expect((chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY] as { logicalConversationId: string }).logicalConversationId)
       .not.toBe('conversation-old');
   });
-
   it('replaces non-monotonic Qwen thinking summaries instead of duplicating them', async () => {
     const qwenModel = { providerId: 'qwen-web', modelId: 'qwen3.7-plus' } as const;
     const sendMessage = vi.fn(async (message: { type: string }) => {
@@ -697,6 +1062,51 @@ describe('sidepanel interactions', () => {
 
     const thinking = container.querySelector('.ds-chat-thinking div');
     expect(thinking?.textContent).toBe('Revised');
+  });
+
+  it('scrolls to the updated message height after the lazy rich renderer commits', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return null;
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      return null;
+    });
+    stubChrome(sendMessage);
+
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+
+    const messageList = container.querySelector('.ds-chat-messages') as HTMLDivElement;
+    const scrollAssignments: number[] = [];
+    let scrollTop = 0;
+    Object.defineProperties(messageList, {
+      scrollHeight: {
+        configurable: true,
+        get: () => messageList.querySelector('strong') ? 480 : 240,
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+          scrollAssignments.push(value);
+        },
+      },
+    });
+
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({
+        type: 'CHAT_STREAM_CHUNK',
+        text: 'Hello **world**',
+      }));
+    });
+
+    await vi.waitFor(() => {
+      expect(messageList.querySelector('strong')?.textContent).toBe('world');
+    });
+    expect(scrollAssignments).toContain(480);
+    expect(scrollTop).toBe(480);
   });
 
   it('uploads a vision image attachment and submits its file reference', async () => {
@@ -775,17 +1185,30 @@ describe('sidepanel interactions', () => {
       if (message.type === 'GET_CHAT_CATALOG') {
         return {
           ok: true,
-          models: [{
-            ref: qwenModel,
-            label: 'Qwen 3.7 Plus',
-            supportsImages: true,
-            imageUploadMaxBytes: 20 * 1024 * 1024,
-          }],
+          models: [
+            {
+              ref: qwenModel,
+              label: 'Qwen 3.7 Plus',
+              supportsImages: true,
+              imageUploadMaxBytes: 20 * 1024 * 1024,
+            },
+            {
+              ref: { providerId: 'deepseek-web', modelId: 'deepseek-web' },
+              label: 'DeepSeek',
+              supportsImages: false,
+            },
+          ],
           activeModel: qwenModel,
-          statuses: [{ providerId: 'qwen-web', available: true }],
+          statuses: [
+            { providerId: 'qwen-web', available: true },
+            { providerId: 'deepseek-web', available: true },
+          ],
         };
       }
       if (message.type === 'UPLOAD_CHAT_IMAGE') return { ok: true, attachment: providerAttachment };
+      if (message.type === 'SET_ACTIVE_CHAT_MODEL') {
+        return { ok: false, error: 'provider selection failed' };
+      }
       if (message.type === 'CHAT_SUBMIT_PROMPT') return { ok: true };
       return null;
     });
@@ -824,6 +1247,18 @@ describe('sidepanel interactions', () => {
     });
     expect(container.textContent).toContain('已添加');
 
+    const providerSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="提供商和模型"]',
+    )!;
+    await act(async () => {
+      setSelectValue(providerSelect, 'deepseek-web/deepseek-web');
+      providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flushPromises();
+    expect(providerSelect.value).toBe('qwen-web/qwen3.7-plus');
+    expect(container.textContent).toContain('provider selection failed');
+    expect(container.textContent).toContain('已添加');
+
     await enterText('给 DeepSeek++ 发送消息', '描述这张图');
     await clickButtonByLabel('发送');
 
@@ -844,7 +1279,6 @@ describe('sidepanel interactions', () => {
     root = null;
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:preview');
   });
-
   it('fails closed when the durable conversation record is corrupt and does not overwrite storage', async () => {
     const corrupt = {
       schemaVersion: 99,
@@ -878,7 +1312,6 @@ describe('sidepanel interactions', () => {
     expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(corrupt);
     expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
   });
-
   it('fails closed on nested-corrupt messages without normalizing or autosaving', async () => {
     const nestedCorrupt = {
       schemaVersion: 1,
@@ -911,7 +1344,6 @@ describe('sidepanel interactions', () => {
     expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(nestedCorrupt);
     expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
   });
-
   it('fails closed on nested-corrupt attachments without autosaving', async () => {
     const nestedCorrupt = {
       schemaVersion: 1,
@@ -946,7 +1378,6 @@ describe('sidepanel interactions', () => {
     expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(nestedCorrupt);
     expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
   });
-
   it('keeps New Session disabled while conversation load is still pending', async () => {
     const corrupt = {
       schemaVersion: 99,
@@ -992,7 +1423,6 @@ describe('sidepanel interactions', () => {
     expect(chromeStorage[ACTIVE_CHAT_CONVERSATION_STORAGE_KEY]).toEqual(corrupt);
     expect((chrome.storage.local.set as ReturnType<typeof vi.fn>).mock.calls.length).toBe(setCallsBefore);
   });
-
   it('hides DeepSeek sign-in banner while auth is still loading', async () => {
     let resolveAuth: ((value: { available: boolean; provider: string }) => void) | undefined;
     const sendMessage = vi.fn(async (message: { type: string }) => {
@@ -1029,7 +1459,6 @@ describe('sidepanel interactions', () => {
     await flushPromises();
     expect(container.textContent).not.toContain('先登录一次');
   });
-
   it('prefers DeepSeek authStatus over a stale unavailable catalog status', async () => {
     const sendMessage = vi.fn(async (message: { type: string }) => {
       if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
@@ -1058,7 +1487,6 @@ describe('sidepanel interactions', () => {
     expect(container.textContent).not.toContain('Sign in to DeepSeek');
     expect(container.querySelector('button[aria-label="发送"]')).toBeTruthy();
   });
-
   it('shows DeepSeek sign-in banner only when auth is explicitly unavailable', async () => {
     const sendMessage = vi.fn(async (message: { type: string }) => {
       if (message.type === 'GET_AUTH_STATUS') return { available: false, provider: null };
@@ -1088,7 +1516,6 @@ describe('sidepanel interactions', () => {
       || container.textContent?.includes('Sign in to DeepSeek'),
     ).toBe(true);
   });
-
   it('keeps Qwen catalog availability authoritative', async () => {
     const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
       if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
@@ -1130,6 +1557,43 @@ describe('sidepanel interactions', () => {
       || container.textContent?.includes('先登录一次'),
     ).toBe(true);
   });
+
+  it('waits for new-session acknowledgement before clearing pending chat UI', async () => {
+    let resolveReset!: (value: { ok: true }) => void;
+    const resetAck = new Promise<{ ok: true }>((resolve) => {
+      resolveReset = resolve;
+    });
+    const sendMessage = vi.fn(async (message: { type: string; payload?: unknown }) => {
+      if (message.type === 'GET_AUTH_STATUS') return { available: true, provider: 'deepseek-web' };
+      if (message.type === 'GET_OFFICIAL_API_CHAT_CONFIG') return {};
+      if (message.type === 'GET_MODEL_TYPE') return 'vision';
+      if (message.type === 'GET_VOICE_SETTINGS') return {};
+      if (message.type === 'UPLOAD_DEEPSEEK_IMAGE') {
+        return { ok: true, file: { id: 'file-image-1', fileName: 'shot.png', status: 'SUCCESS' } };
+      }
+      if (message.type === 'CHAT_NEW_SESSION') return resetAck;
+      return null;
+    });
+    stubChrome(sendMessage);
+    stubObjectUrl();
+    stubFileReader('data:image/png;base64,YWJj');
+    await renderElement(React.createElement(ChatPage));
+    await flushPromises();
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const image = new File(['abc'], 'shot.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { value: [image], configurable: true });
+    await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })));
+    await flushPromises();
+    expect(container.textContent).toContain('已添加');
+
+    await clickButtonByLabel('新建会话');
+    expect(container.textContent).toContain('已添加');
+    resolveReset({ ok: true });
+    await flushPromises();
+    expect(container.textContent).not.toContain('已添加');
+  });
+
 });
 
 async function renderElement(element: React.ReactElement) {
@@ -1230,6 +1694,39 @@ function stubObjectUrl() {
     createObjectURL: vi.fn(() => 'blob:preview'),
     revokeObjectURL: vi.fn(),
   }));
+}
+
+function providerCatalog() {
+  return {
+    ok: true as const,
+    models: [
+      {
+        ref: { providerId: 'deepseek-web' as const, modelId: 'deepseek-web' },
+        label: 'DeepSeek',
+        supportsImages: true,
+      },
+      {
+        ref: { providerId: 'qwen-web' as const, modelId: 'qwen3.7-plus' },
+        label: 'Qwen 3.7 Plus',
+        supportsImages: true,
+      },
+    ],
+    activeModel: { providerId: 'deepseek-web' as const, modelId: 'deepseek-web' },
+    statuses: [
+      { providerId: 'deepseek-web' as const, available: true },
+      { providerId: 'qwen-web' as const, available: true },
+    ],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function stubFileReader(dataUrl: string) {

@@ -18,14 +18,23 @@ import type {
 } from '../core/types';
 import { normalizePetConfig } from '../core/pet/config';
 import { pickPetLine, type PetState } from '../core/pet/lines';
-import { createDefaultToolDescriptors, createToolInvocationCatalog } from '../core/tool/invocation';
+import { createToolInvocationCatalog } from '../core/tool/invocation';
+import { createLatestSyncGate, type LatestSyncLease } from '../core/tool/latest-sync';
 import { DEFAULT_PROMPT_INJECTION_SETTINGS, normalizePromptInjectionSettings } from '../core/prompt/settings';
 import { normalizeBackgroundConfig } from '../core/background/config';
+import { decodePersistedMemoryRecord } from '../core/memory/codec';
+import { decodeActivePreset } from '../core/preset/codec';
+import { decodeSkillLibrary } from '../core/skill/codec';
+import { decodeRuntimeResponse, isRuntimeFailure } from '../core/messaging/runtime-response';
 import {
   LEGACY_TOOL_CALLS_OPEN_TAG,
   stripToolCalls,
 } from '../core/interceptor/tool-parser';
-import { augmentRequestBody } from '../core/interceptor/request-augmentation';
+import {
+  augmentDecodedRequestBody,
+  decodeDeepSeekRequestBody,
+  type DeepSeekRequestBody,
+} from '../core/interceptor/request-augmentation';
 import {
   PAGE_CLEANUP_SANDBOX_TOOL_NAMES,
   containsInternalPromptMarker,
@@ -36,7 +45,8 @@ import {
 } from '../core/prompt';
 import { createRestoredArtifactToolResult } from '../core/artifact';
 import type { ResponseCompletePayload, ResponseTokenSpeedPayload } from '../core/interceptor/fetch-hook';
-import { shouldIgnoreEmptyTokenSpeedProgress } from '../core/interceptor/token-speed';
+import { shouldIgnoreEmptyTokenSpeedProgress } from '../core/deepseek/stream-metrics';
+import { createUsageProgressWriteCoordinator } from '../core/usage/progress-write-coordinator';
 import { runInlineAgentLoop } from '../core/inline-agent/loop';
 import {
   INCOMPLETE_TOOL_CALL_ERROR_CODE,
@@ -60,6 +70,7 @@ import type {
 } from '../core/inline-agent/types';
 import {
   injectInlineAgentStyles,
+  removeInlineAgentStyles,
   createAgentContainer,
   createAgentStepElement,
   updateStepStreamText,
@@ -92,6 +103,17 @@ import {
   normalizeRestoredToolExecution,
   sanitizeToolExecutionForRestoreStorage,
 } from '../core/tool/execution-restore';
+import type {
+  PersistedToolExecutionBlock as PersistedToolBlock,
+} from '../core/tool/execution-block-codec';
+import {
+  readPersistedToolExecutionBlocks,
+  upsertPersistedToolExecutionBlock,
+} from '../core/tool/execution-block-store';
+import {
+  readPersistedInlineAgentTraces,
+  upsertPersistedInlineAgentTrace,
+} from '../core/inline-agent/trace-store';
 import {
   chainExternalizedPayloadWrite,
   isExternalizedToolPayloadCall,
@@ -104,21 +126,12 @@ import { PendingRequestRegistry } from '../core/tool/pending-request-registry';
 import { PendingAuthorizationCorrelations } from '../core/tool/pending-authorization-correlations';
 import { shouldRequestWebFetchPermission } from '../core/tool/web-fetch-permission';
 import {
-  BRIDGE_HANDSHAKE_TYPES,
-  BRIDGE_READY_TYPE,
-  BRIDGE_SOURCES,
-  createBridgeSessionController,
-  isBridgeHandshakeMessage,
-  validateBridgeMessage,
-  type BridgeSessionController,
-  type BridgeSessionContext,
-} from '../core/messaging/schema';
-import {
   BACKGROUND_RUNTIME_PATHNAMES,
   createExtensionRuntimeMessageContext,
   createRuntimeBoundaryErrorResponse,
   decodeRuntimeMessageEnvelope,
 } from '../core/messaging/runtime-boundary';
+import { isToolDescriptorRecord } from '../core/messaging/tool-record-codec';
 import { startDeepSeekHistoryOrganizer, type HistoryOrganizerController } from './content/adapters/history-organizer';
 import { startDeepSeekProjectSidebarOrganizer, type ProjectSidebarOrganizerController } from './content/adapters/project-sidebar-organizer';
 import { startContentUxPolish, type ContentUxPolishController } from './content/adapters/ux-polish';
@@ -146,6 +159,23 @@ import type {
   ConversationExportResult,
 } from '../core/export/types';
 import type { ToolCallPayloadChunk } from '../core/interceptor/streaming-tool-call-parser';
+import {
+  replaceContentDocumentLifecycle,
+  type ContentCapabilityController,
+  type ContentDocumentLifecycle,
+  type ContentResourceScope,
+} from './content/lifecycle';
+import {
+  createIsolatedBridgeController,
+  type IsolatedBridgeController,
+} from './content/controllers/isolated-bridge-controller';
+import { createDomCapabilityController } from './content/controllers/dom-capability-controller';
+import { createContentChatController } from './content/controllers/chat-controller';
+import {
+  createContentMutationHub,
+  type ContentMutationHub,
+} from './content/controllers/mutation-hub';
+import { notifyContentAuthStatusChanged } from './content/auth-status-notifier';
 
 const TOOL_BLOCK_ID = 'dpp-tool-block';
 const TOOL_BLOCK_STYLE_ID = 'dpp-tool-block-css';
@@ -177,12 +207,6 @@ const TOKEN_SPEED_BOOTSTRAP_RETRY_MS = 250;
 const TOKEN_SPEED_BOOTSTRAP_RETRY_LIMIT = 40;
 const TOKEN_SPEED_MOUNT_DEBOUNCE_MS = 500;
 const MULTIMODAL_MEDIA_MOUNT_DEBOUNCE_MS = 250;
-const TOKEN_SPEED_ROUTE_CHECK_MS = 500;
-const TOOL_BLOCK_ROUTE_CHECK_MS = 500;
-const TOOL_RESTORE_STORAGE_KEY = 'dpp_tool_execution_blocks';
-const INLINE_AGENT_TRACE_STORAGE_KEY = 'dpp_inline_agent_traces';
-const INLINE_AGENT_TRACE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
-const INLINE_AGENT_TRACE_LIMIT = 100;
 const INLINE_AGENT_TRACE_WRITE_DEBOUNCE_MS = 300;
 const INLINE_AGENT_STEP_RENDER_MAX_CHARS = 8000;
 const INLINE_AGENT_FINAL_RENDER_MAX_CHARS = 12000;
@@ -199,10 +223,6 @@ const PET_FEEDBACK_DELAY_MS = 1400;
 const PET_SLEEP_DELAY_MS = 12000;
 const PET_SPRITE_PATH = 'pet/deepseek-whale-pet-states.png';
 const DEEPSEEK_POW_WASM_PATH = 'deepseek/sha3_wasm_bg.wasm';
-const MAIN_WORLD_SOURCE = BRIDGE_SOURCES.mainWorld;
-const CONTENT_SOURCE = BRIDGE_SOURCES.content;
-const BRIDGE_REQUEST_TYPE = BRIDGE_HANDSHAKE_TYPES.request;
-const BRIDGE_INIT_TYPE = BRIDGE_HANDSHAKE_TYPES.init;
 const PET_BUBBLE_VISIBLE_MS = 6000;
 const PET_BUBBLE_REPEAT_MIN_MS = 8000;
 const PET_BUBBLE_REPEAT_MAX_MS = 12000;
@@ -240,12 +260,6 @@ interface PetDragState {
   startLeft: number;
   startTop: number;
   moved: boolean;
-}
-
-interface PersistedToolBlock extends ToolCallRestoreRecord {
-  source: 'storage';
-  url: string;
-  createdAt: number;
 }
 
 interface ActiveToolBlockSession {
@@ -292,13 +306,10 @@ let responseGeneration = 0;
 let tokenSpeedEl: HTMLElement | null = null;
 let tokenSpeedBootstrapTimer: ReturnType<typeof setTimeout> | null = null;
 let tokenSpeedBootstrapAttempts = 0;
-let tokenSpeedMountObserver: MutationObserver | null = null;
 let tokenSpeedMountTimer: ReturnType<typeof setTimeout> | null = null;
 let lastTokenSpeedProgress: ResponseTokenSpeedPayload = createIdleTokenSpeedProgress();
 let tokenSpeedRouteKey = '';
-let tokenSpeedRouteTimer: ReturnType<typeof setInterval> | null = null;
-const recordedUsageProgressSignatures = new Map<string, string>();
-let multimodalMediaObserver: MutationObserver | null = null;
+const usageProgressWrites = createUsageProgressWriteCoordinator();
 let multimodalMediaMountTimer: ReturnType<typeof setTimeout> | null = null;
 let multimodalMediaButtonEl: HTMLButtonElement | null = null;
 let multimodalMediaFileInputEl: HTMLInputElement | null = null;
@@ -308,8 +319,6 @@ let multimodalMediaBusy = false;
 let multimodalMediaInputEnabled = false;
 const pendingMultimodalMedia = new Map<string, PendingMultimodalMedia>();
 let toolBlockRouteKey = '';
-let toolBlockRouteTimer: ReturnType<typeof setInterval> | null = null;
-let exportActionObserver: MutationObserver | null = null;
 let exportActionMountTimer: ReturnType<typeof setTimeout> | null = null;
 let exportActionRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let exportActionRetryAttempts = 0;
@@ -325,7 +334,6 @@ const restoredToolRecords = new Map<string, ToolCallRestoreRecord>();
 let restoredRenderTimer: ReturnType<typeof setTimeout> | null = null;
 let restoredRenderAttempts = 0;
 const pendingToolExecutionTasks = new Set<Promise<ToolCardResult>>();
-let backgroundPatchObserver: MutationObserver | null = null;
 let themeObserver: MutationObserver | null = null;
 let themeTreeObserver: MutationObserver | null = null;
 let themeMediaQuery: MediaQueryList | null = null;
@@ -350,7 +358,7 @@ let inlineAgentContainer: HTMLElement | null = null;
 let inlineAgentCurrentStep: HTMLElement | null = null;
 let inlineAgentLoopId: string | null = null;
 let inlineAgentContainerObserver: MutationObserver | null = null;
-let inlineAgentContinuationMessageObserver: MutationObserver | null = null;
+let renderedToolCallCleanerFrame: number | null = null;
 let activeInlineAgentTrace: InlineAgentTraceRecord | null = null;
 let inlineAgentTraceWriteTimer: ReturnType<typeof setTimeout> | null = null;
 let inlineAgentStreamRenderFrame: number | null = null;
@@ -365,14 +373,28 @@ let currentModelType: ModelType = null;
 let currentPromptSettings: PromptInjectionSettings = DEFAULT_PROMPT_INJECTION_SETTINGS;
 let currentContentLocale: SupportedLocale = DEFAULT_LOCALE;
 let currentContentTranslator = createTranslator(DEFAULT_LOCALE);
-let currentToolDescriptors: ToolDescriptor[] = [...createDefaultToolDescriptors(currentContentLocale)];
+let currentToolDescriptors: ToolDescriptor[] = [];
+const toolDescriptorSyncGate = createLatestSyncGate();
 let currentRequestMessageCount = 0;
-let mainWorldPort: MessagePort | null = null;
-let mainWorldBridgeReady = false;
 let activeAgentAbort: AbortController | null = null;
+const pendingInlineAgentLoopTasks = new Set<Promise<void>>();
 let toolOpenTagRe = buildToolOpenTagRegex(currentToolDescriptors);
 let toolMarkerRe = buildToolMarkerRegex(currentToolDescriptors);
 let extensionContextValid = true;
+let contentDocumentLifecycle: ContentDocumentLifecycle | null = null;
+let mainWorldBridgeController: IsolatedBridgeController | null = null;
+let runtimeStateCapabilityScope: ContentResourceScope | null = null;
+let tokenSpeedCapabilityScope: ContentResourceScope | null = null;
+let toolCapabilityScope: ContentResourceScope | null = null;
+let toolCapabilityEpoch = 0;
+const pendingToolPersistenceOperations = new Set<Promise<unknown>>();
+let inlineAgentCapabilityScope: ContentResourceScope | null = null;
+let inlineAgentCapabilityEpoch = 0;
+const pendingInlineAgentPersistenceOperations = new Set<Promise<unknown>>();
+let multimodalCapabilityScope: ContentResourceScope | null = null;
+let exportCapabilityScope: ContentResourceScope | null = null;
+let backgroundCapabilityScope: ContentResourceScope | null = null;
+let petCapabilityScope: ContentResourceScope | null = null;
 
 function contentT(key: LocaleMessageKey, params?: MessageParams): string {
   return currentContentTranslator.t(key, params);
@@ -386,18 +408,22 @@ async function refreshContentLocale(): Promise<void> {
 }
 
 function refreshLocalizedContentSurfaces(): void {
-  setConversationExportButtonsStatus(activeConversationExportId ? 'running' : 'idle');
-  if (exportActionMenuEl && exportActionMenuButton) {
+  if (exportCapabilityScope?.active) {
+    setConversationExportButtonsStatus(activeConversationExportId ? 'running' : 'idle');
+  }
+  if (exportCapabilityScope?.active && exportActionMenuEl && exportActionMenuButton) {
     showConversationExportMenu(exportActionMenuButton);
   }
   historyOrganizerController?.refreshLabels();
   projectSidebarOrganizerController?.refreshLabels();
   contentUxPolishController?.refreshLabels();
-  renderTokenSpeedIndicator(lastTokenSpeedProgress);
-  renderActiveToolBlockForCurrentRoute();
-  scheduleRenderRestoredToolBlocks();
-  scheduleRenderRestoredInlineAgentTraces();
-  renderMultimodalMediaTray();
+  if (tokenSpeedCapabilityScope?.active) renderTokenSpeedIndicator(lastTokenSpeedProgress);
+  if (toolCapabilityScope?.active) {
+    renderActiveToolBlockForCurrentRoute();
+    scheduleRenderRestoredToolBlocks();
+  }
+  if (inlineAgentCapabilityScope?.active) scheduleRenderRestoredInlineAgentTraces();
+  if (multimodalCapabilityScope?.active) renderMultimodalMediaTray();
 }
 
 function getAgentRendererLabels() {
@@ -479,307 +505,568 @@ export default defineContentScript({
   matches: ['*://chat.deepseek.com/*'],
   runAt: 'document_start',
   async main() {
-    registerDefaultToolResultRenderers();
-    await refreshContentLocale();
-    watchLocalePreference(() => {
-      void refreshContentLocale()
-        .then(() => loadAndSyncRuntimeState())
-        .catch(() => undefined);
+    extensionContextValid = true;
+    const controllers = createContentCapabilityControllers();
+    const lifecycle = await replaceContentDocumentLifecycle({
+      capabilities: controllers,
+      onError: reportContentLifecycleError,
     });
-    installExtensionInvalidationGuards();
-    installMainWorldBridge();
-
-    const handleMainWorldMessage = async (data: any) => {
-      if (data?.source !== MAIN_WORLD_SOURCE) return;
-      try {
-        switch (data.type) {
-          case 'TOOL_CALL_STARTED': {
-            const call = data.data as ToolCall;
-            showPendingToolExecution(call);
-            break;
-          }
-          case 'TOOL_CALL': {
-            const call = ensureToolCallId(data.data as ToolCall);
-            setPetState('working');
-            void runToolExecution(call);
-            break;
-          }
-          case 'TOOL_CALL_CHUNK': {
-            await appendExternalToolPayloadChunk(data.data as ToolCallPayloadChunk);
-            break;
-          }
-          case 'RESTORE_TOOL_CALLS': {
-            rememberRestoredToolRecords(data.records as ToolCallRestoreRecord[]);
-            break;
-          }
-          case 'MEMORIES_USED': {
-            const ids = data.ids as number[];
-            await sendRuntimeMessage({ type: 'TOUCH_MEMORIES', payload: { ids } });
-            break;
-          }
-          case 'HEADERS_CAPTURED': {
-            await persistDeepSeekClientHeaders(normalizeCapturedClientHeaders(data.headers));
-            break;
-          }
-          case 'RESPONSE_COMPLETE': {
-            const complete = normalizeResponseCompletePayload(data.payload, data.text);
-            const gen = ++responseGeneration;
-            activeStreamingToolCount = 0;
-            await waitForPendingToolExecutions(complete.requestId);
-            await finalizeInterruptedToolStarts(complete.requestId);
-            if (gen !== responseGeneration) break;
-            const session = getActiveToolBlockSessionForComplete(complete);
-            const completedExecutions = session ? [...session.executions] : [...toolExecutions];
-            if (session && session.executions.length > 0) {
-              await persistToolBlockSession(session, complete.text, complete);
-              const renderedBlock = (findRestoredToolBlock(session.id) as HTMLElement | null) ?? toolBlockEl;
-              collapseToolBlock(renderedBlock);
-              activeToolBlockSessions.delete(session.id);
-              if (activeToolBlockSessionId === session.id) {
-                activeToolBlockSessionId = null;
-                toolExecutions = [];
-                toolBlockEl = null;
-              }
-            } else if (toolExecutions.length > 0) {
-              const fallbackSession = getCurrentRouteActiveToolBlockSession();
-              if (fallbackSession) {
-                await persistToolBlockSession(fallbackSession, complete.text, complete);
-              }
-              collapseToolBlock(toolBlockEl);
-              toolExecutions = [];
-              toolBlockEl = null;
-            }
-            void startInlineAgentIfNeeded(complete, completedExecutions);
-            schedulePetIdle();
-            break;
-          }
-          case 'REQUEST_TERMINAL': {
-            const requestId = data.payload?.requestId;
-            if (typeof requestId === 'string') {
-              if (
-                activeToolAuthorizations.has(requestId) ||
-                toolAuthorizationRequestAliases.has(requestId)
-              ) {
-                pendingToolAuthorizationCorrelations.terminate(requestId);
-                await waitForPendingToolExecutions(requestId);
-                await finalizeInterruptedToolStarts(requestId);
-                await closeContentToolAuthorization(requestId);
-              } else {
-                pendingToolAuthorizationCorrelations.terminate(requestId);
-              }
-            }
-            break;
-          }
-          case 'RESPONSE_TOKEN_SPEED': {
-            const progress = normalizeResponseTokenSpeedPayload(data.payload);
-            if (progress) {
-              updateTokenSpeedIndicator(progress);
-              updatePetFromTokenSpeed(progress);
-            }
-            break;
-          }
-        }
-      } catch (error) {
-        if (isExtensionInvalidatedError(error)) {
-          invalidateExtensionContext();
-        } else {
-          console.error('[DeepSeek++] main-world message handling failed', error);
-        }
-      }
-    };
-
-    setMainWorldMessageHandler(handleMainWorldMessage);
-
-    void loadAndSyncRuntimeState().catch(() => undefined);
-
-    await new Promise((r) => {
-      if (document.readyState === 'complete' || document.readyState === 'interactive') r(undefined);
-      else document.addEventListener('DOMContentLoaded', () => r(undefined), { once: true });
-    });
-
-    startDeepSeekThemeSync();
-    startTokenSpeedIndicatorBootstrap();
-    startTokenSpeedIndicatorMountObserver();
-    startTokenSpeedRouteWatcher();
-    startToolBlockRouteWatcher();
-    void refreshMultimodalMediaInputAvailability();
-    startConversationExportActionInjector();
-    historyOrganizerController = startDeepSeekHistoryOrganizer(getHistoryOrganizerLabels);
-    projectSidebarOrganizerController = startDeepSeekProjectSidebarOrganizer(getProjectSidebarOrganizerLabels);
-    contentUxPolishController = startContentUxPolish(getContentUxPolishLabels);
-
-    startRenderedToolCallCleaner();
-    startInlineAgentContinuationMessageHider();
-    void restorePersistedToolBlocks();
-    void restorePersistedInlineAgentTraces();
-
-    sendRuntimeMessage<BackgroundConfig | null>({ type: 'GET_BACKGROUND' }).then((cfg) => {
-      applyBackground(cfg ?? null);
-    });
-    sendRuntimeMessage<PetConfig | null>({ type: 'GET_PET' }).then((cfg) => {
-      applyPetConfig(cfg ?? null);
-    });
-
-    addRuntimeMessageListener((message, sender, sendResponse) => {
-      let envelope;
-      try {
-        envelope = decodeRuntimeMessageEnvelope(message);
-        createExtensionRuntimeMessageContext(sender, {
-          runtimeId: chrome.runtime.id,
-          extensionOrigin: chrome.runtime.getURL('/'),
-          allowedPathnames: BACKGROUND_RUNTIME_PATHNAMES,
-        });
-      } catch (error) {
-        sendResponse(createRuntimeBoundaryErrorResponse(error, envelope));
-        return false;
-      }
-      if (message.type === 'STATE_UPDATED') {
-        syncToMainWorld(
-          message.memories,
-          message.skills,
-          message.activePreset,
-          message.modelType,
-          currentToolDescriptors,
-          normalizePromptInjectionSettings(message.promptSettings),
-        );
-      } else if (message.type === 'TOOL_DESCRIPTORS_UPDATED') {
-        syncToMainWorld(currentMemories, currentSkills, currentActivePreset, currentModelType, normalizeToolDescriptors(message.toolDescriptors), currentPromptSettings);
-      } else if (message.type === 'MCP_SERVERS_UPDATED') {
-        if (Array.isArray(message.servers)) {
-          setMultimodalMediaInputEnabled(shouldEnableMultimodalMediaInput(message.servers));
-        } else {
-          void refreshMultimodalMediaInputAvailability();
-        }
-        sendRuntimeMessage<ToolDescriptor[]>({ type: 'GET_TOOL_DESCRIPTORS' })
-          .then((descriptors) => syncToMainWorld(currentMemories, currentSkills, currentActivePreset, currentModelType, normalizeToolDescriptors(descriptors), currentPromptSettings))
-          .catch(() => undefined);
-      } else if (message.type === 'BACKGROUND_UPDATED') {
-        applyBackground(message.config as BackgroundConfig | null);
-      } else if (message.type === 'PET_UPDATED') {
-        applyPetConfig(message.config as PetConfig | null);
-      } else if (message.type === 'REFRESH_DEEPSEEK_AUTH') {
-        persistDeepSeekClientHeaders()
-          .then((hasToken) => sendResponse({ ok: hasToken, hasToken }))
-          .catch((error) => sendResponse({
-            ok: false,
-            hasToken: false,
-            error: error instanceof Error ? error.message : String(error),
-          }));
-        return true;
-      } else if (message.type === 'DEEPSEEK_EXPORT_PROGRESS') {
-        updateConversationExportProgress(message.progress as ConversationExportProgress | undefined);
-      } else if (message.type === 'INSERT_PROMPT_TEXT') {
-        const text = typeof message.text === 'string' ? message.text : '';
-        sendResponse(insertPromptText(text));
-        return true;
-      } else if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') {
-        const conversationId = getCurrentChatSessionId();
-        sendResponse(conversationId
-          ? {
-            ok: true,
-            conversation: {
-              conversationId,
-              title: getCurrentConversationTitle(),
-              url: location.href,
-            },
-          }
-          : { ok: false, error: 'no_current_conversation' });
-        return true;
-      }
-      return undefined;
-    });
+    if (!extensionContextValid) {
+      await lifecycle.dispose('extension-invalidated');
+      return;
+    }
+    contentDocumentLifecycle = lifecycle;
   },
 });
 
-let mainWorldMessageHandler: ((data: any) => void | Promise<void>) | null = null;
-const pendingMainWorldMessages: Record<string, unknown>[] = [];
-let mainWorldBridgeSessions: BridgeSessionController | null = null;
-
-function setMainWorldMessageHandler(handler: (data: any) => void | Promise<void>): void {
-  mainWorldMessageHandler = handler;
-}
-
-function installMainWorldBridge(): void {
-  mainWorldBridgeSessions = createBridgeSessionController(window.location.origin);
-  window.addEventListener('pagehide', () => disconnectMainWorldPort());
-  window.addEventListener('message', (event) => {
-    if (!isBridgeHandshakeMessage({
-      value: event.data,
-      actualOrigin: event.origin,
-      expectedOrigin: window.location.origin,
-      expectedSource: MAIN_WORLD_SOURCE,
-      expectedType: BRIDGE_REQUEST_TYPE,
-      alreadyConnected: Boolean(mainWorldPort),
-      actualWindowSource: event.source,
-      expectedWindowSource: window,
-      actualTopLevel: window === window.top,
-      requireTopLevel: true,
-    })) return;
-    connectMainWorldPort();
+function createContentCapabilityControllers(): readonly ContentCapabilityController[] {
+  const chatController = createContentChatController({ dispatch: dispatchMainWorldMessage });
+  const mutationHub = createContentMutationHub({
+    reportError: reportContentLifecycleError,
   });
+  const bridgeController = createIsolatedBridgeController({
+    handleAugmentRequestBody,
+    handleMainWorldMessage: chatController.handle,
+    syncRuntimeState: syncCurrentRuntimeStateToMainWorld,
+    disconnectRuntimeState: disconnectMainWorldRuntimeState,
+    reportError(message, error) {
+      if (error === undefined) console.error(message);
+      else console.error(message, error);
+    },
+  });
+  mainWorldBridgeController = bridgeController;
+
+  return [
+    createRuntimeStateCapability(),
+    // Start transport before DOM capabilities; chat ingress starts last so reverse
+    // teardown gates new dispatch before aborting work and closing authorizations.
+    bridgeController,
+    createDomCapability('theme', startThemeCapability, stopThemeCapability),
+    createDomCapability('mutation-hub', (scope) => mutationHub.start(scope), () => mutationHub.stop()),
+    createDomCapability('token-speed', (scope) => startTokenSpeedCapability(scope, mutationHub), stopTokenSpeedCapability),
+    createDomCapability('tool', (scope) => startToolCapability(scope, mutationHub), stopToolCapability),
+    createDomCapability('inline-agent', (scope) => startInlineAgentCapability(scope, mutationHub), stopInlineAgentCapability),
+    createDomCapability('multimodal', (scope) => startMultimodalCapability(scope, mutationHub), stopMultimodalCapability),
+    createDomCapability('export', (scope) => startExportCapability(scope, mutationHub), stopExportCapability),
+    createDomCapability('history', startHistoryCapability, stopHistoryCapability),
+    createDomCapability('project', startProjectCapability, stopProjectCapability),
+    createDomCapability('ux-polish', startUxPolishCapability, stopUxPolishCapability),
+    createDomCapability('background', (scope) => startBackgroundCapability(scope, mutationHub), stopBackgroundCapability),
+    createDomCapability('pet', startPetCapability, stopPetCapability),
+    chatController,
+  ];
 }
 
-function connectMainWorldPort(): void {
-  if (mainWorldPort) return;
-
-  const channel = new MessageChannel();
-  const bridgeSession = mainWorldBridgeSessions?.open(
-    crypto.randomUUID(),
-    window.location.origin,
-    window === window.top,
-  );
-  if (!bridgeSession) return;
-  mainWorldPort = channel.port1;
-  mainWorldPort.onmessage = (event) => {
-    void handleMainWorldPortMessage(event.data, bridgeSession);
+function createRuntimeStateCapability(): ContentCapabilityController {
+  return {
+    id: 'runtime-state',
+    async start(scope) {
+      runtimeStateCapabilityScope = scope;
+      const isCurrent = () => runtimeStateCapabilityScope === scope && scope.active;
+      registerDefaultToolResultRenderers();
+      await refreshContentLocale();
+      if (!isCurrent()) return;
+      scope.addCleanup('listener', watchLocalePreference(() => {
+        if (!isCurrent()) return;
+        void refreshContentLocale()
+          .then(() => {
+            if (isCurrent()) return loadAndSyncRuntimeState(undefined, isCurrent);
+          })
+          .catch((error) => console.error('[DeepSeek++] content locale refresh failed', error));
+      }));
+      scope.addCleanup('listener', installExtensionInvalidationGuards());
+      scope.addCleanup('listener', addRuntimeMessageListener(handleContentRuntimeMessage));
+      void loadAndSyncRuntimeState(undefined, isCurrent);
+    },
+    stop() {
+      runtimeStateCapabilityScope = null;
+    },
   };
-  mainWorldPort.onmessageerror = () => disconnectMainWorldPort(bridgeSession);
-  mainWorldPort.start();
-
-  window.postMessage(
-    { source: CONTENT_SOURCE, type: BRIDGE_INIT_TYPE },
-    window.location.origin,
-    [channel.port2],
-  );
 }
 
-async function handleMainWorldPortMessage(
-  data: unknown,
-  bridgeSession: BridgeSessionContext,
-): Promise<void> {
-  if (!mainWorldBridgeSessions?.accepts(
-    bridgeSession,
-    window.location.origin,
-    window === window.top,
-  )) return;
-
-  const message = validateBridgeMessage(data, MAIN_WORLD_SOURCE);
-  if (!message) return;
-
-  if (message.type === BRIDGE_READY_TYPE) {
-    mainWorldBridgeReady = true;
-    flushMainWorldMessages();
-    return;
-  }
-
-  if (message.type === 'AUGMENT_REQUEST_BODY') {
-    await handleAugmentRequestBody(message);
-    return;
-  }
-
-  await mainWorldMessageHandler?.(message);
-}
-
-function disconnectMainWorldPort(bridgeSession?: BridgeSessionContext): void {
-  if (!mainWorldBridgeSessions?.close(bridgeSession)) return;
-  pendingToolAuthorizationCorrelations.terminateAll();
-  void closeAllContentToolAuthorizations().catch((error) => {
-    console.error('[DeepSeek++] failed to close tool authorizations on bridge disconnect', error);
+function createDomCapability(
+  id: string,
+  start: (scope: ContentResourceScope) => void | Promise<void>,
+  stop: () => void | Promise<void>,
+): ContentCapabilityController {
+  return createDomCapabilityController({
+    id,
+    start,
+    stop,
+    reportError: reportContentLifecycleError,
   });
-  mainWorldPort?.close();
-  mainWorldPort = null;
-  mainWorldBridgeReady = false;
-  pendingMainWorldMessages.length = 0;
+}
+
+function reportContentLifecycleError(error: unknown): void {
+  console.error('[DeepSeek++] content lifecycle failed', error);
+}
+
+function trackContentPersistence<T>(
+  owner: 'tool' | 'inline-agent',
+  label: string,
+  operation: Promise<T>,
+): Promise<T> {
+  const tracked = operation.catch((error) => {
+    if (isExtensionInvalidatedError(error)) invalidateExtensionContext();
+    console.error(`[DeepSeek++] ${label} persistence failed`, error);
+    throw error;
+  });
+  const operations = owner === 'tool'
+    ? pendingToolPersistenceOperations
+    : pendingInlineAgentPersistenceOperations;
+  operations.add(tracked);
+  void tracked.then(
+    () => operations.delete(tracked),
+    () => operations.delete(tracked),
+  );
+  return tracked;
+}
+
+function observeReportedPersistence(operation: Promise<unknown>): void {
+  // The persistence boundary logged the rejection; this terminal observer prevents
+  // a duplicate unhandled-rejection report for intentionally fire-and-observe writes.
+  void operation.catch(() => undefined);
+}
+
+function isToolEpochActive(scope: ContentResourceScope, epoch: number): boolean {
+  return toolCapabilityScope === scope
+    && toolCapabilityEpoch === epoch
+    && scope.active;
+}
+
+function isInlineAgentEpochActive(scope: ContentResourceScope, epoch: number): boolean {
+  return inlineAgentCapabilityScope === scope
+    && inlineAgentCapabilityEpoch === epoch
+    && scope.active;
+}
+
+function startThemeCapability(): void {
+  startDeepSeekThemeSync();
+}
+
+function stopThemeCapability(): void {
+  stopDeepSeekThemeSync();
+  document.getElementById('dpp-injected-theme-css')?.remove();
+  document.body.classList.remove('dpp-theme-dark', 'dpp-theme-light');
+}
+
+function startTokenSpeedCapability(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+): void {
+  tokenSpeedCapabilityScope = scope;
+  startTokenSpeedIndicatorBootstrap();
+  startTokenSpeedIndicatorMountSubscription(scope, mutationHub);
+  tokenSpeedRouteKey = getTokenSpeedRouteKey();
+}
+
+function stopTokenSpeedCapability(): void {
+  tokenSpeedCapabilityScope = null;
+  stopTokenSpeedIndicatorBootstrap();
+  stopTokenSpeedIndicatorMountSubscription();
+  tokenSpeedRouteKey = '';
+  removeTokenSpeedIndicator();
+  document.getElementById(TOKEN_SPEED_STYLE_ID)?.remove();
+}
+
+function startToolCapability(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+): void {
+  toolCapabilityScope = scope;
+  const epoch = ++toolCapabilityEpoch;
+  toolBlockRouteKey = getTokenSpeedRouteKey();
+  startRenderedToolCallCleaner(scope, mutationHub);
+  observeReportedPersistence(restorePersistedToolBlocks(scope, epoch));
+}
+
+async function stopToolCapability(): Promise<void> {
+  toolCapabilityScope = null;
+  toolCapabilityEpoch += 1;
+  toolBlockRouteKey = '';
+  stopRenderedToolCallCleaner();
+  finishActivePermissionRequest(false);
+  if (restoredRenderTimer) {
+    clearTimeout(restoredRenderTimer);
+    restoredRenderTimer = null;
+  }
+  const errors: unknown[] = [];
+  pendingToolAuthorizationCorrelations.terminateAll();
+  try {
+    await closeAllContentToolAuthorizations();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await finalizePendingToolStarts(pendingStartedToolCallsByRequest.drainAll());
+  } catch (error) {
+    errors.push(error);
+  }
+  while (pendingToolExecutionTasks.size > 0) {
+    await Promise.allSettled([...pendingToolExecutionTasks]);
+  }
+  while (pendingToolPersistenceOperations.size > 0) {
+    await Promise.allSettled([...pendingToolPersistenceOperations]);
+  }
+  activeStreamingToolCount = 0;
+  activeToolBlockSessionId = null;
+  toolExecutions = [];
+  toolBlockEl = null;
+  activeToolBlockSessions.clear();
+  restoredToolRecords.clear();
+  activeToolAuthorizations.clear();
+  toolAuthorizationRequestAliases.clear();
+  pendingExternalToolPayloadWrites.clear();
+  pendingToolExecutionTasksByRequest.clear();
+  restoredRenderAttempts = 0;
+  document.querySelectorAll('.dpp-tool-block, .dpp-artifact-results').forEach((node) => node.remove());
+  document.getElementById(PERMISSION_BANNER_STYLE_ID)?.remove();
+  document.getElementById(TOOL_BLOCK_STYLE_ID)?.remove();
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Content tool capability teardown failed.');
+  }
+}
+
+function startInlineAgentCapability(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+): void {
+  inlineAgentCapabilityScope = scope;
+  const epoch = ++inlineAgentCapabilityEpoch;
+  startInlineAgentContinuationMessageHider(scope, mutationHub);
+  observeReportedPersistence(restorePersistedInlineAgentTraces(scope, epoch));
+}
+
+async function stopInlineAgentCapability(): Promise<void> {
+  inlineAgentCapabilityScope = null;
+  inlineAgentCapabilityEpoch += 1;
+  stopInlineAgentContinuationMessageHider();
+  if (activeAgentAbort || inlineAgentContainer) stopInlineAgent();
+  while (pendingInlineAgentLoopTasks.size > 0) {
+    await Promise.allSettled([...pendingInlineAgentLoopTasks]);
+  }
+  teardownInlineAgentPanel();
+  if (restoredInlineAgentRenderTimer) {
+    clearTimeout(restoredInlineAgentRenderTimer);
+    restoredInlineAgentRenderTimer = null;
+  }
+  if (inlineAgentTraceWriteTimer) {
+    clearTimeout(inlineAgentTraceWriteTimer);
+    inlineAgentTraceWriteTimer = null;
+  }
+  cancelPendingInlineAgentStreamRender();
+  while (pendingInlineAgentPersistenceOperations.size > 0) {
+    await Promise.allSettled([...pendingInlineAgentPersistenceOperations]);
+  }
+  responseGeneration += 1;
+  restoredInlineAgentTraces.clear();
+  restoredInlineAgentRenderAttempts = 0;
+  document.querySelectorAll('.dpp-agent-container').forEach((node) => node.remove());
+  removeInlineAgentStyles();
+  if (contentToastTimer) {
+    clearTimeout(contentToastTimer);
+    contentToastTimer = null;
+  }
+  document.querySelectorAll(`.${CONTENT_TOAST_CLASS}`).forEach((node) => node.remove());
+  document.getElementById(CONTENT_TOAST_STYLE_ID)?.remove();
+}
+
+function startMultimodalCapability(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+): void {
+  multimodalCapabilityScope = scope;
+  scope.addCleanup('cleanup', mutationHub.subscribe({
+    matches: (mutations) => (
+      multimodalCapabilityScope === scope
+      && scope.active
+      && mutations.some(mutationMayAffectPromptControls)
+    ),
+    handle: scheduleMultimodalMediaMount,
+  }));
+  void refreshMultimodalMediaInputAvailability(() => (
+    multimodalCapabilityScope === scope && scope.active
+  ));
+}
+
+function stopMultimodalCapability(): void {
+  multimodalCapabilityScope = null;
+  stopMultimodalMediaInput();
+  multimodalMediaInputEnabled = false;
+}
+
+function startExportCapability(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+): void {
+  exportCapabilityScope = scope;
+  scope.addCleanup('cleanup', mutationHub.subscribe({
+    matches: (mutations) => (
+      exportCapabilityScope === scope
+      && scope.active
+      && mutations.some(mutationMayAffectConversationExportActions)
+    ),
+    handle: scheduleConversationExportActionMount,
+  }));
+  startConversationExportActionInjector();
+}
+
+function stopExportCapability(): void {
+  exportCapabilityScope = null;
+  stopConversationExportActionInjector();
+}
+
+function startHistoryCapability(): void {
+  historyOrganizerController = startDeepSeekHistoryOrganizer(getHistoryOrganizerLabels);
+}
+
+function stopHistoryCapability(): void {
+  historyOrganizerController?.stop();
+  historyOrganizerController = null;
+}
+
+function startProjectCapability(): void {
+  projectSidebarOrganizerController = startDeepSeekProjectSidebarOrganizer(getProjectSidebarOrganizerLabels);
+}
+
+function stopProjectCapability(): void {
+  projectSidebarOrganizerController?.stop();
+  projectSidebarOrganizerController = null;
+}
+
+function startUxPolishCapability(): void {
+  contentUxPolishController = startContentUxPolish(getContentUxPolishLabels);
+}
+
+function stopUxPolishCapability(): void {
+  contentUxPolishController?.stop();
+  contentUxPolishController = null;
+}
+
+function startBackgroundCapability(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+): void {
+  backgroundCapabilityScope = scope;
+  scope.addCleanup('cleanup', mutationHub.subscribe({
+    matches: (mutations) => (
+      backgroundCapabilityScope === scope
+      && scope.active
+      && document.body.classList.contains('dpp-bg-active')
+      && mutations.some((mutation) => mutation.type === 'childList')
+    ),
+    handle: patchContainerBackgrounds,
+  }));
+  void sendRuntimeMessage<BackgroundConfig | null>({ type: 'GET_BACKGROUND' }).then((config) => {
+    if (backgroundCapabilityScope === scope && scope.active) applyBackground(config ?? null);
+  });
+}
+
+function stopBackgroundCapability(): void {
+  backgroundCapabilityScope = null;
+  removeBackground();
+}
+
+function startPetCapability(scope: ContentResourceScope): void {
+  petCapabilityScope = scope;
+  void sendRuntimeMessage<PetConfig | null>({ type: 'GET_PET' }).then((config) => {
+    if (petCapabilityScope === scope && scope.active) applyPetConfig(config ?? null);
+  });
+}
+
+function stopPetCapability(): void {
+  petCapabilityScope = null;
+  removePet();
+  currentPetConfig = null;
+  document.getElementById(PET_STYLE_ID)?.remove();
+}
+
+async function dispatchMainWorldMessage(data: Record<string, unknown>): Promise<void> {
+  try {
+    switch (data.type) {
+      case 'TOOL_CALL_STARTED': {
+        showPendingToolExecution(data.data as ToolCall);
+        break;
+      }
+      case 'TOOL_CALL': {
+        const call = ensureToolCallId(data.data as ToolCall);
+        setPetState('working');
+        void runToolExecution(call);
+        break;
+      }
+      case 'TOOL_CALL_CHUNK': {
+        await appendExternalToolPayloadChunk(data.data as ToolCallPayloadChunk);
+        break;
+      }
+      case 'RESTORE_TOOL_CALLS': {
+        rememberRestoredToolRecords(data.records as ToolCallRestoreRecord[]);
+        break;
+      }
+      case 'MEMORIES_USED': {
+        await sendRuntimeMessage({ type: 'TOUCH_MEMORIES', payload: { ids: data.ids as number[] } });
+        break;
+      }
+      case 'HEADERS_CAPTURED': {
+        await persistDeepSeekClientHeaders(normalizeCapturedClientHeaders(data.headers));
+        break;
+      }
+      case 'NAVIGATION_CHANGED': {
+        handleContentNavigation();
+        break;
+      }
+      case 'RESPONSE_COMPLETE': {
+        const complete = normalizeResponseCompletePayload(data.payload, data.text);
+        const generation = ++responseGeneration;
+        activeStreamingToolCount = 0;
+        await waitForPendingToolExecutions(complete.requestId);
+        await finalizeInterruptedToolStarts(complete.requestId);
+        if (generation !== responseGeneration) break;
+        const session = getActiveToolBlockSessionForComplete(complete);
+        const completedExecutions = session ? [...session.executions] : [...toolExecutions];
+        if (session && session.executions.length > 0) {
+          await persistToolBlockSession(session, complete.text, complete);
+          const renderedBlock = (findRestoredToolBlock(session.id) as HTMLElement | null) ?? toolBlockEl;
+          collapseToolBlock(renderedBlock);
+          activeToolBlockSessions.delete(session.id);
+          if (activeToolBlockSessionId === session.id) {
+            activeToolBlockSessionId = null;
+            toolExecutions = [];
+            toolBlockEl = null;
+          }
+        } else if (toolExecutions.length > 0) {
+          const fallbackSession = getCurrentRouteActiveToolBlockSession();
+          if (fallbackSession) await persistToolBlockSession(fallbackSession, complete.text, complete);
+          collapseToolBlock(toolBlockEl);
+          toolExecutions = [];
+          toolBlockEl = null;
+        }
+        void startInlineAgentIfNeeded(complete, completedExecutions);
+        schedulePetIdle();
+        break;
+      }
+      case 'REQUEST_TERMINAL': {
+        const requestId = (data.payload as { requestId?: unknown } | undefined)?.requestId;
+        if (typeof requestId !== 'string') break;
+        if (activeToolAuthorizations.has(requestId) || toolAuthorizationRequestAliases.has(requestId)) {
+          pendingToolAuthorizationCorrelations.terminate(requestId);
+          await waitForPendingToolExecutions(requestId);
+          await finalizeInterruptedToolStarts(requestId);
+          await closeContentToolAuthorization(requestId);
+        } else {
+          pendingToolAuthorizationCorrelations.terminate(requestId);
+        }
+        break;
+      }
+      case 'RESPONSE_TOKEN_SPEED': {
+        const progress = normalizeResponseTokenSpeedPayload(data.payload);
+        if (progress) {
+          updateTokenSpeedIndicator(progress);
+          updatePetFromTokenSpeed(progress);
+        }
+        break;
+      }
+    }
+  } catch (error) {
+    if (isExtensionInvalidatedError(error)) invalidateExtensionContext();
+    else console.error('[DeepSeek++] main-world message handling failed', error);
+  }
+}
+
+function handleContentRuntimeMessage(
+  message: any,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: any) => void,
+): boolean | undefined {
+  let envelope;
+  try {
+    envelope = decodeRuntimeMessageEnvelope(message);
+    createExtensionRuntimeMessageContext(sender, {
+      runtimeId: chrome.runtime.id,
+      extensionOrigin: chrome.runtime.getURL('/'),
+      allowedPathnames: BACKGROUND_RUNTIME_PATHNAMES,
+    });
+  } catch (error) {
+    sendResponse(createRuntimeBoundaryErrorResponse(error, envelope));
+    return false;
+  }
+  if (message.type === 'STATE_UPDATED') {
+    try {
+      syncToMainWorld(
+        decodeRuntimeMemories(message.memories, 'memoryUpdate'),
+        decodeSkillLibrary(message.skills, 'skillUpdate'),
+        decodeActivePreset(message.activePreset, 'activePresetUpdate'),
+        message.modelType,
+        currentToolDescriptors,
+        normalizePromptInjectionSettings(message.promptSettings),
+      );
+    } catch (error) {
+      console.error('[DeepSeek++] memory state update rejected', error);
+    }
+  } else if (message.type === 'TOOL_DESCRIPTORS_UPDATED') {
+    const syncLease = toolDescriptorSyncGate.begin();
+    try {
+      const descriptors = decodeToolDescriptors(message.toolDescriptors);
+      syncLease.commit(() => syncToMainWorld(
+        currentMemories,
+        currentSkills,
+        currentActivePreset,
+        currentModelType,
+        descriptors,
+        currentPromptSettings,
+      ));
+    } catch (error) {
+      syncLease.commit(() => reportToolDescriptorSyncFailure(error));
+    }
+  } else if (message.type === 'MCP_SERVERS_UPDATED') {
+    const scope = multimodalCapabilityScope;
+    if (scope && Array.isArray(message.servers)) {
+      setMultimodalMediaInputEnabled(shouldEnableMultimodalMediaInput(message.servers));
+    } else if (scope) {
+      void refreshMultimodalMediaInputAvailability(() => (
+        multimodalCapabilityScope === scope && scope.active
+      ));
+    }
+    const runtimeScope = runtimeStateCapabilityScope;
+    if (runtimeScope) {
+      void refreshToolDescriptorsFromBackground(() => (
+        runtimeStateCapabilityScope === runtimeScope && runtimeScope.active
+      ));
+    }
+  } else if (message.type === 'BACKGROUND_UPDATED') {
+    if (backgroundCapabilityScope?.active) {
+      applyBackground(message.config as BackgroundConfig | null);
+    }
+  } else if (message.type === 'PET_UPDATED') {
+    if (petCapabilityScope?.active) applyPetConfig(message.config as PetConfig | null);
+  } else if (message.type === 'REFRESH_DEEPSEEK_AUTH') {
+    persistDeepSeekClientHeaders()
+      .then((hasToken) => sendResponse({ ok: hasToken, hasToken }))
+      .catch((error) => sendResponse({
+        ok: false,
+        hasToken: false,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    return true;
+  } else if (message.type === 'DEEPSEEK_EXPORT_PROGRESS') {
+    if (exportCapabilityScope?.active) {
+      updateConversationExportProgress(message.progress as ConversationExportProgress | undefined);
+    }
+  } else if (message.type === 'INSERT_PROMPT_TEXT') {
+    sendResponse(insertPromptText(typeof message.text === 'string' ? message.text : ''));
+    return true;
+  } else if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') {
+    const conversationId = getCurrentChatSessionId();
+    sendResponse(conversationId
+      ? { ok: true, conversation: { conversationId, title: getCurrentConversationTitle(), url: location.href } }
+      : { ok: false, error: 'no_current_conversation' });
+    return true;
+  }
+  return undefined;
+}
+
+async function disconnectMainWorldRuntimeState(): Promise<void> {
+  pendingToolAuthorizationCorrelations.terminateAll();
+  await closeAllContentToolAuthorizations();
 }
 
 async function handleAugmentRequestBody(data: {
@@ -801,6 +1088,7 @@ async function handleAugmentRequestBody(data: {
     if (!mainRequestId) {
       throw new Error('Request authorization identity is missing.');
     }
+    const decodedBody = decodeDeepSeekRequestBody(data.body);
     if (
       toolAuthorizationRequestAliases.has(mainRequestId) ||
       !pendingToolAuthorizationCorrelations.begin(mainRequestId)
@@ -810,7 +1098,7 @@ async function handleAugmentRequestBody(data: {
     tracksPendingAlias = true;
     requestId = crypto.randomUUID();
 
-    const bodyWithMultimodalMedia = await consumePendingMultimodalMediaForRequest(data.body, {
+    const bodyWithMultimodalMedia = await consumePendingMultimodalMediaForRequest(decodedBody, {
       onLongRunning(timeoutMs) {
         postToMainWorld({
           type: 'AUGMENT_REQUEST_BODY_EXTEND_TIMEOUT',
@@ -827,7 +1115,7 @@ async function handleAugmentRequestBody(data: {
     activeToolAuthorizations.set(requestId, authorization);
     toolAuthorizationRequestAliases.set(mainRequestId, requestId);
     const project = await resolveProjectContextForRequestBody(bodyWithMultimodalMedia);
-    const result = augmentRequestBody(bodyWithMultimodalMedia, {
+    const result = augmentDecodedRequestBody(bodyWithMultimodalMedia, {
       memories: currentMemories,
       skills: currentSkills,
       activePreset: currentActivePreset,
@@ -840,13 +1128,9 @@ async function handleAugmentRequestBody(data: {
       promptSettings: currentPromptSettings,
     });
 
-    if (result) {
-      currentRequestMessageCount = result.messageCount;
-      if (result.usedMemoryIds.length > 0) {
-        await sendRuntimeMessage({ type: 'TOUCH_MEMORIES', payload: { ids: result.usedMemoryIds } });
-      }
-    } else {
-      await closeContentToolAuthorization(requestId);
+    currentRequestMessageCount = result.messageCount;
+    if (result.usedMemoryIds.length > 0) {
+      await sendRuntimeMessage({ type: 'TOUCH_MEMORIES', payload: { ids: result.usedMemoryIds } });
     }
 
     const requestAlreadyEnded = pendingToolAuthorizationCorrelations.activate(mainRequestId);
@@ -859,14 +1143,12 @@ async function handleAugmentRequestBody(data: {
       type: 'AUGMENT_REQUEST_BODY_RESULT',
       id,
       ok: true,
-      result: result
-        ? {
-            body: result.body,
-            agentTaskPrompt: result.agentTaskPrompt,
-            requestId,
-            toolDescriptors: authorization.descriptors,
-          }
-        : null,
+      result: {
+        body: result.body,
+        agentTaskPrompt: result.agentTaskPrompt,
+        requestId,
+        toolDescriptors: authorization.descriptors,
+      },
     });
   } catch (error) {
     if (authorization) await closeContentToolAuthorization(requestId);
@@ -894,14 +1176,9 @@ async function handleAugmentRequestBody(data: {
   }
 }
 
-async function resolveProjectContextForRequestBody(bodyStr: string): Promise<ResolvedProjectAugmentationContext | null> {
-  let body: { chat_session_id?: unknown; parent_message_id?: unknown; prompt?: unknown };
-  try {
-    body = JSON.parse(bodyStr) as { chat_session_id?: unknown; parent_message_id?: unknown; prompt?: unknown };
-  } catch {
-    return null;
-  }
-
+async function resolveProjectContextForRequestBody(
+  body: Readonly<DeepSeekRequestBody>,
+): Promise<ResolvedProjectAugmentationContext | null> {
   const sessionId = typeof body.chat_session_id === 'string' && body.chat_session_id.trim()
     ? body.chat_session_id.trim()
     : getCurrentChatSessionId();
@@ -922,15 +1199,10 @@ async function resolveProjectContextForRequestBody(bodyStr: string): Promise<Res
   return project ?? null;
 }
 
-function readRequestChatSessionId(bodyStr: string): string | null {
-  try {
-    const body = JSON.parse(bodyStr) as { chat_session_id?: unknown };
-    return typeof body.chat_session_id === 'string' && body.chat_session_id.trim()
-      ? body.chat_session_id.trim()
-      : getCurrentChatSessionId();
-  } catch {
-    return getCurrentChatSessionId();
-  }
+function readRequestChatSessionId(body: Readonly<DeepSeekRequestBody>): string | null {
+  return typeof body.chat_session_id === 'string' && body.chat_session_id.trim()
+    ? body.chat_session_id.trim()
+    : getCurrentChatSessionId();
 }
 
 async function createContentToolAuthorization(input: {
@@ -981,47 +1253,113 @@ function removeLocalToolAuthorization(requestId: string, authorizationId: string
 }
 
 async function closeAllContentToolAuthorizations(): Promise<void> {
-  await Promise.all([...activeToolAuthorizations.keys()].map(async (requestId) => {
+  const results = await Promise.allSettled([...activeToolAuthorizations.keys()].map(async (requestId) => {
     await waitForPendingToolExecutions(requestId);
     await finalizeInterruptedToolStarts(requestId);
     await closeContentToolAuthorization(requestId);
   }));
+  const errors = results
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => result.reason);
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Failed to close content tool authorizations.');
+  }
 }
 
 function postToMainWorld(message: Record<string, unknown>): void {
-  if (!mainWorldPort || !mainWorldBridgeReady) {
-    pendingMainWorldMessages.push(message);
-    return;
-  }
-  mainWorldPort.postMessage({ source: CONTENT_SOURCE, ...message });
+  mainWorldBridgeController?.post(message);
 }
 
-function flushMainWorldMessages(): void {
-  if (!mainWorldPort || !mainWorldBridgeReady) return;
-  while (pendingMainWorldMessages.length > 0) {
-    const message = pendingMainWorldMessages.shift()!;
-    mainWorldPort.postMessage({ source: CONTENT_SOURCE, ...message });
-  }
-}
+async function loadAndSyncRuntimeState(
+  syncLease: LatestSyncLease = toolDescriptorSyncGate.begin(),
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  const descriptorResultPromise = (async () => {
+    try {
+      const value = await sendRuntimeMessageStrict<ToolDescriptor[]>({
+        type: 'GET_TOOL_DESCRIPTORS',
+      });
+      return { ok: true as const, descriptors: decodeToolDescriptors(value) };
+    } catch (error) {
+      return { ok: false as const, error };
+    }
+  })();
 
-async function loadAndSyncRuntimeState() {
-  const [memories, skills, activePreset, modelType, toolDescriptors, promptSettings] = await Promise.all([
-    sendRuntimeMessage<Memory[]>({ type: 'GET_MEMORIES' }),
-    sendRuntimeMessage<Skill[]>({ type: 'GET_SKILLS' }),
-    sendRuntimeMessage<SystemPromptPreset | null>({ type: 'GET_ACTIVE_PRESET' }),
+  const runtimeStateSync = Promise.all([
+    sendRuntimeMessageStrict<unknown>({ type: 'GET_MEMORIES' })
+      .then((value) => decodeRuntimeMemories(value, 'memoryResponse')),
+    sendRuntimeMessageStrict<unknown>({ type: 'GET_SKILLS' })
+      .then((value) => decodeSkillLibrary(value, 'skillResponse')),
+    sendRuntimeMessageStrict(
+      { type: 'GET_ACTIVE_PRESET' },
+      (value) => decodeActivePreset(value, 'activePresetResponse'),
+    ),
     sendRuntimeMessage<ModelType>({ type: 'GET_MODEL_TYPE' }),
-    sendRuntimeMessage<ToolDescriptor[]>({ type: 'GET_TOOL_DESCRIPTORS' }),
     sendRuntimeMessage<PromptInjectionSettings>({ type: 'GET_PROMPT_INJECTION_SETTINGS' }),
-  ]);
-
-  syncToMainWorld(
-    memories ?? [],
-    skills ?? [],
-    activePreset ?? null,
-    modelType ?? null,
-    normalizeToolDescriptors(toolDescriptors),
-    normalizePromptInjectionSettings(promptSettings),
+  ]).then(
+    ([memories, skills, activePreset, modelType, promptSettings]) => {
+      if (!isCurrent()) return;
+      syncToMainWorld(
+        memories,
+        skills,
+        activePreset,
+        modelType ?? null,
+        currentToolDescriptors,
+        normalizePromptInjectionSettings(promptSettings),
+      );
+    },
+    (error: unknown) => {
+      if (isCurrent()) console.error('[DeepSeek++] runtime state sync failed', error);
+    },
   );
+
+  const descriptorSync = descriptorResultPromise.then((descriptorResult) => {
+    if (descriptorResult.ok) {
+      syncLease.commit(() => {
+        if (!isCurrent()) return;
+        syncToMainWorld(
+          currentMemories,
+          currentSkills,
+          currentActivePreset,
+          currentModelType,
+          descriptorResult.descriptors,
+          currentPromptSettings,
+        );
+      });
+    } else {
+      syncLease.commit(() => {
+        if (isCurrent()) reportToolDescriptorSyncFailure(descriptorResult.error);
+      });
+    }
+  });
+
+  await Promise.all([runtimeStateSync, descriptorSync]);
+}
+
+async function refreshToolDescriptorsFromBackground(
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  const syncLease = toolDescriptorSyncGate.begin();
+  try {
+    const descriptors = decodeToolDescriptors(
+      await sendRuntimeMessageStrict<ToolDescriptor[]>({ type: 'GET_TOOL_DESCRIPTORS' }),
+    );
+    syncLease.commit(() => {
+      if (!isCurrent()) return;
+      syncToMainWorld(
+        currentMemories,
+        currentSkills,
+        currentActivePreset,
+        currentModelType,
+        descriptors,
+        currentPromptSettings,
+      );
+    });
+  } catch (error) {
+    syncLease.commit(() => {
+      if (isCurrent()) reportToolDescriptorSyncFailure(error);
+    });
+  }
 }
 
 function hasLiveExtensionContext(): boolean {
@@ -1046,7 +1384,7 @@ function hasLiveExtensionContext(): boolean {
   }
 }
 
-function installExtensionInvalidationGuards() {
+function installExtensionInvalidationGuards(): () => void {
   const suppressInvalidation = (event: PromiseRejectionEvent | ErrorEvent) => {
     const error = 'reason' in event ? event.reason : event.error ?? event.message;
     if (!isExtensionInvalidatedError(error)) return;
@@ -1056,6 +1394,10 @@ function installExtensionInvalidationGuards() {
 
   window.addEventListener('unhandledrejection', suppressInvalidation);
   window.addEventListener('error', suppressInvalidation);
+  return () => {
+    window.removeEventListener('unhandledrejection', suppressInvalidation);
+    window.removeEventListener('error', suppressInvalidation);
+  };
 }
 
 function isExtensionInvalidatedError(error: unknown): boolean {
@@ -1068,36 +1410,9 @@ function isExtensionInvalidatedError(error: unknown): boolean {
 function invalidateExtensionContext() {
   if (!extensionContextValid) return;
   extensionContextValid = false;
-  backgroundPatchObserver?.disconnect();
-  backgroundPatchObserver = null;
-  removePet();
-  stopDeepSeekThemeSync();
-  if (restoredRenderTimer) {
-    clearTimeout(restoredRenderTimer);
-    restoredRenderTimer = null;
-  }
-  if (restoredInlineAgentRenderTimer) {
-    clearTimeout(restoredInlineAgentRenderTimer);
-    restoredInlineAgentRenderTimer = null;
-  }
-  if (inlineAgentTraceWriteTimer) {
-    clearTimeout(inlineAgentTraceWriteTimer);
-    inlineAgentTraceWriteTimer = null;
-  }
-  cancelPendingInlineAgentStreamRender();
-  stopTokenSpeedIndicatorBootstrap();
-  stopTokenSpeedIndicatorMountObserver();
-  stopTokenSpeedRouteWatcher();
-  stopToolBlockRouteWatcher();
-  stopMultimodalMediaInput();
-  removeTokenSpeedIndicator();
-  stopConversationExportActionInjector();
-  historyOrganizerController?.stop();
-  historyOrganizerController = null;
-  projectSidebarOrganizerController?.stop();
-  projectSidebarOrganizerController = null;
-  contentUxPolishController?.stop();
-  contentUxPolishController = null;
+  const lifecycle = contentDocumentLifecycle;
+  contentDocumentLifecycle = null;
+  void lifecycle?.dispose('extension-invalidated').catch(reportContentLifecycleError);
 }
 
 /** Isolated world writes captured DeepSeek request headers to chrome.storage. */
@@ -1116,31 +1431,35 @@ async function persistDeepSeekClientHeaders(capturedHeaders?: Record<string, str
         // vault optional — legacy cache still works
       }
       // Ask the sidepanel to re-check login status.
-      chrome.runtime.sendMessage({ type: 'AUTH_STATUS_CHANGED' }).catch(() => {});
-      return true;
+      return notifyContentAuthStatusChanged({
+        send: () => chrome.runtime.sendMessage({ type: 'AUTH_STATUS_CHANGED' }),
+        isExtensionInvalidatedError,
+        invalidateExtensionContext,
+        reportError(error) {
+          console.error('[DeepSeek++] auth status notification failed', error);
+        },
+      });
     }
   } catch (error) {
     if (isExtensionInvalidatedError(error)) {
       invalidateExtensionContext();
+    } else {
+      console.error('[DeepSeek++] DeepSeek client header persistence failed', error);
     }
   }
   return false;
 }
 
 function startConversationExportActionInjector() {
+  exportActionRetryAttempts = 0;
   injectConversationExportActionStyles();
   mountConversationExportActions();
-
-  exportActionObserver?.disconnect();
-  exportActionObserver = new MutationObserver(() => scheduleConversationExportActionMount());
-  exportActionObserver.observe(document.body, { childList: true, subtree: true });
   armConversationExportActionRetry();
 }
 
 function stopConversationExportActionInjector() {
-  exportActionObserver?.disconnect();
-  exportActionObserver = null;
   clearConversationExportActionTimers();
+  exportActionRetryAttempts = 0;
   closeConversationExportMenu();
   document.querySelectorAll(`.${EXPORT_ACTION_CLASS}, .${EXPORT_ACTION_TOAST_CLASS}`)
     .forEach((el) => el.remove());
@@ -1168,6 +1487,16 @@ function scheduleConversationExportActionMount() {
     exportActionMountTimer = null;
     mountConversationExportActions();
   }, EXPORT_ACTION_MOUNT_DEBOUNCE_MS);
+}
+
+function mutationMayAffectConversationExportActions(mutation: MutationRecord): boolean {
+  if (mutation.type !== 'childList') return false;
+  for (const node of [...mutation.addedNodes, ...mutation.removedNodes]) {
+    if (!nodeMatchesOrContains(node, '.ds-message, button, [role="button"].ds-button')) continue;
+    if (node instanceof Element && node.closest(`.${EXPORT_ACTION_MENU_CLASS}`)) continue;
+    return true;
+  }
+  return false;
 }
 
 function armConversationExportActionRetry() {
@@ -1639,11 +1968,15 @@ function getCurrentConversationTitle(): string {
   return title || contentT('content.conversation.untitled');
 }
 
-async function refreshMultimodalMediaInputAvailability() {
+async function refreshMultimodalMediaInputAvailability(
+  isCurrent: () => boolean = () => true,
+) {
   try {
     const servers = await sendRuntimeMessageStrict<McpServerConfig[]>({ type: 'GET_MCP_SERVERS' });
+    if (!isCurrent()) return;
     setMultimodalMediaInputEnabled(shouldEnableMultimodalMediaInput(servers));
   } catch (error) {
+    if (!isCurrent()) return;
     setMultimodalMediaInputEnabled(false);
     if (hasLiveExtensionContext()) {
       console.warn('[DeepSeek++] Failed to load MCP servers for multimodal media input.', error);
@@ -1675,17 +2008,11 @@ function startMultimodalMediaInput() {
   if (!multimodalMediaInputEnabled) return;
   injectMultimodalMediaStyles();
   mountMultimodalMediaControls();
-
-  multimodalMediaObserver?.disconnect();
-  multimodalMediaObserver = new MutationObserver(() => scheduleMultimodalMediaMount());
-  multimodalMediaObserver.observe(document.body, { childList: true, subtree: true });
   document.removeEventListener('paste', handleMultimodalMediaPaste, true);
   document.addEventListener('paste', handleMultimodalMediaPaste, true);
 }
 
 function stopMultimodalMediaInput() {
-  multimodalMediaObserver?.disconnect();
-  multimodalMediaObserver = null;
   if (multimodalMediaMountTimer) {
     clearTimeout(multimodalMediaMountTimer);
     multimodalMediaMountTimer = null;
@@ -1703,6 +2030,34 @@ function scheduleMultimodalMediaMount() {
     multimodalMediaMountTimer = null;
     mountMultimodalMediaControls();
   }, MULTIMODAL_MEDIA_MOUNT_DEBOUNCE_MS);
+}
+
+function mutationMayAffectPromptControls(mutation: MutationRecord): boolean {
+  if (mutation.type !== 'childList') return false;
+  const textarea = getPromptTextarea();
+  if (
+    textarea
+    && mutation.target instanceof Node
+    && (
+      textarea.contains(mutation.target)
+      || (mutation.target instanceof Element && mutation.target.contains(textarea))
+    )
+  ) return true;
+
+  const selector = [
+    'textarea',
+    `#${MULTIMODAL_MEDIA_BUTTON_ID}`,
+    `#${MULTIMODAL_MEDIA_FILE_INPUT_ID}`,
+    `#${MULTIMODAL_MEDIA_TRAY_ID}`,
+  ].join(', ');
+  return [...mutation.addedNodes, ...mutation.removedNodes]
+    .some((node) => nodeMatchesOrContains(node, selector));
+}
+
+function nodeMatchesOrContains(node: Node, selector: string): boolean {
+  if (node instanceof Element) return node.matches(selector) || Boolean(node.querySelector(selector));
+  if (node instanceof DocumentFragment) return Boolean(node.querySelector(selector));
+  return false;
 }
 
 function mountMultimodalMediaControls() {
@@ -2041,28 +2396,21 @@ function insertPromptText(text: string) {
 }
 
 async function consumePendingMultimodalMediaForRequest(
-  bodyStr: string,
+  body: Readonly<DeepSeekRequestBody>,
   options: { onLongRunning?: (timeoutMs: number) => void } = {},
-): Promise<string> {
+): Promise<DeepSeekRequestBody> {
   if (!multimodalMediaInputEnabled) {
     clearPendingMultimodalMedia();
-    return bodyStr;
-  }
-
-  let body: Record<string, unknown>;
-  try {
-    body = JSON.parse(bodyStr);
-  } catch {
-    throw new Error(contentT('content.multimodalMedia.invalidRequest'));
+    return { ...body };
   }
 
   const mediaRouteKey = selectPendingMultimodalMediaRouteKey(body);
-  if (!mediaRouteKey) return bodyStr;
+  if (!mediaRouteKey) return { ...body };
 
   const media = getPendingMultimodalMediaForRoute(mediaRouteKey);
-  if (media.length === 0) return bodyStr;
+  if (media.length === 0) return { ...body };
 
-  const originalPrompt = typeof body.prompt === 'string' ? body.prompt : '';
+  const originalPrompt = body.prompt;
   if (!originalPrompt.trim()) {
     throw new Error(contentT('content.multimodalMedia.emptyPrompt'));
   }
@@ -2087,10 +2435,12 @@ async function consumePendingMultimodalMediaForRequest(
     });
     if (!response.ok) throw new Error(response.error || 'Multimodal analysis failed.');
 
-    body.prompt = buildMultimodalAnalysisPrompt(originalPrompt, response.analyses);
     clearPendingMultimodalMediaItems(media);
     setMultimodalMediaStatus(contentT('content.multimodalMedia.analyzed', { count: response.analyses.length }), 'info');
-    return JSON.stringify(body);
+    return {
+      ...body,
+      prompt: buildMultimodalAnalysisPrompt(originalPrompt, response.analyses),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setMultimodalMediaStatus(contentT('content.multimodalMedia.failed', { message }), 'error');
@@ -2805,7 +3155,7 @@ async function sendRuntimeMessage<T>(message: unknown): Promise<T | undefined> {
   try {
     const result = await chrome.runtime.sendMessage(message);
     // Guard against background error responses being misinterpreted as valid data
-    if (result && typeof result === 'object' && 'ok' in result && result.ok === false) {
+    if (isRuntimeFailure(result)) {
       return undefined;
     }
     return result as T;
@@ -2818,14 +3168,20 @@ async function sendRuntimeMessage<T>(message: unknown): Promise<T | undefined> {
   }
 }
 
-async function sendRuntimeMessageStrict<T>(message: unknown): Promise<T> {
+async function sendRuntimeMessageStrict<T>(
+  message: unknown,
+  decode?: (value: unknown) => T,
+): Promise<T> {
   if (!hasLiveExtensionContext()) {
     throw new Error('Extension context is unavailable.');
   }
 
   try {
     const result = await chrome.runtime.sendMessage(message);
-    if (isRuntimeFailureResponse(result)) {
+    if (decode) {
+      return decodeRuntimeResponse(result, decode, 'Runtime request failed.');
+    }
+    if (isRuntimeFailure(result)) {
       throw new Error(result.error ? String(result.error) : 'Runtime request failed.');
     }
     return result as T;
@@ -2837,64 +3193,19 @@ async function sendRuntimeMessageStrict<T>(message: unknown): Promise<T> {
   }
 }
 
-function isRuntimeFailureResponse(value: unknown): value is { ok: false; error?: unknown } {
-  return Boolean(value && typeof value === 'object' && (value as { ok?: unknown }).ok === false);
-}
-
-async function getLocalStorageValue<T>(key: string): Promise<T | undefined> {
-  const storage = getLocalStorageArea();
-  if (!storage) return undefined;
-
-  try {
-    const stored = await storage.get(key);
-    return stored?.[key] as T | undefined;
-  } catch (error) {
-    if (isExtensionInvalidatedError(error)) {
-      invalidateExtensionContext();
-    }
-    return undefined;
-  }
-}
-
-async function setLocalStorageValue(key: string, value: unknown): Promise<void> {
-  const storage = getLocalStorageArea();
-  if (!storage) return;
-
-  try {
-    await storage.set({ [key]: value });
-  } catch (error) {
-    if (isExtensionInvalidatedError(error)) {
-      invalidateExtensionContext();
-    }
-  }
-}
-
-function getLocalStorageArea(): chrome.storage.LocalStorageArea | null {
-  if (!hasLiveExtensionContext()) return null;
-
-  try {
-    const storage = chrome.storage?.local;
-    if (!storage || typeof storage.get !== 'function' || typeof storage.set !== 'function') return null;
-    return storage;
-  } catch (error) {
-    if (isExtensionInvalidatedError(error)) {
-      invalidateExtensionContext();
-    }
-    return null;
-  }
-}
-
 function addRuntimeMessageListener(
   listener: Parameters<typeof chrome.runtime.onMessage.addListener>[0],
-) {
-  if (!hasLiveExtensionContext()) return;
+): () => void {
+  if (!hasLiveExtensionContext()) return () => undefined;
 
   try {
     chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
   } catch (error) {
     if (isExtensionInvalidatedError(error)) {
       invalidateExtensionContext();
     }
+    return () => undefined;
   }
 }
 
@@ -3162,12 +3473,22 @@ function startInlineAgentIfNeeded(
     anchorMessageIndex,
     anchorContent,
   );
-  void writeInlineAgentTrace(activeInlineAgentTrace);
+  observeReportedPersistence(writeInlineAgentTrace(activeInlineAgentTrace));
 
   inlineAgentContainer = container;
   mountInlineAgentContainer(target, container);
 
-  void startInlineAgentLoop(payload);
+  startOwnedInlineAgentLoop(payload);
+}
+
+function startOwnedInlineAgentLoop(payload: InlineAgentStartPayload): void {
+  const task = startInlineAgentLoop(payload).catch((error) => {
+    console.error('[DeepSeek++] inline agent loop failed', error);
+  });
+  pendingInlineAgentLoopTasks.add(task);
+  void task.then(() => {
+    pendingInlineAgentLoopTasks.delete(task);
+  });
 }
 
 function isInlineAgentResponseComplete(complete: ResponseCompletePayload): boolean {
@@ -3460,7 +3781,7 @@ function handleAgentStepComplete(msg: InlineAgentStepCompleteMsg): void {
   }), { immediate: true });
 
   const completedStep = inlineAgentCurrentStep;
-  setTimeout(() => {
+  inlineAgentCapabilityScope?.setTimeout(() => {
     completedStep.setAttribute('data-collapsed', 'true');
   }, 800);
 
@@ -3577,7 +3898,7 @@ function runToolExecution(call: ToolCall): Promise<ToolCardResult> {
       activeToolBlockSessionId = session.id;
       toolExecutions = session.executions;
       renderToolBlock(session);
-      void persistToolBlockSession(session);
+      observeReportedPersistence(persistToolBlockSession(session));
       showPetResult(result);
       return result;
     });
@@ -3676,8 +3997,10 @@ async function finalizeInterruptedToolStarts(requestId: string): Promise<void> {
     ? requestId
     : toolAuthorizationRequestAliases.get(requestId) ?? requestId;
   const pending = pendingStartedToolCallsByRequest.drain(authoritativeRequestId);
-  if (pending.length === 0) return;
+  await finalizePendingToolStarts(pending);
+}
 
+async function finalizePendingToolStarts(pending: PendingStartedToolCall[]): Promise<void> {
   for (const { call, session } of pending) {
     removePendingToolExecution(session, call);
     const result: ToolCardResult = {
@@ -3813,7 +4136,8 @@ function createIdleTokenSpeedProgress(): ResponseTokenSpeedPayload {
 }
 
 function recordUsageProgress(progress: ResponseTokenSpeedPayload) {
-  if (progress.active || !progress.requestId) return;
+  const requestId = progress.requestId;
+  if (progress.active || !requestId) return;
   const totalTokens = progress.accumulatedTokens ?? progress.estimatedTokens;
   if (!Number.isFinite(totalTokens) || totalTokens <= 0) return;
 
@@ -3826,29 +4150,26 @@ function recordUsageProgress(progress: ResponseTokenSpeedPayload) {
     progress.assistantMessageId ?? '',
   ].join('|');
 
-  if (recordedUsageProgressSignatures.get(progress.requestId) === signature) return;
-  recordedUsageProgressSignatures.set(progress.requestId, signature);
-  if (recordedUsageProgressSignatures.size > 200) {
-    const firstKey = recordedUsageProgressSignatures.keys().next().value;
-    if (typeof firstKey === 'string') recordedUsageProgressSignatures.delete(firstKey);
-  }
-
-  void sendRuntimeMessage({
-    type: 'RECORD_USAGE_TURN',
-    payload: {
-      id: progress.requestId,
-      recordedAt: Date.now(),
-      source: 'deepseek-web',
-      chatSessionId: progress.chatSessionId ?? getCurrentChatSessionId(),
-      assistantMessageId: progress.assistantMessageId ?? null,
-      modelType: progress.modelType,
-      totalTokens: Math.round(totalTokens),
-      tokenSource: progress.tokenSource,
-      tps: progress.tokensPerSecond,
-      speedSource: progress.speedSource,
-      elapsedMs: progress.elapsedMs,
-      messageCount: 2,
-    },
+  void usageProgressWrites.persist(requestId, signature, async () => {
+    await sendRuntimeMessageStrict({
+      type: 'RECORD_USAGE_TURN',
+      payload: {
+        id: requestId,
+        recordedAt: Date.now(),
+        source: 'deepseek-web',
+        chatSessionId: progress.chatSessionId ?? getCurrentChatSessionId(),
+        assistantMessageId: progress.assistantMessageId ?? null,
+        modelType: progress.modelType,
+        totalTokens: Math.round(totalTokens),
+        tokenSource: progress.tokenSource,
+        tps: progress.tokensPerSecond,
+        speedSource: progress.speedSource,
+        elapsedMs: progress.elapsedMs,
+        messageCount: 2,
+      },
+    });
+  }).catch((error) => {
+    console.error('[DeepSeek++] Failed to persist usage turn.', error);
   });
 }
 
@@ -3916,19 +4237,26 @@ function scheduleTokenSpeedIndicatorBootstrap() {
   }, tokenSpeedBootstrapAttempts === 0 ? 0 : TOKEN_SPEED_BOOTSTRAP_RETRY_MS);
 }
 
-function startTokenSpeedIndicatorMountObserver() {
-  stopTokenSpeedIndicatorMountObserver();
+function startTokenSpeedIndicatorMountSubscription(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+) {
+  stopTokenSpeedIndicatorMountSubscription();
   const root = document.getElementById('root') ?? document.body;
   if (!root) return;
 
-  tokenSpeedMountObserver = new MutationObserver(scheduleTokenSpeedIndicatorMountRefresh);
-  tokenSpeedMountObserver.observe(root, { childList: true, subtree: false });
+  scope.addCleanup('cleanup', mutationHub.subscribe({
+    matches: (mutations) => (
+      tokenSpeedCapabilityScope === scope
+      && scope.active
+      && mutations.some((mutation) => mutation.type === 'childList' && mutation.target === root)
+    ),
+    handle: scheduleTokenSpeedIndicatorMountRefresh,
+  }));
   scheduleTokenSpeedIndicatorMountRefresh();
 }
 
-function stopTokenSpeedIndicatorMountObserver() {
-  tokenSpeedMountObserver?.disconnect();
-  tokenSpeedMountObserver = null;
+function stopTokenSpeedIndicatorMountSubscription() {
   if (tokenSpeedMountTimer) {
     clearTimeout(tokenSpeedMountTimer);
     tokenSpeedMountTimer = null;
@@ -3944,23 +4272,6 @@ function scheduleTokenSpeedIndicatorMountRefresh() {
     if (isTokenSpeedIndicatorMountedInConversation()) return;
     renderTokenSpeedIndicator(lastTokenSpeedProgress);
   }, TOKEN_SPEED_MOUNT_DEBOUNCE_MS);
-}
-
-function startTokenSpeedRouteWatcher() {
-  stopTokenSpeedRouteWatcher();
-  tokenSpeedRouteKey = getTokenSpeedRouteKey();
-  window.addEventListener('popstate', handleTokenSpeedRouteChange);
-  window.addEventListener('hashchange', handleTokenSpeedRouteChange);
-  tokenSpeedRouteTimer = setInterval(handleTokenSpeedRouteChange, TOKEN_SPEED_ROUTE_CHECK_MS);
-}
-
-function stopTokenSpeedRouteWatcher() {
-  window.removeEventListener('popstate', handleTokenSpeedRouteChange);
-  window.removeEventListener('hashchange', handleTokenSpeedRouteChange);
-  if (tokenSpeedRouteTimer) {
-    clearInterval(tokenSpeedRouteTimer);
-    tokenSpeedRouteTimer = null;
-  }
 }
 
 function handleTokenSpeedRouteChange() {
@@ -3982,23 +4293,6 @@ function applyCurrentRouteChange(): boolean {
   return true;
 }
 
-function startToolBlockRouteWatcher() {
-  stopToolBlockRouteWatcher();
-  toolBlockRouteKey = getTokenSpeedRouteKey();
-  window.addEventListener('popstate', handleToolBlockRouteChange);
-  window.addEventListener('hashchange', handleToolBlockRouteChange);
-  toolBlockRouteTimer = setInterval(handleToolBlockRouteChange, TOOL_BLOCK_ROUTE_CHECK_MS);
-}
-
-function stopToolBlockRouteWatcher() {
-  window.removeEventListener('popstate', handleToolBlockRouteChange);
-  window.removeEventListener('hashchange', handleToolBlockRouteChange);
-  if (toolBlockRouteTimer) {
-    clearInterval(toolBlockRouteTimer);
-    toolBlockRouteTimer = null;
-  }
-}
-
 function handleToolBlockRouteChange() {
   const nextRouteKey = getTokenSpeedRouteKey();
   if (nextRouteKey === toolBlockRouteKey) return;
@@ -4011,8 +4305,17 @@ function handleToolBlockRouteChange() {
   }
 
   renderActiveToolBlockForCurrentRoute();
-  void restorePersistedToolBlocks();
+  const scope = toolCapabilityScope;
+  if (scope) {
+    observeReportedPersistence(restorePersistedToolBlocks(scope, toolCapabilityEpoch));
+  }
   scheduleRenderRestoredToolBlocks();
+}
+
+function handleContentNavigation(): void {
+  if (tokenSpeedCapabilityScope?.active) handleTokenSpeedRouteChange();
+  if (toolCapabilityScope?.active) handleToolBlockRouteChange();
+  window.dispatchEvent(new Event('dpp:navigation'));
 }
 
 function getTokenSpeedRouteKey(): string {
@@ -4153,14 +4456,45 @@ function syncToMainWorld(
   });
 }
 
+function decodeRuntimeMemories(value: unknown, path: string): Memory[] {
+  if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
+  return value.map((memory, index) => (
+    decodePersistedMemoryRecord(memory, `${path}[${index}]`)
+  ));
+}
+
+function syncCurrentRuntimeStateToMainWorld(): void {
+  syncToMainWorld(
+    currentMemories,
+    currentSkills,
+    currentActivePreset,
+    currentModelType,
+    currentToolDescriptors,
+    currentPromptSettings,
+  );
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function normalizeToolDescriptors(value: unknown): ToolDescriptor[] {
-  if (!Array.isArray(value)) return [...createDefaultToolDescriptors(currentContentLocale)];
-  const descriptors = value.filter((item): item is ToolDescriptor => Boolean(item && typeof item === 'object'));
-  return descriptors.length > 0 ? descriptors : [...createDefaultToolDescriptors(currentContentLocale)];
+function decodeToolDescriptors(value: unknown): ToolDescriptor[] {
+  if (!Array.isArray(value) || !value.every(isToolDescriptorRecord)) {
+    throw new Error('Runtime tool descriptor catalog does not match the released contract.');
+  }
+  return value as unknown as ToolDescriptor[];
+}
+
+function reportToolDescriptorSyncFailure(error: unknown): void {
+  console.error('[DeepSeek++] tool descriptor sync failed; tool execution disabled', error);
+  syncToMainWorld(
+    currentMemories,
+    currentSkills,
+    currentActivePreset,
+    currentModelType,
+    [],
+    currentPromptSettings,
+  );
 }
 
 function buildToolOpenTagRegex(descriptors: ToolDescriptor[]): RegExp {
@@ -4179,7 +4513,7 @@ function buildToolTagPattern(descriptors: ToolDescriptor[]): string {
   // sandbox as an executable page-catalog tool.
   const names = [...catalogNames, ...PAGE_CLEANUP_SANDBOX_TOOL_NAMES];
   const escaped = [...new Set(names)].map(escapeRegExp);
-  return escaped.length > 0 ? escaped.join('|') : 'memory_save|memory_update|memory_delete';
+  return escaped.length > 0 ? escaped.join('|') : '(?!)';
 }
 
 function hashString(value: string): string {
@@ -4260,7 +4594,7 @@ function updateActiveInlineAgentTrace(
       clearTimeout(inlineAgentTraceWriteTimer);
       inlineAgentTraceWriteTimer = null;
     }
-    void writeInlineAgentTrace(activeInlineAgentTrace);
+    observeReportedPersistence(writeInlineAgentTrace(activeInlineAgentTrace));
     return;
   }
 
@@ -4301,55 +4635,26 @@ function scheduleInlineAgentTraceWrite(trace: InlineAgentTraceRecord): void {
   inlineAgentTraceWriteTimer = setTimeout(() => {
     inlineAgentTraceWriteTimer = null;
     const latest = activeInlineAgentTrace?.id === trace.id ? activeInlineAgentTrace : trace;
-    void writeInlineAgentTrace(latest);
+    observeReportedPersistence(writeInlineAgentTrace(latest));
   }, INLINE_AGENT_TRACE_WRITE_DEBOUNCE_MS);
 }
 
 async function writeInlineAgentTrace(trace: InlineAgentTraceRecord): Promise<void> {
   const stored = sanitizeInlineAgentTraceForStorage(trace);
-  const existing = await getPersistedInlineAgentTraces();
-  const now = Date.now();
-  const next = [
-    ...existing.filter((item) => item.id !== stored.id),
-    stored,
-  ]
-    .filter((item) => now - item.createdAt < INLINE_AGENT_TRACE_TTL_MS)
-    .slice(-INLINE_AGENT_TRACE_LIMIT);
-
-  await setLocalStorageValue(INLINE_AGENT_TRACE_STORAGE_KEY, next);
-  restoredInlineAgentTraces.set(stored.id, stored);
+  await trackContentPersistence(
+    'inline-agent',
+    'inline-agent trace write',
+    upsertPersistedInlineAgentTrace(stored),
+  );
+  if (inlineAgentCapabilityScope?.active) restoredInlineAgentTraces.set(stored.id, stored);
 }
 
 async function getPersistedInlineAgentTraces(): Promise<InlineAgentTraceRecord[]> {
-  const traces = await getLocalStorageValue<unknown>(INLINE_AGENT_TRACE_STORAGE_KEY);
-  return Array.isArray(traces) ? traces.filter(isInlineAgentTraceRecord) : [];
-}
-
-function isInlineAgentTraceRecord(value: unknown): value is InlineAgentTraceRecord {
-  if (!value || typeof value !== 'object') return false;
-  const trace = value as Partial<InlineAgentTraceRecord>;
-  return typeof trace.id === 'string' &&
-    typeof trace.loopId === 'string' &&
-    typeof trace.chatSessionId === 'string' &&
-    typeof trace.anchorMessageId === 'number' &&
-    (trace.anchorMessageIndex === undefined || trace.anchorMessageIndex === null || typeof trace.anchorMessageIndex === 'number') &&
-    (trace.anchorContent === undefined || typeof trace.anchorContent === 'string') &&
-    (trace.finalText === undefined || typeof trace.finalText === 'string') &&
-    typeof trace.url === 'string' &&
-    typeof trace.createdAt === 'number' &&
-    typeof trace.updatedAt === 'number' &&
-    Array.isArray(trace.steps) &&
-    trace.steps.every(isInlineAgentTraceStepRecord);
-}
-
-function isInlineAgentTraceStepRecord(value: unknown): value is InlineAgentTraceStepRecord {
-  if (!value || typeof value !== 'object') return false;
-  const step = value as Partial<InlineAgentTraceStepRecord>;
-  return typeof step.index === 'number' &&
-    typeof step.status === 'string' &&
-    typeof step.text === 'string' &&
-    Array.isArray(step.toolExecutions) &&
-    typeof step.collapsed === 'boolean';
+  return trackContentPersistence(
+    'inline-agent',
+    'inline-agent trace read',
+    readPersistedInlineAgentTraces(),
+  );
 }
 
 function sanitizeInlineAgentTraceForStorage(trace: InlineAgentTraceRecord): InlineAgentTraceRecord {
@@ -4372,9 +4677,13 @@ function sanitizeInlineAgentTraceStep(step: InlineAgentTraceStepRecord): InlineA
   };
 }
 
-async function restorePersistedInlineAgentTraces(): Promise<void> {
+async function restorePersistedInlineAgentTraces(
+  scope: ContentResourceScope,
+  epoch: number,
+): Promise<void> {
   const url = getToolBlockUrl();
   const traces = await getPersistedInlineAgentTraces();
+  if (!isInlineAgentEpochActive(scope, epoch)) return;
   let changed = false;
 
   for (const trace of traces) {
@@ -4410,8 +4719,11 @@ function shouldTryRestoreInlineAgentTrace(trace: InlineAgentTraceRecord, current
 }
 
 async function getPersistedToolBlocks(): Promise<PersistedToolBlock[]> {
-  const blocks = await getLocalStorageValue<unknown>(TOOL_RESTORE_STORAGE_KEY);
-  return Array.isArray(blocks) ? blocks : [];
+  return trackContentPersistence(
+    'tool',
+    'tool execution block read',
+    readPersistedToolExecutionBlocks(),
+  );
 }
 
 function getOrCreateActiveToolBlockSession(call: ToolCall): ActiveToolBlockSession {
@@ -4504,22 +4816,24 @@ async function persistToolBlockSession(session: ActiveToolBlockSession, fullText
     },
   };
 
-  const existing = await getPersistedToolBlocks();
-  const next = [
-    ...existing.filter((item) => item.id !== block.id),
-    block,
-  ]
-    .filter((item) => Date.now() - item.createdAt < 1000 * 60 * 60 * 24 * 30)
-    .slice(-100);
-
-  await setLocalStorageValue(TOOL_RESTORE_STORAGE_KEY, next);
-  restoredToolRecords.set(block.id, block);
-  scheduleRenderRestoredToolBlocks();
+  await trackContentPersistence(
+    'tool',
+    'tool execution block write',
+    upsertPersistedToolExecutionBlock(block),
+  );
+  if (toolCapabilityScope?.active) {
+    restoredToolRecords.set(block.id, block);
+    scheduleRenderRestoredToolBlocks();
+  }
 }
 
-async function restorePersistedToolBlocks() {
+async function restorePersistedToolBlocks(
+  scope: ContentResourceScope,
+  epoch: number,
+) {
   const url = getToolBlockUrl();
   const blocks = await getPersistedToolBlocks();
+  if (!isToolEpochActive(scope, epoch)) return;
   rememberRestoredToolRecords(
     blocks
       .filter((block) => shouldTryRestoreToolBlock(block, url))
@@ -5899,14 +6213,19 @@ function elementHasMessageId(element: Element, messageId: string): boolean {
   });
 }
 
-function startRenderedToolCallCleaner() {
+function startRenderedToolCallCleaner(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+) {
+  stopRenderedToolCallCleaner();
   let scheduled = false;
 
   const schedule = () => {
     if (scheduled) return;
     if (activeStreamingToolCount > 0) return;
     scheduled = true;
-    requestAnimationFrame(() => {
+    renderedToolCallCleanerFrame = requestAnimationFrame(() => {
+      renderedToolCallCleanerFrame = null;
       scheduled = false;
       cleanRenderedToolCalls();
     });
@@ -5914,12 +6233,21 @@ function startRenderedToolCallCleaner() {
 
   schedule();
 
-  const observer = new MutationObserver((mutations) => {
-    if (mutations.some(mutationMayContainCleanableText)) {
-      schedule();
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  scope.addCleanup('cleanup', mutationHub.subscribe({
+    matches: (mutations) => (
+      toolCapabilityScope === scope
+      && scope.active
+      && mutations.some(mutationMayContainCleanableText)
+    ),
+    handle: schedule,
+  }));
+}
+
+function stopRenderedToolCallCleaner(): void {
+  if (renderedToolCallCleanerFrame !== null) {
+    cancelAnimationFrame(renderedToolCallCleanerFrame);
+    renderedToolCallCleanerFrame = null;
+  }
 }
 
 function mutationMayContainCleanableText(mutation: MutationRecord): boolean {
@@ -6006,15 +6334,57 @@ const internalToolResultsMessageHider = createContentScriptToolResultsMessageHid
   ),
 });
 
-function hideInlineAgentContinuationMessages(root: ParentNode) {
-  internalToolResultsMessageHider.hideIn(root);
+function startInlineAgentContinuationMessageHider(
+  scope: ContentResourceScope,
+  mutationHub: ContentMutationHub,
+) {
+  hideInlineAgentContinuationMessages(document);
+  scope.addCleanup('cleanup', mutationHub.subscribe({
+    matches: (mutations) => (
+      inlineAgentCapabilityScope === scope
+      && scope.active
+      && mutations.some(mutationMayContainInlineAgentContinuation)
+    ),
+    handle(mutations) {
+      const roots = new Set<ParentNode>();
+      for (const mutation of mutations) {
+        if (mutation.type === 'characterData') {
+          const parent = mutation.target.parentElement;
+          if (isInlineAgentContinuationRenderedText(parent?.textContent)) {
+            const root = parent?.closest('.ds-message') ?? parent;
+            if (root) roots.add(root);
+          }
+          continue;
+        }
+
+        for (const node of mutation.addedNodes) {
+          if (node instanceof Element) roots.add(node);
+        }
+      }
+
+      roots.forEach(hideInlineAgentContinuationMessages);
+    },
+  }));
 }
 
-function startInlineAgentContinuationMessageHider() {
-  hideInlineAgentContinuationMessages(document);
-  inlineAgentContinuationMessageObserver?.disconnect();
-  // Exact production composition under test in page-tool-results-hide-dom.
-  inlineAgentContinuationMessageObserver = internalToolResultsMessageHider.observe(document.body);
+function stopInlineAgentContinuationMessageHider(): void {
+  for (const message of document.querySelectorAll<HTMLElement>('[data-dpp-hidden-inline-agent-continuation="true"]')) {
+    message.style.removeProperty('display');
+    message.removeAttribute('data-dpp-hidden-inline-agent-continuation');
+    message.removeAttribute('data-dpp-hidden-internal-tool-results');
+  }
+}
+
+function mutationMayContainInlineAgentContinuation(mutation: MutationRecord): boolean {
+  if (mutation.type === 'characterData') {
+    return isInlineAgentContinuationRenderedText(mutation.target.textContent);
+  }
+  return [...mutation.addedNodes]
+    .some((node) => nodeMatchesOrContains(node, '.ds-message'));
+}
+
+function hideInlineAgentContinuationMessages(root: ParentNode) {
+  internalToolResultsMessageHider.hideIn(root);
 }
 
 function isInlineAgentContinuationRenderedText(text: string | null | undefined): boolean {
@@ -6170,7 +6540,7 @@ function pruneEmptyToolContainers(start: HTMLElement, boundary: Element) {
 function collapseToolBlock(block: HTMLElement | null = toolBlockEl) {
   if (!block) return;
   block.removeAttribute('id');
-  setTimeout(() => {
+  toolCapabilityScope?.setTimeout(() => {
     block.setAttribute('data-collapsed', 'true');
   }, 1500);
 }
@@ -6198,10 +6568,12 @@ function placeToolBlock(
 
   if (!tryPlace()) {
     // DOM not ready yet — retry after a short delay
-    const timer = setInterval(() => {
-      if (tryPlace()) clearInterval(timer);
+    const scope = toolCapabilityScope;
+    if (!scope?.active) return;
+    const timer = scope.setInterval(() => {
+      if (tryPlace()) scope.clearInterval(timer);
     }, 200);
-    setTimeout(() => clearInterval(timer), 5000);
+    scope.setTimeout(() => scope.clearInterval(timer), 5000);
   }
 }
 
@@ -6334,14 +6706,14 @@ function patchContainerBackgrounds() {
 }
 
 function removeBackground() {
-  backgroundPatchObserver?.disconnect();
-  backgroundPatchObserver = null;
   document.getElementById('dpp-bg')?.remove();
   document.getElementById('dpp-bg-style')?.remove();
   document.body.classList.remove('dpp-bg-active');
   document.body.style.removeProperty('--dpp-overlay-light');
   document.body.style.removeProperty('--dpp-overlay-dark');
   document.body.style.removeProperty('--dpp-blur');
+  document.querySelectorAll('[data-dpp-transparent]')
+    .forEach((element) => element.removeAttribute('data-dpp-transparent'));
 }
 
 function applyPetConfig(config: PetConfig | null) {
@@ -7041,12 +7413,4 @@ function applyBackground(config: BackgroundConfig | null) {
 
   patchContainerBackgrounds();
 
-  // Re-patch on DOM changes
-  backgroundPatchObserver?.disconnect();
-  backgroundPatchObserver = new MutationObserver(() => {
-    if (document.body.classList.contains('dpp-bg-active')) {
-      patchContainerBackgrounds();
-    }
-  });
-  backgroundPatchObserver.observe(document.body, { childList: true, subtree: true });
 }

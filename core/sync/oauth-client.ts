@@ -1,4 +1,8 @@
 import { DEFAULT_LOCALE, translate, type LocaleMessageKey, type MessageParams } from '../i18n';
+import {
+  getCurrentSyncIdentityPort,
+  type SyncIdentityPort,
+} from './identity-port';
 
 /**
  * Shared OAuth helpers for cloud-sync providers (Google Drive, OneDrive).
@@ -9,38 +13,27 @@ import { DEFAULT_LOCALE, translate, type LocaleMessageKey, type MessageParams } 
  * in-memory and refreshed transparently when they expire.
  */
 
-// Lazily computed: chrome.identity is only available in the extension runtime,
-// and evaluating it at module top-level breaks unit tests that import this
-// module transitively without a chrome mock.
-let cachedRedirectUri: string | null = null;
-
 export type SyncErrorTranslator = (key: LocaleMessageKey, params?: MessageParams) => string;
 
 export function defaultSyncErrorTranslator(key: LocaleMessageKey, params?: MessageParams): string {
   return translate(DEFAULT_LOCALE, key, params);
 }
 
-export function getOptionalRedirectUri(): string | null {
-  const identity = getChromeIdentity();
-  if (!identity) return null;
-  if (cachedRedirectUri === null) {
-    cachedRedirectUri = identity.getRedirectURL();
-  }
-  return cachedRedirectUri;
+export function getOptionalRedirectUri(
+  identity: SyncIdentityPort | null = getCurrentSyncIdentityPort(),
+): string | null {
+  return identity?.getRedirectUri() ?? null;
 }
 
-export function getRedirectUri(t: SyncErrorTranslator = defaultSyncErrorTranslator): string {
-  const redirectUri = getOptionalRedirectUri();
+export function getRedirectUri(
+  t: SyncErrorTranslator = defaultSyncErrorTranslator,
+  identity: SyncIdentityPort | null = getCurrentSyncIdentityPort(),
+): string {
+  const redirectUri = getOptionalRedirectUri(identity);
   if (!redirectUri) {
     throw new Error(t('background.sync.identityUnavailable'));
   }
   return redirectUri;
-}
-
-function getChromeIdentity(): Pick<typeof chrome.identity, 'getRedirectURL'> | null {
-  if (typeof chrome === 'undefined') return null;
-  if (!chrome.identity || typeof chrome.identity.getRedirectURL !== 'function') return null;
-  return chrome.identity;
 }
 
 /** Parsed redirect URL: either {code} on success or {error} on failure. */
@@ -65,8 +58,12 @@ function parseRedirectUrl(redirectUrl: string): RedirectResult {
 export async function runAuthCodeFlow(
   authUrl: string,
   t: SyncErrorTranslator = defaultSyncErrorTranslator,
+  identity: SyncIdentityPort | null = getCurrentSyncIdentityPort(),
 ): Promise<string> {
-  const redirectUrl = await chrome.identity.launchWebAuthFlow({
+  if (!identity) {
+    throw new Error(t('background.sync.identityUnavailable'));
+  }
+  const redirectUrl = await identity.launchWebAuthFlow({
     url: authUrl,
     interactive: true,
   });
@@ -92,10 +89,13 @@ export interface TokenResponse {
 interface CachedToken {
   accessToken: string;
   expiresAt: number; // epoch ms
+  credentialFingerprint: string;
 }
 
 /**
- * In-memory token cache keyed by a stable identifier (client_id + provider).
+ * In-memory token cache keyed by a stable identifier (client_id + provider),
+ * with each entry additionally bound to the refresh-token identity. The raw
+ * durable credential is never copied into the cache key or logs.
  * Each background instance lives for the extension session; tokens are not
  * persisted—refresh_token is the durable credential and lives in SyncConfig.
  */
@@ -122,8 +122,12 @@ export async function getAccessToken(
   tokenParams: Record<string, string>,
   t: SyncErrorTranslator = defaultSyncErrorTranslator,
 ): Promise<string> {
+  const credentialFingerprint = await fingerprintCredential(refreshToken);
   const cached = tokenCache.get(cacheKey);
-  if (isCacheValid(cached)) return cached!.accessToken;
+  if (isCacheValid(cached) && cached?.credentialFingerprint === credentialFingerprint) {
+    return cached.accessToken;
+  }
+  if (cached) tokenCache.delete(cacheKey);
 
   const body = new URLSearchParams({ ...tokenParams, refresh_token: refreshToken, grant_type: 'refresh_token' });
   const res = await fetch(refreshUrl, {
@@ -142,9 +146,17 @@ export async function getAccessToken(
   const entry: CachedToken = {
     accessToken: token.access_token,
     expiresAt: Date.now() + token.expires_in * 1000,
+    credentialFingerprint,
   };
   tokenCache.set(cacheKey, entry);
   return entry.accessToken;
+}
+
+async function fingerprintCredential(value: string): Promise<string> {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.subtle) throw new Error('Web Crypto SHA-256 is required for OAuth token caching');
+  const digest = await cryptoApi.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /** Drop a cached token (e.g. on a 401, to force refresh on next call). */

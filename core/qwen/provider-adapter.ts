@@ -21,9 +21,9 @@ export function createQwenWebProviderAdapter(
       label: 'Qwen 3.7 Plus',
       supportsImages: true,
     }],
-    async createSession(model) {
+    async createSession(model, signal) {
       assertQwenModel(model);
-      const session = await deps.transport.createSession('qwen3.7-plus');
+      const session = await deps.transport.createSession('qwen3.7-plus', signal);
       return { conversationId: session.chatId, parentCursor: session.parentId };
     },
     async streamTurn(input, events) {

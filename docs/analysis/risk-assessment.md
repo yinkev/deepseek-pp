@@ -1,61 +1,92 @@
-# DeepSeek++ Refactor Risk Assessment
+# DeepSeek++ PC Runtime Hardening Wave 2 — Risk Assessment
 
-This document is the public risk summary for the `core-refactor-2026-07` run. It identifies repair goals and acceptance direction without publishing exploit paths, sensitive trust-boundary evidence, or credential-bearing examples. Detailed security evidence remains in the local analysis workspace and is not a public project truth source.
+## S.U.P.E.R Architecture Health Summary
 
-## S.U.P.E.R Architecture Health
-
-| Principle | Status | Summary | Transformation priority |
+| Principle | Status | Key findings | Priority |
 |:--|:--:|:--|:--:|
-| S — Single Purpose | At risk | Content, background, Side Panel, interceptor, and Native Host hotspots own multiple domains and lifecycles. | High |
-| U — Unidirectional Flow | At risk | Root contracts, tool/provider registration, platform access, and sync composition have reverse or cyclic dependencies. | High |
-| P — Ports over Implementation | Partial | Export and transport modules contain useful ports, but runtime, persistence, and environment boundaries are not consistently authoritative. | High |
-| E — Environment-Agnostic | At risk | Browser capability/degradation behavior is not yet represented by narrow, authoritative ports with real consumers. | High |
-| R — Replaceable Parts | At risk | Replacing protocol, persistence, runtime, or page adapters currently affects unrelated modules. | High |
+| S — Single Purpose | 🟡 | Handler/controller foundations are healthy; Content、interceptor、Skill import and Background roots remain multi-domain hotspots. | High |
+| U — Unidirectional Flow | 🟢/🟡 | Current TS relative-import graph has zero SCC; `core/types.ts` and duplicated contract descriptions still expand change propagation. | Medium |
+| P — Ports over Implementation | 🟡 | Runtime/persistence/sync are mostly typed; MCP response、platform capability、Shell catalog/version still have multiple or permissive truths. | High |
+| E — Environment-Agnostic | 🟡 | Android is gone and three desktop builds are explicit; Chromium-only capabilities and real extension loading are not fully proven. | High |
+| R — Replaceable Parts | 🟡 | Providers/transports/handlers are replaceable; large roots and duplicate import/catalog policies still raise replacement cost. | Medium |
 
-The refactor therefore starts with compatibility contracts, addresses critical boundaries and failure safety, introduces only narrow ports with real consumers, and then removes superseded paths through a strangler cutover.
+**Overall health**：0 new P0 regressions found；architecture foundation is stable, but compatibility gaps must be closed before another broad monolith split.
 
-## Public Risk Register
+## Verified Resolved Findings
 
-| ID | Public risk statement | Impact | Priority | Required public outcome |
-|:--|:--|:--:|:--:|:--|
-| R-01 | Privileged runtime messages need one validated authorization boundary. | Critical | P0 | Legal calls remain compatible; malformed, unauthorized, stale, replayed, and cross-session calls fail before privileged I/O. |
-| R-02 | The unsupported Android template created a second platform and security contract. | Resolved | Closed by #345 | Remove the template, bridge, build, CI, tests, and current-support claims; keep PC Chrome/Edge/Firefox as the only product targets. |
-| R-03 | Sync remote publication and local apply could expose partial snapshots. | Resolved | Closed by #319 and #320 | Upload publishes only complete checksum-validated generations; download stages, journals, commits deterministically, and restores raw preimages after injected failure or restart. |
-| R-04 | Automation timeout previously returned before execution settled and could replay ambiguous work after retry or restart. | Resolved | Closed by #321 | Deadline, abort, persisted/in-process lease, and supported idempotency context reach request, DeepSeek stream, continuation, tool, and MCP boundaries. Authority remains held until settlement; ambiguous work and scheduled occurrences are not replayed. |
-| R-05 | Persistence version and migration policy is inconsistent across stores. | High | P1 | Historical data migrates deterministically; corrupt/future data fails visibly without overwrite; each concept converges on one truth source. |
-| R-06 | Background and content entrypoints have a large regression and merge radius. | High | P1 | Typed handlers/controllers own one lifecycle and one domain; migrated legacy paths are deleted. |
-| R-07 | Long-lived DOM observation and polling have no measured ownership/budget. | High | P1 | Controllers own and fully tear down their resources; callback/startup/write changes are measured against recorded baselines. |
-| R-08 | Platform abstractions and actual browser capabilities can drift. | High | P1 | Narrow ports have real consumers; Chrome/Edge/Firefox behavior and explicit unsupported degradation remain green. |
-| R-09 | Timeout, cancellation, retry, and body budgets vary by network/runtime path. | High | P1 | Migrated paths use explicit, compatible failure and recovery contracts without hidden fallback. |
-| R-10 | Current tests do not cover every migration, fault, or browser-runtime boundary. | High | P1 | Each behavior-changing task adds targeted executable evidence; final closure runs all applicable repository gates. |
-| R-11 | Floating-chat permission and lifecycle state can disagree across UI/runtime surfaces. | Medium | P2 | One state machine covers disabled, permission-missing, ready, and context-invalidated behavior while preserving existing user settings. |
-| R-12 | Heavy assets and hot runtime paths lack stable performance budgets. | Medium | P2 | Performance work records before/after evidence and keeps every compatibility fixture green. |
+The following previous review findings are closed on `450b5e2` and are excluded from this run:
 
-## Compatibility and Data-Safety Rules
+- MAIN/content single-side restart reconnect and peer disconnect.
+- Settings `GET_CONFIG` response decoding and loading completion.
+- Duplicate Side Panel runtime-failure predicate.
+- PET event/load stale response race.
+- Auth refresh error swallowing beyond expected missing receivers.
 
-- Prompt bytes, tool tags, runtime and bridge message names, browser identity, MCP/Native contracts, and user-visible behavior change only through an explicit contract decision.
-- Storage keys, IndexedDB names/tables/identity, known schema versions, sync files, and import/export records remain readable.
-- Every migration is deterministic and idempotent. Unknown future or corrupt data must remain intact and fail visibly rather than being rewritten as a default.
-- Multi-record durability needs an atomic commit point or recovery journal. Partial mutation is not reported as compatible success.
-- New validators, routers, permission policies, and persistence paths replace the old source of truth; they do not run indefinitely beside it.
+## Risk Matrix
 
-The detailed contract inventory and current gaps are maintained under [`docs/compatibility/README.md`](../compatibility/README.md). Security-sensitive Issues contain only repair objectives and publicly verifiable outcomes.
+| ID | Risk | Impact | Likelihood | Severity | Recommended response |
+|:--|:--|:--:|:--:|:--:|:--|
+| W2-R01 | MCP accepts malformed/cross-request response shapes before privileged result handling. | High | Medium | P0 | Strict direction-specific response codec tied to receiver-owned request ID. |
+| W2-R02 | MCP result truncation can split UTF-16 surrogate pairs and exceed byte budgets. | High | High | P0 | UTF-8 byte-safe truncation with explicit `truncated` signal. |
+| W2-R03 | MCP discovery can exceed `maxToolCount` by a full page. | Medium | High | P0/P1 | Apply exact per-item cap while preserving pagination/cursor semantics. |
+| W2-R04 | Platform capability map disagrees with manifest and pre-load UI is optimistic. | Medium | High | P1 | Fail closed during loading and add only consumer-owned capability checks. |
+| W2-R05 | Shell server version and tool catalog have multiple truths. | Medium | Certain | P1 | Derive version/catalog from one serializable source; keep released Native protocol and catalog bytes stable. |
+| W2-R06 | Request augmentation parses the same untrusted body in several places without one object/string-prompt decoder. | Medium | Medium | P1 | Decode once before grant/project/prompt processing; invalid input fails before privileged work. |
+| W2-R07 | Unclosed streaming tool call emits start but no terminal state. | High | Medium | P1 | Emit one non-executable terminal parse failure and release externalized state at EOF. |
+| W2-R08 | First Chat screen is within 1% of raw/gzip ceiling. | Medium | High | P1 | Lazy-load rich rendering not needed by an empty first screen, measure, then lower the budget. |
+| W2-R09 | Real browser lifecycle remains unverified because unpacked load was not proven. | High | Medium | P0 evidence gap | Build a narrow load/assert/reinject smoke that fails if the extension ID/service worker/content probe is absent. |
+| W2-R10 | Live `CURRENT_GAPS` point at closed historical Issues. | Medium | Certain | P1 governance | Re-map every retained gap to this run or remove it only when executable evidence closes it. |
+| W2-R11 | Broad Content/Background/root-type refactors can create a large merge and regression radius. | High | Medium | P1 | Keep out of the first bounded batch or serialize by hotspot owner with frozen fixtures. |
 
-## Validation Risks
+## High-Severity Risks
 
-The v1.10.0 baseline passes the current Vitest suite, TypeScript compile, prompt source freeze, Chrome/Edge/Firefox builds, manifest policy, extension UTF-8 policy, and production dependency audit. This does not yet prove:
+### MCP boundary and budgets
 
-- real-browser lifecycle behavior;
-- historical IndexedDB migrations and future-version protection;
-- real-browser lifecycle behavior when a service worker is terminated during sync recovery;
-- exhaustive runtime/bridge authorization behavior;
-- steady-state DOM, startup, bundle, or persistence-write performance.
+MCP is an external-I/O trust boundary and can feed tool descriptors/results into privileged runtime behavior. Current transport normalization accepts wrong JSON-RPC version/ID and simultaneous `result`/`error`; the client then slices output by JavaScript character count and appends whole discovery pages. These are independent symptoms of one missing receiving authority: response identity/shape and resource budgets must be validated before downstream normalization.
 
-Those gaps are assigned to the specific tasks in [`docs/plan/task-breakdown.md`](../plan/task-breakdown.md); they are not deferred to an unbounded standalone testing program.
+### Streaming tool EOF
 
-## Governance
+The parser emits `started` immediately for large/externalized payloads, but `flush()` drops `current` without a `completed` failure. That can leave UI/runtime correlation pending and makes EOF behavior implicit. The fix must never execute an unclosed call, must settle exactly once, and must clean any externalized payload state.
 
-- `AGENTS.md` is the sole project-level agent instruction truth source.
-- GitHub Issues, Milestones, and PRs track this run; no Project board is used.
-- Public security tracking remains generic. Detailed evidence, reproduction chains, and disclosure-sensitive reasoning stay local until an explicit disclosure decision.
-- The user's pre-existing floating-chat work is preserved and remains an overlap guard for R4.8 / Issue #367.
+### Real browser evidence
+
+Build success and jsdom lifecycle tests cannot prove that Chrome actually loaded an unpacked extension, created its service worker, injected MAIN/content scripts, and survived reload/reinjection. Any smoke implementation must assert those facts; simply launching Chrome is not evidence. Because Chrome 150 rejected the previous command-line attempt, this task carries tooling risk and should be isolated from code-correctness closure if it cannot be made deterministic quickly.
+
+## Compatibility Concerns
+
+- Do not change legal prompt bytes, tool XML tags/names, inline-agent text, runtime message names, bridge envelopes, storage keys, IndexedDB identities, sync files, MCP request protocol version, Native envelope version, or Shell tool order/schema/risk.
+- Invalid external input is not a successful compatibility contract. Replacing permissive malformed behavior with explicit failure is allowed only with executable negative tests and unchanged legal fixtures.
+- Keep the 15-key platform environment record readable. New environment checks need a real consumer in the same task; do not create a second broad facade.
+- Shell version-source changes must work from installed npm package layout, not only the repository checkout.
+- Side Panel optimization must measure the built route, preserve first-chat behavior, and lower the ceiling only after the new baseline is stable.
+
+## Testing Risks and Required Evidence
+
+- All unit tests use a hard 60-second timeout; after interruption verify no Vitest child remains.
+- MCP changes require external-contract, transport, discovery, tool-call and native/mock smoke coverage.
+- Platform changes require Chrome/Edge/Firefox fixtures, manifest policy, Side Panel controller tests and all-browser builds.
+- Shell changes require external-contract tests, 17-command shell smoke and npm package-layout verification.
+- Request/tool-stream changes require malformed object/prompt cases, EOF/idempotency/externalized cleanup, and prompt freeze.
+- Performance changes require before/after built chunk evidence plus a tightened executable budget.
+- Closure requires `npm run ci:quality`; real Chrome smoke must remain explicitly non-pass if the extension is not actually loaded.
+
+## Governance Risks
+
+- `AGENTS.md` is the only project instruction truth source; do not create root `CLAUDE.md` or repo-local memory.
+- The completed `core-refactor-2026-07` archive is historical and must not be edited as the active tracker.
+- The new run must use a fresh label, Milestones and active `docs/progress/MASTER.md`.
+- Closely related Issues may share the current batch branch and one PR, matching the user's explicit speed/PR preference; telemetry still belongs on every Issue before merge.
+- Security-sensitive public Issues should state repair goals and verifiable outcomes, not detailed exploit chains.
+
+## Recommended Phase-2 Decision
+
+For a fast first wave-2 batch, prefer the bounded contract/performance slice over another monolith-wide rewrite:
+
+1. MCP receiving codec and exact budgets.
+2. Platform capability/loading truth.
+3. Shell version/catalog truth.
+4. Strict request decode and terminal tool EOF behavior.
+5. Side Panel first-chat headroom.
+6. Re-map live compatibility gaps and run the full PC-browser closure.
+
+Treat deterministic real Chrome smoke as a parallel evidence task only if the first short feasibility spike proves that the extension can actually be loaded; otherwise record it as a blocker/gap without holding the code batch hostage. Defer full Content/Background/root-type/Skill-import rewrites to later batches with separate hotspot ownership.

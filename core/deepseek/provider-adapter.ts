@@ -34,11 +34,12 @@ export function createDeepSeekWebProviderAdapter(
       label: 'DeepSeek',
       supportsImages: true,
     }],
-    async createSession(model) {
+    async createSession(model, signal) {
       assertDeepSeekModel(model);
       const headers = await requireHeaders(deps.loadClientHeaders);
+      signal?.throwIfAborted();
       return {
-        conversationId: await createSession(headers),
+        conversationId: await createSession(headers, signal),
         parentCursor: null,
       };
     },
@@ -58,7 +59,7 @@ export function createDeepSeekWebProviderAdapter(
         thinkingEnabled: input.thinkingEnabled,
         searchEnabled: false,
         clientHeaders: headers,
-        powHeaders: await createPow(headers),
+        powHeaders: await createPow(headers, undefined, input.signal),
       }, {
         onTextChunk: events.onTextDelta,
       }, input.signal);

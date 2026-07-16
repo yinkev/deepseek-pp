@@ -8,7 +8,7 @@ import {
 import { extractToolCalls } from '../interceptor/tool-parser';
 import { createStreamingToolTextAccumulator } from '../interceptor/streaming-tool-text';
 import { createStreamingToolCallParser } from '../interceptor/streaming-tool-call-parser';
-import type { ResponseTokenSpeedPayload } from '../interceptor/token-speed';
+import type { ResponseTokenSpeedPayload } from '../deepseek/stream-metrics';
 import { DEFAULT_LOCALE, translate, type SupportedLocale } from '../i18n';
 import { executeToolCallsSequentially } from '../tool-loop/engine';
 import type { ToolCall, ToolDescriptor, ToolExecutionRecord } from '../types';
@@ -368,11 +368,14 @@ function createInlineAgentStreamState(input: {
 
       const event = toolCallParser.append(text);
       event.completed.forEach(addCompletedToolCall);
+      event.failed.forEach(addCompletedToolCall);
     },
     flush() {
       const finalVisibleText = visibleText.flush();
       postVisibleText(finalVisibleText);
-      toolCallParser.flush();
+      const event = toolCallParser.flush();
+      event.completed.forEach(addCompletedToolCall);
+      event.failed.forEach(addCompletedToolCall);
       addFallbackToolCalls();
       return {
         visibleText: finalVisibleText,

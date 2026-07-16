@@ -6,6 +6,7 @@ import {
   type ToolInvocationCatalog,
 } from '../tool';
 import { createExternalizedToolPayload } from '../tool/externalized-payload';
+import { INCOMPLETE_TOOL_CALL_ERROR_CODE } from '../tool/execution-error';
 import {
   findFirstXmlToolTag,
   getPartialXmlToolTagTailLength,
@@ -18,6 +19,7 @@ const EXTERNALIZE_BODY_THRESHOLD_CHARS = 64_000;
 export interface StreamingToolCallParserEvent {
   started: ToolCall[];
   completed: ToolCall[];
+  failed: ToolCall[];
   streamed: ToolCallPayloadChunk[];
 }
 
@@ -60,7 +62,7 @@ class XmlStreamingToolCallParser implements StreamingToolCallParser {
   }
 
   append(chunk: string): StreamingToolCallParserEvent {
-    const event: StreamingToolCallParserEvent = { started: [], completed: [], streamed: [] };
+    const event = createEmptyParserEvent();
     if (!chunk || this.invocationNames.size === 0) return event;
 
     let remaining = chunk;
@@ -73,11 +75,15 @@ class XmlStreamingToolCallParser implements StreamingToolCallParser {
   }
 
   flush(): StreamingToolCallParserEvent {
+    const event = createEmptyParserEvent();
+    if (this.current) {
+      event.failed.push(this.createIncompleteCall(this.current, this.pendingSuppressed));
+    }
     this.state = 'NORMAL';
     this.pendingNormal = '';
     this.pendingSuppressed = '';
     this.current = null;
-    return { started: [], completed: [], streamed: [] };
+    return event;
   }
 
   private consumeNormalText(input: string, event: StreamingToolCallParserEvent): string {
@@ -208,6 +214,32 @@ class XmlStreamingToolCallParser implements StreamingToolCallParser {
     }
   }
 
+  private createIncompleteCall(
+    current: NonNullable<XmlStreamingToolCallParser['current']>,
+    pendingTail: string,
+  ): ToolCall {
+    return createToolCallFromInvocation(
+      current.invocationName,
+      current.externalized
+        ? createExternalizedToolPayload(current.id, current.invocationName)
+        : {},
+      createIncompleteRaw(current, pendingTail),
+      this.catalog,
+      {
+        id: current.id,
+        parseError: createToolParseError(
+          INCOMPLETE_TOOL_CALL_ERROR_CODE,
+          current.invocationName,
+          `Tool call ended before the closing tag ${current.closeTag}.`,
+        ),
+      },
+    );
+  }
+
+}
+
+function createEmptyParserEvent(): StreamingToolCallParserEvent {
+  return { started: [], completed: [], failed: [], streamed: [] };
 }
 
 function createBoundedRaw(
@@ -231,6 +263,34 @@ function createExternalizedRaw(
     current.openTag,
     `...[payload ${current.bodyLength} chars externalized]`,
     current.closeTag,
+    TRUNCATION_SUFFIX,
+  ].join('\n');
+}
+
+function createIncompleteRaw(
+  current: {
+    openTag: string;
+    bodyParts: string[];
+    bodyLength: number;
+    externalized: boolean;
+  },
+  pendingTail: string,
+): string {
+  const bodyLength = current.bodyLength + pendingTail.length;
+  if (current.externalized) {
+    return [
+      current.openTag,
+      `...[payload ${bodyLength} chars externalized before EOF]`,
+      TRUNCATION_SUFFIX,
+    ].join('\n');
+  }
+
+  const body = current.bodyParts.join('') + pendingTail;
+  const raw = current.openTag + body;
+  if (raw.length <= STREAM_TOOL_RAW_MAX_LENGTH) return raw;
+  return [
+    current.openTag,
+    `...[incomplete payload ${bodyLength} chars omitted]`,
     TRUNCATION_SUFFIX,
   ].join('\n');
 }

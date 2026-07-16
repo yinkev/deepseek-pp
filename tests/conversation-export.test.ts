@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createDeepSeekConversationExportTransport,
+  fetchDeepSeekSessionHistory,
   listDeepSeekSessions,
 } from '../core/deepseek/conversation-export';
+import { DEEPSEEK_BODY_BUDGETS } from '../core/deepseek/contracts';
 import {
   buildConversationExportArtifactsCancellable,
   buildConversationExportArtifacts,
@@ -48,6 +50,13 @@ describe('conversation export request schema', () => {
     expect(normalizeConversationExportRequest({ sessionIds: [' session-alpha ', 'session-alpha'] }))
       .toMatchObject({ sessionIds: ['session-alpha'] });
     expect(() => normalizeConversationExportRequest({ sessionIds: [''] }))
+      .toThrow(ConversationExportValidationError);
+  });
+
+  it('rejects sparse arrays instead of widening export scope', () => {
+    expect(() => normalizeConversationExportRequest({ formats: new Array(1) }))
+      .toThrow(ConversationExportValidationError);
+    expect(() => normalizeConversationExportRequest({ sessionIds: new Array(1) }))
       .toThrow(ConversationExportValidationError);
   });
 });
@@ -170,6 +179,28 @@ describe('DeepSeek conversation export adapter and service', () => {
     expect(fetchImpl.calls.some((url) => url.includes('lte_cursor.pinned=false'))).toBe(true);
   });
 
+  it('keeps large per-session history compatible with the export-specific body budget', async () => {
+    const largeText = 'x'.repeat(DEEPSEEK_BODY_BUDGETS.activeJson + 1);
+    const history = await fetchDeepSeekSessionHistory({
+      baseUrl: 'https://chat.deepseek.com',
+      clientHeaders: { Authorization: 'Bearer synthetic' },
+      fetchImpl: vi.fn(async () => jsonResponse({ data: { biz_data: { largeText } } })),
+      session: {
+        id: 'large-session',
+        title: 'Large session',
+        pinned: false,
+        titleType: null,
+        modelType: null,
+        createdAt: null,
+        updatedAt: null,
+      },
+      includeRaw: true,
+    });
+
+    expect((history as { data: { biz_data: { largeText: string } } }).data.biz_data.largeText)
+      .toHaveLength(largeText.length);
+  });
+
   it('keeps official raw payloads only in raw mode', async () => {
     const transport = createDeepSeekConversationExportTransport({
       baseUrl: 'https://chat.deepseek.com',
@@ -259,7 +290,79 @@ describe('DeepSeek conversation export adapter and service', () => {
     await expect(buildConversationExportArtifactsCancellable(exportData, controller.signal))
       .rejects.toThrow('Conversation export was cancelled.');
   });
+
+  it('rethrows history cancellation instead of converting it to a partial success', async () => {
+    const progress: string[] = [];
+    await expect(runConversationExport({
+      exportId: 'export-history-cancel',
+      extensionVersion: '0.0.0-test',
+      baseUrl: 'https://chat.deepseek.com',
+      request: {
+        mode: 'sanitized',
+        formats: ['html'],
+        includeAttachmentMetadata: false,
+        includeFileBodies: false,
+      },
+      transport: {
+        async listSessions() {
+          return [sessionSummary('session-cancel')];
+        },
+        async fetchHistory() {
+          throw new DOMException('cancelled', 'AbortError');
+        },
+        async fetchFiles() {
+          return [];
+        },
+      },
+      onProgress(update) {
+        progress.push(update.phase);
+      },
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(progress).not.toContain('completed');
+  });
+
+  it('rethrows attachment cancellation before completed progress', async () => {
+    const progress: string[] = [];
+    await expect(runConversationExport({
+      exportId: 'export-attachment-cancel',
+      extensionVersion: '0.0.0-test',
+      baseUrl: 'https://chat.deepseek.com',
+      request: {
+        mode: 'sanitized',
+        formats: ['html'],
+        includeAttachmentMetadata: true,
+        includeFileBodies: false,
+      },
+      transport: {
+        async listSessions() {
+          return [sessionSummary('session-alpha')];
+        },
+        async fetchHistory() {
+          return readFixture('history-alpha.json');
+        },
+        async fetchFiles() {
+          throw new DOMException('cancelled', 'AbortError');
+        },
+      },
+      onProgress(update) {
+        progress.push(update.phase);
+      },
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(progress).not.toContain('completed');
+  });
 });
+
+function sessionSummary(id: string) {
+  return {
+    id,
+    title: 'Synthetic session',
+    pinned: false,
+    titleType: null,
+    modelType: null,
+    createdAt: null,
+    updatedAt: null,
+  };
+}
 
 function createFixtureFetch() {
   const calls: string[] = [];

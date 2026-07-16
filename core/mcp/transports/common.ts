@@ -1,4 +1,4 @@
-import type { McpJsonRpcRequest, McpJsonRpcResponse, McpServerConfig } from '../types';
+import type { McpJsonRpcError, McpJsonRpcRequest, McpJsonRpcResponse, McpServerConfig } from '../types';
 import { createAbortScope } from '../../network/abort';
 
 export class McpTransportError extends Error {
@@ -152,13 +152,14 @@ export async function readJsonRpcResponse<TResult>(
 
   const raw = await readResponseTextWithLimit(response, options.maxBytes);
   if (!raw.trim()) {
-    return {
-      jsonrpc: '2.0',
-      id: expectedRequest?.id ?? null,
-      result: undefined as TResult,
-    };
+    throw invalidMcpResponse('MCP response body was empty.');
   }
-  return normalizeJsonRpcResponse(JSON.parse(raw), expectedRequest);
+  try {
+    return normalizeJsonRpcResponse(JSON.parse(raw), expectedRequest);
+  } catch (error) {
+    if (error instanceof McpTransportError) throw error;
+    throw invalidMcpResponse('MCP response body was not valid JSON.');
+  }
 }
 
 export async function readSseJsonRpcResponse<TResult>(
@@ -183,12 +184,8 @@ export async function readSseJsonRpcResponse<TResult>(
     const events = drainSseEvents(buffer);
     buffer = events.remainder;
     for (const event of events.events) {
-      const parsed = parseJsonEvent(event.data);
-      if (!parsed) continue;
-      const normalized = normalizeJsonRpcResponse<TResult>(parsed, expectedRequest);
-      if (expectedRequest == null || normalized.id === expectedRequest.id || normalized.id === null) {
-        return normalized;
-      }
+      const response = parseJsonRpcSseMessage<TResult>(event.data, expectedRequest);
+      if (response) return response;
     }
   }
 
@@ -253,16 +250,106 @@ export function normalizeJsonRpcResponse<TResult>(
   raw: unknown,
   expectedRequest?: McpJsonRpcRequest<any>,
 ): McpJsonRpcResponse<TResult> {
-  if (!raw || typeof raw !== 'object') {
-    throw new McpTransportError('mcp_response_invalid', 'MCP response was not a JSON object.');
+  if (!isPlainRecord(raw)) {
+    throw invalidMcpResponse('MCP response was not a plain JSON object.');
   }
-  const value = raw as Partial<McpJsonRpcResponse<TResult>>;
+  if (raw.jsonrpc !== '2.0') {
+    throw invalidMcpResponse('MCP response jsonrpc must be exactly "2.0".');
+  }
+  if (!isMcpResponseId(raw.id)) {
+    throw invalidMcpResponse('MCP response id must be a string, finite number, or null.');
+  }
+  if (expectedRequest && raw.id !== expectedRequest.id) {
+    throw invalidMcpResponse('MCP response id did not match the active request.');
+  }
+
+  const hasResult = Object.prototype.hasOwnProperty.call(raw, 'result');
+  const hasError = Object.prototype.hasOwnProperty.call(raw, 'error');
+  if (hasResult === hasError) {
+    throw invalidMcpResponse('MCP response must contain exactly one of result or error.');
+  }
+  if (hasResult) {
+    return {
+      jsonrpc: '2.0',
+      id: raw.id,
+      result: raw.result as TResult,
+    };
+  }
+  if (!isMcpJsonRpcError(raw.error)) {
+    throw invalidMcpResponse('MCP response error must contain an integer numeric code and string message.');
+  }
   return {
     jsonrpc: '2.0',
-    id: value.id ?? expectedRequest?.id ?? null,
-    result: value.result,
-    error: value.error,
+    id: raw.id,
+    error: raw.error,
   };
+}
+
+export function parseJsonRpcSseMessage<TResult>(
+  data: string,
+  expectedRequest?: McpJsonRpcRequest<any>,
+): McpJsonRpcResponse<TResult> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    throw invalidMcpResponse('MCP SSE event data was not valid JSON.');
+  }
+
+  if (!isPlainRecord(parsed)) {
+    throw invalidMcpResponse('MCP SSE message was not a plain JSON object.');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(parsed, 'method')) {
+    assertJsonRpcServerMessage(parsed);
+    return null;
+  }
+
+  return normalizeJsonRpcResponse<TResult>(parsed, expectedRequest);
+}
+
+function invalidMcpResponse(message: string): McpTransportError {
+  return new McpTransportError('mcp_response_invalid', message, { retryable: false });
+}
+
+function isMcpResponseId(value: unknown): value is string | number | null {
+  return value === null || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function isMcpJsonRpcError(value: unknown): value is McpJsonRpcError {
+  return isPlainRecord(value) &&
+    typeof value.code === 'number' &&
+    Number.isInteger(value.code) &&
+    typeof value.message === 'string';
+}
+
+function assertJsonRpcServerMessage(raw: Record<string, unknown>): void {
+  if (raw.jsonrpc !== '2.0') {
+    throw invalidMcpResponse('MCP server message jsonrpc must be exactly "2.0".');
+  }
+  if (typeof raw.method !== 'string') {
+    throw invalidMcpResponse('MCP server message method must be a string.');
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'result') ||
+      Object.prototype.hasOwnProperty.call(raw, 'error')) {
+    throw invalidMcpResponse('MCP server request or notification cannot contain result or error.');
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'id') && !isMcpResponseId(raw.id)) {
+    throw invalidMcpResponse('MCP server request id must be a string, finite number, or null.');
+  }
+  if (Object.prototype.hasOwnProperty.call(raw, 'params') && !isStructuredJsonRpcParams(raw.params)) {
+    throw invalidMcpResponse('MCP server message params must be an object or array.');
+  }
+}
+
+function isStructuredJsonRpcParams(value: unknown): boolean {
+  return Array.isArray(value) || isPlainRecord(value);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function parseSseEvent(block: string): SseEvent | null {
@@ -275,12 +362,4 @@ function parseSseEvent(block: string): SseEvent | null {
   }
   if (data.length === 0) return null;
   return { event, data: data.join('\n') };
-}
-
-function parseJsonEvent(data: string): unknown | null {
-  try {
-    return JSON.parse(data);
-  } catch {
-    return null;
-  }
 }

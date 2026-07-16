@@ -29,9 +29,10 @@ export function createDeepSeekOfficialProviderAdapter(
       label: 'DeepSeek',
       supportsImages: false,
     }],
-    async createSession(model) {
+    async createSession(model, signal) {
       assertDeepSeekModel(model);
       if (!await deps.loadApiKey()) throw new Error('DeepSeek API key is missing.');
+      signal?.throwIfAborted();
       const conversationId = `deepseek-official:${randomUUID()}`;
       messagesBySession.set(conversationId, []);
       return { conversationId, parentCursor: null };
@@ -47,7 +48,7 @@ export function createDeepSeekOfficialProviderAdapter(
       ];
       const turn = await submit({
         apiKey,
-        config: await deps.loadConfig(),
+        config: input.officialApiConfig ?? await deps.loadConfig(),
         messages,
       }, {
         onTextChunk: events.onTextDelta,

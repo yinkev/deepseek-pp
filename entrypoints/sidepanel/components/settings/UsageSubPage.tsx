@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import type { UsageModelSummary, UsageRangeDays, UsageSummary } from '../../../../core/types';
+import { createRequestGenerationFence } from '../../async-state';
+import { usageController } from '../../controllers/usage-controller';
 import { useI18n } from '../../i18n';
+import { getRuntimeErrorMessage } from '../../runtime-response';
+import { SidepanelRuntimeError } from '../../runtime-client';
 import {
   EmptyState,
   SegmentedControl,
@@ -24,38 +35,46 @@ const MODEL_COLORS = [
 export default function UsageSubPage() {
   const { t, locale } = useI18n();
   const [rangeKey, setRangeKey] = useState<RangeKey>('30');
-  const [summary, setSummary] = useState<UsageSummary | null>(null);
+  const [summaries, setSummaries] = useState<Partial<Record<RangeKey, UsageSummary>>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestGeneration = useRef(createRequestGenerationFence());
+  const rangeKeyRef = useRef(rangeKey);
+  rangeKeyRef.current = rangeKey;
   const { confirm, node: confirmNode } = useConfirm();
   const banner = useBanner();
 
-  const rangeDays = Number(rangeKey) as UsageRangeDays;
+  const summary = summaries[rangeKey] ?? null;
   const rangeOptions = useMemo(() => [
     { key: '7' as const, label: t('sidepanel.settings.usage.last7Days') },
     { key: '30' as const, label: t('sidepanel.settings.usage.last30Days') },
   ], [t]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedRangeKey: RangeKey) => {
+    const generation = requestGeneration.current.begin();
+    const requestedRangeDays = Number(requestedRangeKey) as UsageRangeDays;
     setLoading(true);
     setError(null);
     try {
-      const result = await chrome.runtime.sendMessage({
-        type: 'GET_USAGE_SUMMARY',
-        payload: { rangeDays },
-      }) as UsageSummary | undefined;
-      if (!result) throw new Error(t('sidepanel.settings.usage.loadFailed'));
-      setSummary(result);
+      const result = await usageController.getSummary(requestedRangeDays);
+      if (!requestGeneration.current.isCurrent(generation)) return;
+      setSummaries((current) => ({ ...current, [requestedRangeKey]: result }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('sidepanel.settings.usage.loadFailed'));
+      if (!requestGeneration.current.isCurrent(generation)) return;
+      setError(
+        err instanceof SidepanelRuntimeError && err.kind === 'protocol'
+          ? t('sidepanel.settings.usage.loadFailed')
+          : getRuntimeErrorMessage(err) || t('sidepanel.settings.usage.loadFailed'),
+      );
     } finally {
-      setLoading(false);
+      if (requestGeneration.current.isCurrent(generation)) setLoading(false);
     }
-  }, [rangeDays, t]);
+  }, [t]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(rangeKey);
+    return () => requestGeneration.current.invalidate();
+  }, [load, rangeKey]);
 
   const clearStats = async () => {
     const ok = await confirm({
@@ -67,11 +86,13 @@ export default function UsageSubPage() {
     if (!ok) return;
 
     try {
-      await chrome.runtime.sendMessage({ type: 'CLEAR_USAGE_STATS' });
+      await usageController.clear();
+      requestGeneration.current.invalidate();
+      setSummaries({});
       banner.show('success', t('sidepanel.settings.usage.clearSuccess'));
-      await load();
+      await load(rangeKeyRef.current);
     } catch (err) {
-      banner.show('error', err instanceof Error ? err.message : t('sidepanel.settings.usage.clearFailed'));
+      banner.show('error', getRuntimeErrorMessage(err) || t('sidepanel.settings.usage.clearFailed'));
     }
   };
 
@@ -104,11 +125,11 @@ export default function UsageSubPage() {
         )}
       </div>
 
-      {loading ? (
+      {error && <StatusMessage tone="error">{error}</StatusMessage>}
+
+      {loading && !summary ? (
         <SkeletonList rows={4} />
-      ) : error ? (
-        <StatusMessage tone="error">{error}</StatusMessage>
-      ) : !summary || !hasUsage ? (
+      ) : !summary ? null : !hasUsage ? (
         <EmptyState
           title={t('sidepanel.settings.usage.emptyTitle')}
           description={t('sidepanel.settings.usage.emptyDescription')}

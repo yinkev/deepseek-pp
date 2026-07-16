@@ -1,9 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TOOL_DESCRIPTORS } from '../core/tool';
-import { augmentRequestBody } from '../core/interceptor/request-augmentation';
+import {
+  augmentRequestBody,
+  decodeDeepSeekRequestBody,
+} from '../core/interceptor/request-augmentation';
 import { buildPromptAugmentation } from '../core/prompt';
 
 describe('augmentRequestBody', () => {
+  it('strictly decodes one plain-object request with a non-empty string prompt', () => {
+    const body = decodeDeepSeekRequestBody(JSON.stringify({
+      prompt: 'hello',
+      future_sibling: { keep: true },
+    }));
+
+    expect(body).toEqual({
+      prompt: 'hello',
+      future_sibling: { keep: true },
+    });
+    expect(() => decodeDeepSeekRequestBody('{bad json}')).toThrow('valid JSON');
+    expect(() => decodeDeepSeekRequestBody('null')).toThrow('plain object');
+    expect(() => decodeDeepSeekRequestBody('[]')).toThrow('plain object');
+    expect(() => decodeDeepSeekRequestBody(JSON.stringify({ prompt: 1 }))).toThrow('non-empty string');
+    expect(() => decodeDeepSeekRequestBody(JSON.stringify({ prompt: '' }))).toThrow('non-empty string');
+  });
+
+  it('does not hide augmentation failures after the request body has decoded', () => {
+    const state = {
+      memories: [],
+      get skills(): never {
+        throw new Error('skill state unavailable');
+      },
+      activePreset: null,
+      modelType: null,
+      toolDescriptors: [],
+      messageCount: 0,
+    };
+
+    expect(() => augmentRequestBody('{"prompt":"/writer"}', state))
+      .toThrow('skill state unavailable');
+  });
+
   it('applies expert mode and advances request message count without exposing state to main-world', () => {
     const result = augmentRequestBody(JSON.stringify({
       prompt: 'hello',

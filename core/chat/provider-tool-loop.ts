@@ -11,6 +11,7 @@ import type {
   ToolExecutionRecord,
   ToolResult,
 } from '../types';
+import type { OfficialApiChatConfig } from './official-api-config-contract';
 import type {
   ChatModelRef,
   ChatProviderAdapter,
@@ -34,6 +35,7 @@ export interface RunProviderToolLoopInput {
   thinkingEnabled: boolean;
   toolProtocol?: ProviderToolProtocol;
   attachments?: ProviderAttachment[];
+  officialApiConfig?: OfficialApiChatConfig;
   toolDescriptors: readonly ToolDescriptor[];
   executeTool: (call: ToolCall) => Promise<ToolResult>;
   onVisibleText?: (text: string) => void;
@@ -146,6 +148,7 @@ async function streamVisibleProviderTurn(
     prompt: input.prompt,
     thinkingEnabled: input.thinkingEnabled,
     attachments: input.attachments,
+    officialApiConfig: input.officialApiConfig,
     signal: input.signal,
   }, {
     onTextDelta(text) {
@@ -215,6 +218,7 @@ async function streamBufferedProviderTurn(
     prompt,
     thinkingEnabled: input.thinkingEnabled,
     attachments,
+    officialApiConfig: input.officialApiConfig,
     signal: input.signal,
   }, {
     onThinkingDelta(text, fullText) {

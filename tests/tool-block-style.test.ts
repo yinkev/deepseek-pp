@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as t from '@babel/types';
 import { describe, expect, it } from 'vitest';
+import { parseTypeScriptSource, walkSourceAst } from './helpers/typescript-source';
 
 describe('content tool block styles', () => {
   it('keeps restored tool detail content scrollable for long source output', () => {
@@ -38,12 +40,20 @@ describe('content tool block styles', () => {
   it('includes sandbox cleanup markers without advertising sandbox in the public page catalog', () => {
     const path = join(process.cwd(), 'entrypoints/content.ts');
     const source = readFileSync(path, 'utf8');
+    const controllers = getFunctionSource(path, source, 'createContentCapabilityControllers');
+    const continuationHider = getFunctionSource(path, source, 'startInlineAgentContinuationMessageHider');
+    const hideMessages = getFunctionSource(path, source, 'hideInlineAgentContinuationMessages');
 
     expect(source).toContain('PAGE_CLEANUP_SANDBOX_TOOL_NAMES');
     expect(source).toContain('hasSandboxToolMarkerPrefix');
+    expect(controllers).toContain('const mutationHub = createContentMutationHub({');
+    expect(controllers).toContain("createDomCapability('mutation-hub', (scope) => mutationHub.start(scope)");
     expect(source).toContain('isInternalToolResultsContinuationText');
     expect(source).toContain('createContentScriptToolResultsMessageHider');
-    expect(source).toContain('internalToolResultsMessageHider.observe(document.body)');
+    expect(continuationHider).toContain('mutationHub.subscribe({');
+    expect(continuationHider).toContain('roots.forEach(hideInlineAgentContinuationMessages);');
+    expect(hideMessages).toContain('internalToolResultsMessageHider.hideIn(root);');
+    expect(source).not.toContain('internalToolResultsMessageHider.observe(');
     expect(source).toContain('data-dpp-hidden-inline-agent-continuation');
     expect(source).toContain('// Cleanup-only: recognize sandbox tags');
     expect(source).toContain('pre, code');
@@ -88,8 +98,12 @@ describe('content tool block styles', () => {
   it('normalizes restored inline-agent traces that predate finalText storage', () => {
     const path = join(process.cwd(), 'entrypoints/content.ts');
     const source = readFileSync(path, 'utf8');
+    const codec = readFileSync(
+      join(process.cwd(), 'core/inline-agent/trace-codec.ts'),
+      'utf8',
+    );
 
-    expect(source).toContain("(trace.finalText === undefined || typeof trace.finalText === 'string')");
+    expect(codec).toContain('requireOptionalString(trace.finalText, `${path}.finalText`)');
     expect(source).toContain("const finalText = typeof trace.finalText === 'string' ? trace.finalText : '';");
     expect(source).toContain("finalText: clampText(finalText, INLINE_AGENT_FINAL_RENDER_MAX_CHARS) ?? '',");
   });
@@ -97,13 +111,18 @@ describe('content tool block styles', () => {
   it('hides internal inline-agent continuation user messages instead of rendering empty turns', () => {
     const path = join(process.cwd(), 'entrypoints/content.ts');
     const source = readFileSync(path, 'utf8');
+    const startCapability = getFunctionSource(path, source, 'startInlineAgentCapability');
+    const continuationHider = getFunctionSource(path, source, 'startInlineAgentContinuationMessageHider');
+    const hideMessages = getFunctionSource(path, source, 'hideInlineAgentContinuationMessages');
 
-    expect(source).toContain('startInlineAgentContinuationMessageHider();');
+    expect(startCapability).toContain('startInlineAgentContinuationMessageHider(scope, mutationHub);');
     expect(source).toContain('INLINE_AGENT_CONTINUATION_PLACEHOLDER');
     expect(source).toContain('isInlineAgentContinuationStructure(text)');
-    expect(source).toContain('hideInlineAgentContinuationMessages(root)');
+    expect(continuationHider).toContain('mutationHub.subscribe({');
+    expect(continuationHider).toContain('roots.forEach(hideInlineAgentContinuationMessages);');
     expect(source).toContain('createContentScriptToolResultsMessageHider');
-    expect(source).toContain('internalToolResultsMessageHider.observe(document.body)');
+    expect(hideMessages).toContain('internalToolResultsMessageHider.hideIn(root);');
+    expect(source).not.toContain('internalToolResultsMessageHider.observe(');
     expect(source).toContain('data-dpp-hidden-inline-agent-continuation');
   });
 
@@ -118,3 +137,16 @@ describe('content tool block styles', () => {
     expect(source).not.toContain('var(--ds-text-secondary');
   });
 });
+
+function getFunctionSource(path: string, source: string, name: string): string {
+  const program = parseTypeScriptSource(path, source);
+  const ranges: Array<{ start: number; end: number }> = [];
+  walkSourceAst(program, (node) => {
+    if (!t.isFunctionDeclaration(node) || node.id?.name !== name) return;
+    if (typeof node.start !== 'number' || typeof node.end !== 'number') return;
+    ranges.push({ start: node.start, end: node.end });
+  });
+  const range = ranges[0];
+  if (!range) throw new Error(`Function ${name} not found in ${path}`);
+  return source.slice(range.start, range.end);
+}

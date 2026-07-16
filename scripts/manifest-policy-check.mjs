@@ -21,7 +21,7 @@ const targets = [
   {
     browser: 'firefox',
     manifestPath: 'dist/firefox-mv3/manifest.json',
-    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus'],
+    permissions: ['storage', 'alarms', 'nativeMessaging', 'contextMenus', 'identity'],
   },
 ];
 
@@ -134,6 +134,7 @@ const background = readText('entrypoints/background.ts');
 const nativeTransport = readText('core/mcp/transports/native.ts');
 const browserControlConnection = readText('core/browser-control/cdp.ts');
 const browserControlService = readText('core/browser-control/service.ts');
+const syncIdentityPort = readText('core/sync/identity-port.ts');
 const wxtConfig = readText('wxt.config.ts');
 const privacyPolicy = readText('docs/chrome-web-store/privacy-policy.md');
 const submission = readText('docs/chrome-web-store/submission.md');
@@ -149,13 +150,15 @@ assertIncludes(browserControlConnection, 'chromeApi.debugger', 'debugger permiss
 assertIncludes(browserControlService, 'chromeApi.tabs', 'tabs permission must use the tabs API');
 assertIncludes(browserControlService, 'chromeApi.tabGroups', 'tabGroups API must be optional browser-control metadata');
 assertIncludes(wxtConfig, "'identity'", 'identity permission must be declared for cloud sync OAuth');
-assertIncludes(wxtConfig, 'chrome.identity.launchWebAuthFlow', 'identity permission must be tied to user-approved cloud sync OAuth');
+assertIncludes(syncIdentityPort, 'identity.launchWebAuthFlow', 'identity permission must be tied to user-approved cloud sync OAuth');
 assertIncludes(wxtConfig, 'web_accessible_resources', 'web accessible resources must be declared in manifest config');
 assertIncludes(wxtConfig, "default_locale: 'en'", 'manifest config must declare default locale');
 assertIncludes(wxtConfig, '__MSG_extension_name__', 'manifest config must use localized name');
 assertIncludes(wxtConfig, '__MSG_extension_description__', 'manifest config must use localized description');
 assertIncludes(wxtConfig, '__MSG_extension_action_title__', 'manifest config must use localized action title');
-assertIncludes(wxtConfig, 'pyodideAssetsPlugin', 'manifest build must bundle Pyodide assets for browser Python sandbox');
+assertIncludes(wxtConfig, 'copyPyodideAssets', 'manifest build must bundle Pyodide assets for browser Python sandbox');
+assertIncludes(wxtConfig, 'copyBundledSkillAssets', 'manifest build must bundle on-demand Skill resources');
+assertIncludes(wxtConfig, "'build:done'", 'large extension assets must be copied once after WXT entrypoint builds finish');
 
 for (const permission of ['storage', 'alarms', 'contextMenus', 'nativeMessaging', 'offscreen', 'debugger', 'tabs', 'identity', 'sidePanel']) {
   assertIncludes(privacyPolicy, `\`${permission}\``, `privacy policy must document ${permission}`);
@@ -163,6 +166,8 @@ for (const permission of ['storage', 'alarms', 'contextMenus', 'nativeMessaging'
 }
 
 for (const hostPermission of [
+  '*://cn.bing.com/*',
+  '*://www.bing.com/*',
   'https://accounts.google.com/*',
   'https://oauth2.googleapis.com/*',
   'https://www.googleapis.com/*',
@@ -172,6 +177,17 @@ for (const hostPermission of [
   assertIncludes(privacyPolicy, `\`${hostPermission}\``, `privacy policy must document ${hostPermission}`);
   assertIncludes(submission, hostPermission, `Chrome Web Store submission notes must justify ${hostPermission}`);
 }
+
+assertIncludes(
+  privacyPolicy,
+  'To Bing (`cn.bing.com` or `www.bing.com`), when the user invokes the built-in web search tool',
+  'privacy policy must disclose the English Bing search data transfer',
+);
+assertIncludes(
+  privacyPolicy,
+  '\u5c06\u641c\u7d22\u67e5\u8be2\u53d1\u9001\u5230 Bing\uff08`cn.bing.com` \u6216 `www.bing.com`\uff09',
+  'privacy policy must disclose the Chinese Bing search data transfer',
+);
 
 if (failures.length > 0) {
   console.error('Manifest policy check failed:');

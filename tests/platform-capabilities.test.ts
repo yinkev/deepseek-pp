@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createCapabilityMap,
-  getCurrentBrowserExtensionEnvironment,
   getCurrentPlatformEnvironment,
   isCapabilitySupported,
 } from '../core/platform';
@@ -28,6 +27,7 @@ describe('platform capability contracts', () => {
         id: 'extension-id',
         sendMessage: vi.fn(),
         getURL: vi.fn(),
+        getManifest: vi.fn(() => ({ permissions: [] })),
         connectNative: vi.fn(),
       },
       storage: { local: {} },
@@ -40,13 +40,26 @@ describe('platform capability contracts', () => {
       debugger: { attach: vi.fn(), sendCommand: vi.fn() },
     });
 
-    const environment = getCurrentBrowserExtensionEnvironment();
+    const environment = getCurrentPlatformEnvironment();
 
     expect(environment.kind).toBe('browser_extension');
+    expect(isCapabilitySupported(environment, 'downloads')).toBe(false);
     expect(isCapabilitySupported(environment, 'nativeMessaging')).toBe(true);
     expect(isCapabilitySupported(environment, 'sidePanel')).toBe(true);
     expect(isCapabilitySupported(environment, 'browserControl')).toBe(true);
     expect(isCapabilitySupported(environment, 'accessibilityTree')).toBe(true);
+  });
+
+  it('requires both the downloads API and its manifest permission', () => {
+    vi.stubGlobal('chrome', {
+      runtime: {
+        id: 'extension-id',
+        getManifest: vi.fn(() => ({ permissions: ['downloads'] })),
+      },
+      downloads: { download: vi.fn() },
+    });
+
+    expect(getCurrentPlatformEnvironment().capabilities.downloads).toBe(true);
   });
 
   it('does not require tabGroups for browser control support', () => {
@@ -72,7 +85,7 @@ describe('platform capability contracts', () => {
     });
     vi.stubGlobal('chrome', chromeStub);
 
-    const environment = getCurrentBrowserExtensionEnvironment();
+    const environment = getCurrentPlatformEnvironment();
 
     expect(isCapabilitySupported(environment, 'tabGroups')).toBe(false);
     expect(isCapabilitySupported(environment, 'browserControl')).toBe(true);
@@ -85,6 +98,34 @@ describe('platform capability contracts', () => {
     expect(Object.values(environment.capabilities).every((supported) => !supported)).toBe(true);
   });
 
+  it('reports unknown when the extension runtime is no longer readable', () => {
+    const chromeStub = {};
+    Object.defineProperty(chromeStub, 'runtime', {
+      get() {
+        throw new Error('Extension context invalidated');
+      },
+    });
+    vi.stubGlobal('chrome', chromeStub);
+
+    const environment = getCurrentPlatformEnvironment();
+
+    expect(environment.kind).toBe('unknown');
+    expect(Object.values(environment.capabilities).every((supported) => !supported)).toBe(true);
+  });
+
+  it('surfaces unexpected runtime access failures', () => {
+    const chromeStub = {};
+    Object.defineProperty(chromeStub, 'runtime', {
+      get() {
+        throw new Error('unexpected runtime getter failure');
+      },
+    });
+    vi.stubGlobal('chrome', chromeStub);
+
+    expect(() => getCurrentPlatformEnvironment())
+      .toThrow('unexpected runtime getter failure');
+  });
+
   it('filters native MCP controls when native messaging is unsupported', () => {
     const environment: PlatformEnvironment = {
       kind: 'unknown',
@@ -95,5 +136,12 @@ describe('platform capability contracts', () => {
 
     expect(isShellNativeHostSupported(environment)).toBe(false);
     expect(getSupportedMcpTransportKinds(kinds, environment)).toEqual(['streamable_http', 'stdio_bridge']);
+  });
+
+  it('fails closed while the platform environment is not loaded', () => {
+    const kinds: McpServerTransportConfig['kind'][] = ['streamable_http', 'native_messaging'];
+
+    expect(isShellNativeHostSupported(null)).toBe(false);
+    expect(getSupportedMcpTransportKinds(kinds, undefined)).toEqual(['streamable_http']);
   });
 });

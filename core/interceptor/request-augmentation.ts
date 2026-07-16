@@ -30,6 +30,10 @@ export interface RequestBodyAugmentationResult {
   messageCount: number;
 }
 
+export interface DeepSeekRequestBody extends Record<string, unknown> {
+  prompt: string;
+}
+
 export interface ResolvedSkillPrompt {
   combinedPrompt: string;
   memoryEnabled: boolean;
@@ -40,15 +44,40 @@ export function augmentRequestBody(
   bodyStr: string,
   state: RequestAugmentationState,
 ): RequestBodyAugmentationResult | null {
-  let body: Record<string, unknown>;
+  let body: DeepSeekRequestBody;
   try {
-    body = JSON.parse(bodyStr);
+    body = decodeDeepSeekRequestBody(bodyStr);
   } catch {
     return null;
   }
+  return augmentDecodedRequestBody(body, state);
+}
 
-  const originalPrompt = (body.prompt as string) || '';
-  if (!originalPrompt) return null;
+export function decodeDeepSeekRequestBody(bodyStr: string): DeepSeekRequestBody {
+  let value: unknown;
+  try {
+    value = JSON.parse(bodyStr);
+  } catch {
+    throw new Error('DeepSeek request body must be valid JSON.');
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('DeepSeek request body must be a plain object.');
+  }
+  const body = value as Record<string, unknown>;
+  if (typeof body.prompt !== 'string' || body.prompt.length === 0) {
+    throw new Error('DeepSeek request prompt must be a non-empty string.');
+  }
+  return body as DeepSeekRequestBody;
+}
+
+export function augmentDecodedRequestBody(
+  decodedBody: Readonly<DeepSeekRequestBody>,
+  state: RequestAugmentationState,
+): RequestBodyAugmentationResult {
+  const body: DeepSeekRequestBody = { ...decodedBody };
+
+  const originalPrompt = body.prompt;
   const locale = state.locale ?? DEFAULT_LOCALE;
 
   const thinkingEnabled = body.thinking_enabled === true;

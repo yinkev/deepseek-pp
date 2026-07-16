@@ -6,8 +6,8 @@ import type {
   McpProtocolTransport,
   McpServerConfig,
 } from '../types';
-import { MCP_PROTOCOL_VERSION } from '../constants';
 import {
+  McpTransportError,
   ensureMcpServerOriginPermission,
   fetchWithTimeout,
   getMcpEndpointUrl,
@@ -17,6 +17,7 @@ import {
 interface McpHttpTransportState {
   protocolVersion?: string;
   sessionId?: string;
+  pendingSessionId?: string;
 }
 
 export function createMcpHttpTransport(server: McpServerConfig): McpProtocolTransport {
@@ -43,20 +44,24 @@ function createHttpTransport(
       });
     },
     async notify(notification, options) {
-      await sendHttpMessage(server, notification, {
+      await sendHttpNotification(server, notification, {
         timeoutMs: options?.timeoutMs,
-        maxResponseBytes: options?.maxResponseBytes,
         signal: options?.signal,
         session: state,
         streamableSession: transportOptions.session,
       });
+    },
+    commitInitialization(result) {
+      state.protocolVersion = result.protocolVersion;
+      if (transportOptions.session) state.sessionId = state.pendingSessionId;
+      state.pendingSessionId = undefined;
     },
   };
 }
 
 async function sendHttpMessage<TParams extends Record<string, unknown> | undefined, TResult>(
   server: McpServerConfig,
-  message: McpJsonRpcRequest<TParams> | McpJsonRpcNotification,
+  message: McpJsonRpcRequest<TParams>,
   options: {
     timeoutMs?: number;
     maxResponseBytes?: number;
@@ -76,15 +81,52 @@ async function sendHttpMessage<TParams extends Record<string, unknown> | undefin
     body: JSON.stringify(message),
     signal: options.signal,
   }, timeoutMs);
-  if (options.streamableSession) updateStreamableSession(options.session, response);
-
   const rpcResponse = await readJsonRpcResponse<TResult>(
     response,
-    'id' in message ? message as McpJsonRpcRequest<TParams> : undefined,
+    message,
     { maxBytes: maxResponseBytes },
   );
-  updateProtocolSession(options.session, message, rpcResponse);
+  capturePendingStreamableSession(
+    options.session,
+    response,
+    message,
+    rpcResponse,
+    options.streamableSession ?? false,
+  );
   return rpcResponse;
+}
+
+async function sendHttpNotification(
+  server: McpServerConfig,
+  notification: McpJsonRpcNotification,
+  options: {
+    timeoutMs?: number;
+    session?: McpHttpTransportState;
+    streamableSession?: boolean;
+    signal?: AbortSignal;
+  } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? server.timeouts.requestMs;
+  await ensureMcpServerOriginPermission(server);
+  const response = await fetchWithTimeout(getMcpEndpointUrl(server), {
+    method: 'POST',
+    credentials: 'omit',
+    headers: createRequestHeaders(server, options.session, options.streamableSession ?? false),
+    body: JSON.stringify(notification),
+    signal: options.signal,
+  }, timeoutMs);
+
+  try {
+    if (!response.ok) {
+      throw new McpTransportError(
+        'mcp_http_error',
+        `MCP server returned HTTP ${response.status}.`,
+        { retryable: response.status >= 500 },
+      );
+    }
+  } finally {
+    await response.body?.cancel().catch(() => undefined);
+  }
 }
 
 function createRequestHeaders(
@@ -105,25 +147,13 @@ function createRequestHeaders(
   };
 }
 
-function updateStreamableSession(
+function capturePendingStreamableSession<TResult>(
   session: McpHttpTransportState | undefined,
   response: Response,
+  message: McpJsonRpcRequest<any>,
+  rpcResponse: McpJsonRpcResponse<TResult>,
+  streamableSession: boolean,
 ): void {
-  if (!session) return;
-  const sessionId = response.headers.get('Mcp-Session-Id');
-  if (sessionId) session.sessionId = sessionId;
-}
-
-function updateProtocolSession<TResult>(
-  session: McpHttpTransportState | undefined,
-  message: McpJsonRpcRequest<any> | McpJsonRpcNotification,
-  response: McpJsonRpcResponse<TResult>,
-): void {
-  if (!session || message.method !== 'initialize' || response.error) return;
-  const result = response.result && typeof response.result === 'object'
-    ? response.result as { protocolVersion?: unknown }
-    : {};
-  session.protocolVersion = typeof result.protocolVersion === 'string' && result.protocolVersion
-    ? result.protocolVersion
-    : MCP_PROTOCOL_VERSION;
+  if (!session || !streamableSession || message.method !== 'initialize' || rpcResponse.error) return;
+  session.pendingSessionId = response.headers.get('Mcp-Session-Id') || undefined;
 }

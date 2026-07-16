@@ -1,16 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { SavedItem, SavedItemInput, SavedItemKind } from '../../../core/saved-items';
+import { useMemo, useState } from 'react';
+import type { SavedItemInput, SavedItemKind } from '../../../core/saved-items/types';
 import { createSavedItemsJsonArtifact, createSavedItemsMarkdownArtifact, type SecondaryExportArtifact } from '../../../core/export/secondary-artifacts';
 import PageIntro from '../components/PageIntro';
 import { SegmentedControl, SkeletonList, useBanner, useConfirm } from '../components/settings/primitives';
 import { SVG_PATHS } from '../constants';
+import { useSavedPageController } from '../controllers/useSavedPageController';
 import { useI18n } from '../i18n';
-import { getRuntimeErrorMessage, unwrapRuntimeResponse } from '../runtime-response';
 
 export default function SavedPage() {
   const { t } = useI18n();
-  const [items, setItems] = useState<SavedItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState<SavedItemKind>('snippet');
   const [title, setTitle] = useState('');
@@ -18,23 +16,18 @@ export default function SavedPage() {
   const [tags, setTags] = useState('');
   const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
-
-  const load = async () => {
-    const result = await chrome.runtime.sendMessage({ type: 'GET_SAVED_ITEMS' });
-    setItems(Array.isArray(result) ? result : []);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    void load();
-    const handler = (message: { type?: string; savedItems?: SavedItem[] }) => {
-      if (message.type === 'SAVED_ITEMS_UPDATED') {
-        setItems(Array.isArray(message.savedItems) ? message.savedItems : []);
-      }
-    };
-    chrome.runtime.onMessage.addListener(handler);
-    return () => chrome.runtime.onMessage.removeListener(handler);
-  }, []);
+  const {
+    items,
+    loading,
+    loadFailed,
+    save: saveItem,
+    remove,
+    insertPrompt,
+  } = useSavedPageController(t, confirm, {
+    clear: banner.clear,
+    success: (message) => banner.show('success', message),
+    error: (message) => banner.show('error', message),
+  });
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -55,50 +48,10 @@ export default function SavedPage() {
       content,
       tags: tags.split(',').map((tag) => tag.trim()).filter(Boolean),
     };
-    try {
-      banner.clear();
-      const saved = unwrapRuntimeResponse<SavedItem>(
-        await chrome.runtime.sendMessage({ type: 'SAVE_SAVED_ITEM', payload }),
-        t('sidepanel.savedPage.backendUnavailable'),
-      );
-      if (!saved.id) {
-        throw new Error(t('sidepanel.savedPage.backendUnavailable'));
-      }
+    if (await saveItem(payload)) {
       setTitle('');
       setContent('');
       setTags('');
-      banner.show('success', t('sidepanel.savedPage.saved'));
-      await load();
-    } catch (error) {
-      banner.show('error', t('sidepanel.savedPage.operationFailed', { error: getRuntimeErrorMessage(error) }));
-    }
-  };
-
-  const remove = async (id: string) => {
-    const ok = await confirm({
-      title: t('sidepanel.savedPage.deleteConfirm'),
-      message: t('sidepanel.savedPage.deleteConfirm'),
-      confirmLabel: t('common.delete'),
-      cancelLabel: t('common.cancel'),
-    });
-    if (!ok) return;
-    await chrome.runtime.sendMessage({ type: 'DELETE_SAVED_ITEM', payload: { id } });
-    await load();
-  };
-
-  const insertPrompt = async (text: string) => {
-    try {
-      banner.clear();
-      unwrapRuntimeResponse<{ ok: true }>(
-        await chrome.runtime.sendMessage({
-          type: 'INSERT_SAVED_PROMPT_INTO_CHAT',
-          payload: { text },
-        }),
-        t('sidepanel.savedPage.backendUnavailable'),
-      );
-      banner.show('success', t('sidepanel.savedPage.inserted'));
-    } catch (error) {
-      banner.show('error', t('sidepanel.savedPage.insertFailed', { error: getRuntimeErrorMessage(error) }));
     }
   };
 
@@ -201,7 +154,7 @@ export default function SavedPage() {
       <div className="space-y-2">
         {loading ? (
           <SkeletonList rows={3} />
-        ) : filtered.length === 0 && (
+        ) : !loadFailed && filtered.length === 0 && (
           <div className="ds-empty-state">
             <div className="ds-empty-state-icon">
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>

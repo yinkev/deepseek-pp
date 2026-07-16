@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ARTIFACT_PERSISTENCE_CONTRACT,
-  ARTIFACT_SCHEMA_VERSION,
-  getArtifacts,
+  decodeArtifactRecords,
   isArtifactRecord,
-} from '../core/artifact';
+} from '../core/artifact/schema';
+import { ARTIFACT_SCHEMA_VERSION } from '../core/artifact/types';
+import {
+  AUTOMATION_STORAGE_KEY,
+  LEGACY_AUTOMATION_RUN_TIMEOUT_MS,
+  decodeAutomationStorageState,
+} from '../core/automation/storage-codec';
 import {
   MEMORY_DATABASE_NAME,
   MEMORY_TABLE_NAME,
@@ -13,21 +18,26 @@ import {
   migrateMemoryV2RecordToV3,
 } from '../core/memory/schema';
 import {
-  normalizeProjectContextState,
+  decodeProjectContextState,
+  getProjectContextState,
   PROJECT_CONTEXT_SCHEMA_VERSION,
   PROJECT_CONTEXT_STORAGE_KEY,
 } from '../core/project';
 import {
-  normalizeSavedItemsState,
+  decodeSavedItemsState,
+  getSavedItemsState,
   SAVED_ITEMS_SCHEMA_VERSION,
   SAVED_ITEMS_STORAGE_KEY,
 } from '../core/saved-items';
 import {
   getAllScenarios,
-  getDefaultScenarios,
   SCENARIO_STORAGE_KEY,
 } from '../core/scenario/store';
-import { SYNC_CONFIG_STORAGE_KEY } from '../core/sync/config';
+import { SYNC_CONFIG_STORAGE_KEY, decodeStoredSyncConfig } from '../core/sync/config';
+import { TOOL_HISTORY_STORAGE_KEY } from '../core/tool/history';
+import { decodeToolCallHistory } from '../core/tool/history-codec';
+import { USAGE_STORAGE_KEY } from '../core/usage/store';
+import { decodeUsageRecords } from '../core/usage/codec';
 import {
   SYNC_RECOVERY_DATABASE_NAME,
   SYNC_RECOVERY_DATABASE_VERSION,
@@ -44,61 +54,81 @@ import {
 import {
   parseValidatedArray,
   parseValidatedJson,
-  validatePreset,
-  validateProjectContextState,
-  validateSavedItemsState,
-  validateSkill,
-  validateSkillImportSource,
   validateSyncMemory,
 } from '../core/sync/schema';
+import { decodePreset as validatePreset } from '../core/preset/codec';
 import {
-  ARTIFACT_CURRENT_GAPS,
-  ARTIFACT_FILTERING_DATA_LOSS_GAP,
+  decodeSkill as validateSkill,
+  decodeSkillImportSource as validateSkillImportSource,
+} from '../core/skill/codec';
+import {
+  ADDITIVE_LEGACY_ARTIFACT_RECORD,
   LEGAL_LEGACY_ARTIFACT_STORAGE,
   LEGACY_ARTIFACT_RECORD,
+  REJECTED_LEGACY_ARTIFACT_STATES,
 } from './fixtures/persistence-contract/artifact';
 import {
-  MEMORY_CURRENT_GAPS,
+  AUTOMATION_STORAGE_REJECTED_STATES,
+  AUTOMATION_STORAGE_V1_LEGACY,
+  AUTOMATION_STORAGE_V1_ORPHAN_RUN,
+} from './fixtures/persistence-contract/automation';
+import {
+  MEMORY_BOUNDED_GAPS,
   MEMORY_V1_RECORD,
   MEMORY_V2_RECORD,
   MEMORY_V3_RECORD,
 } from './fixtures/persistence-contract/memory';
 import {
-  PROJECT_V1_MIGRATION_REQUIREMENT,
+  PROJECT_REJECTED_STATES,
+  PROJECT_V1_EMPTY_OPTIONAL_SOURCE_STATE,
+  PROJECT_V1_MIGRATED_STATE,
+  PROJECT_V1_STATE,
   PROJECT_V2_STATE,
 } from './fixtures/persistence-contract/project';
 import {
   LEGACY_SAVED_ITEMS_ARRAY,
-  SAVED_ITEMS_FUTURE_VERSION_GAP,
+  SAVED_ITEMS_REJECTED_STATES,
   SAVED_ITEMS_V1_STATE,
+  SAVED_ITEMS_VERSIONLESS_STATE,
 } from './fixtures/persistence-contract/saved-items';
 import {
-  SCENARIO_CURRENT_GAP,
+  SCENARIO_REJECTED_STATES,
   SCENARIO_STORAGE,
 } from './fixtures/persistence-contract/scenario';
 import {
-  SYNC_CURRENT_GAPS,
   SYNC_JSON_FIXTURES,
+  SYNC_CONFIG_STORAGE_FIXTURES,
   SYNC_LEGACY_JSON_FIXTURES,
   SYNC_LOCAL_APPLY_JOURNAL_V1_FIXTURE,
   SYNC_MEMORY_RECORD,
+  SYNC_VERSIONING_FIXTURES,
 } from './fixtures/persistence-contract/sync';
+import {
+  TOOL_HISTORY_LEGACY_RECORD,
+  TOOL_HISTORY_STORAGE_REJECTED_STATES,
+} from './fixtures/persistence-contract/tool-history';
+import {
+  USAGE_LEGACY_RECORD,
+  USAGE_STORAGE_REJECTED_STATES,
+} from './fixtures/persistence-contract/usage';
 
 let storage: Record<string, unknown>;
 let storageGet: ReturnType<typeof vi.fn>;
+let storageSet: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   storage = {};
   storageGet = vi.fn(async (key: string) => ({ [key]: storage[key] }));
+  storageSet = vi.fn(async (values: Record<string, unknown>) => {
+    storage = { ...storage, ...values };
+  });
   vi.stubGlobal('indexedDB', undefined);
   vi.stubGlobal('IDBKeyRange', undefined);
   vi.stubGlobal('chrome', {
     storage: {
       local: {
         get: storageGet,
-        set: vi.fn(async (values: Record<string, unknown>) => {
-          storage = { ...storage, ...values };
-        }),
+        set: storageSet,
         remove: vi.fn(async (key: string) => {
           delete storage[key];
         }),
@@ -125,15 +155,15 @@ describe('persistence and sync compatibility contract', () => {
       .toEqual(MEMORY_V2_RECORD);
     expect(migrateMemoryV2RecordToV3({ ...MEMORY_V2_RECORD, projectId: 'stale-project' }))
       .toEqual(MEMORY_V3_RECORD);
-    expect(MEMORY_CURRENT_GAPS[0].target)
-      .toBe('preserve-future-database-without-overwrite-after-T3.3');
-    expect(MEMORY_CURRENT_GAPS[1]).toMatchObject({
+    expect(MEMORY_BOUNDED_GAPS).toEqual([{
+      name: 'sync rollback restores raw rows but IndexedDB does not rewind its hidden auto-increment generator',
       currentBehavior: 'next-memory-id-may-skip-after-rollback',
-      target: 'define-logical-id-allocation-with-schema-migration-after-T3.3',
-    });
+      disposition: 'bounded-out-of-scope-no-second-allocator',
+      target: 'preserve-released-auto-increment-and-allow-id-gaps',
+    }]);
   });
 
-  it('reads legal legacy artifacts and classifies malformed filtering as a migration gap', async () => {
+  it('freezes Artifact identity and losslessly decodes the whole legal legacy array', () => {
     expect(ARTIFACT_SCHEMA_VERSION).toBe(1);
     expect(ARTIFACT_PERSISTENCE_CONTRACT).toEqual({
       databaseName: 'DeepSeekPPArtifacts',
@@ -143,41 +173,106 @@ describe('persistence and sync compatibility contract', () => {
       legacyStorageKey: 'deepseek_pp_artifacts',
       maxRecords: 50,
     });
-    storage[ARTIFACT_PERSISTENCE_CONTRACT.legacyStorageKey] = LEGAL_LEGACY_ARTIFACT_STORAGE;
-
     expect(isArtifactRecord(LEGACY_ARTIFACT_RECORD)).toBe(true);
-    expect(isArtifactRecord(ARTIFACT_FILTERING_DATA_LOSS_GAP.input[1])).toBe(false);
-    await expect(getArtifacts()).resolves.toEqual([LEGACY_ARTIFACT_RECORD]);
-    expect(ARTIFACT_CURRENT_GAPS.map((gap) => gap.target))
-      .toEqual([
-        'preserve-unread-rows-for-explicit-recovery-after-T3.3',
-        'single-authoritative-store-after-T3.3',
-        'single-authoritative-store-after-T3.3',
-      ]);
+    expect(isArtifactRecord(ADDITIVE_LEGACY_ARTIFACT_RECORD)).toBe(true);
+    expect(decodeArtifactRecords(LEGAL_LEGACY_ARTIFACT_STORAGE))
+      .toEqual(LEGAL_LEGACY_ARTIFACT_STORAGE);
+
+    for (const raw of Object.values(REJECTED_LEGACY_ARTIFACT_STATES)) {
+      expect(() => decodeArtifactRecords(raw)).toThrow();
+    }
   });
 
-  it('accepts Project v2 while classifying released Project v1 reset as data loss', () => {
+  it('freezes Automation, Usage, and Tool History released whole-key contracts', () => {
+    expect(AUTOMATION_STORAGE_KEY).toBe('deepseek_pp_automations');
+    const automation = decodeAutomationStorageState(structuredClone(AUTOMATION_STORAGE_V1_LEGACY));
+    expect(automation).toMatchObject({
+      additiveRootField: { preserve: true },
+      automations: [{
+        deepseek: {
+          chatSessionId: null,
+          parentMessageId: null,
+          sessionUrl: null,
+          lastHistorySyncedAt: null,
+        },
+        additiveAutomationField: { preserve: true },
+      }],
+      runs: [{
+        request: {
+          parentMessageId: 42,
+          deadlineAt: 1_100 + LEGACY_AUTOMATION_RUN_TIMEOUT_MS,
+        },
+        additiveRunField: { preserve: true },
+      }],
+    });
+    expect(decodeAutomationStorageState(structuredClone(AUTOMATION_STORAGE_V1_ORPHAN_RUN)).runs)
+      .toHaveLength(1);
+    for (const raw of Object.values(AUTOMATION_STORAGE_REJECTED_STATES)) {
+      expect(() => decodeAutomationStorageState(structuredClone(raw))).toThrow();
+    }
+
+    expect(USAGE_STORAGE_KEY).toBe('deepseek_pp_usage_turns_v1');
+    expect(decodeUsageRecords(structuredClone([USAGE_LEGACY_RECORD]))[0]).toMatchObject({
+      source: 'deepseek-web',
+      chatSessionId: null,
+      assistantMessageId: null,
+      modelType: null,
+      tokenSource: 'estimated',
+      tps: 0,
+      speedSource: 'estimated',
+      elapsedMs: 0,
+      messageCount: 2,
+      additiveUsageField: { preserve: true },
+    });
+    for (const raw of Object.values(USAGE_STORAGE_REJECTED_STATES)) {
+      expect(() => decodeUsageRecords(structuredClone(raw))).toThrow();
+    }
+
+    expect(TOOL_HISTORY_STORAGE_KEY).toBe('deepseek_pp_tool_history');
+    expect(decodeToolCallHistory(structuredClone([TOOL_HISTORY_LEGACY_RECORD])))
+      .toEqual([TOOL_HISTORY_LEGACY_RECORD]);
+    for (const raw of Object.values(TOOL_HISTORY_STORAGE_REJECTED_STATES)) {
+      expect(() => decodeToolCallHistory(structuredClone(raw))).toThrow();
+    }
+  });
+
+  it('migrates released Project v1 losslessly without writing during reads', async () => {
     expect(PROJECT_CONTEXT_SCHEMA_VERSION).toBe(2);
     expect(PROJECT_CONTEXT_STORAGE_KEY).toBe('deepseek_pp_project_context');
-    expect(normalizeProjectContextState(PROJECT_V2_STATE)).toEqual(PROJECT_V2_STATE);
-    expect(normalizeProjectContextState(PROJECT_V1_MIGRATION_REQUIREMENT.input))
-      .toEqual(PROJECT_V1_MIGRATION_REQUIREMENT.currentOutput);
-    expect(PROJECT_V1_MIGRATION_REQUIREMENT.classification).toBe('current-data-loss-gap');
-    expect(PROJECT_V1_MIGRATION_REQUIREMENT.target)
-      .toBe('migrate-v1-without-overwrite-after-T3.3');
+    expect(decodeProjectContextState(PROJECT_V2_STATE)).toEqual(PROJECT_V2_STATE);
+    expect(decodeProjectContextState(PROJECT_V1_STATE)).toEqual(PROJECT_V1_MIGRATED_STATE);
+    expect(decodeProjectContextState(PROJECT_V1_EMPTY_OPTIONAL_SOURCE_STATE)).toEqual({
+      ...PROJECT_V1_EMPTY_OPTIONAL_SOURCE_STATE,
+      schemaVersion: 2,
+      conversations: [],
+      pendingProjectId: null,
+    });
+
+    storage[PROJECT_CONTEXT_STORAGE_KEY] = PROJECT_V1_STATE;
+    await expect(getProjectContextState()).resolves.toEqual(PROJECT_V1_MIGRATED_STATE);
+    expect(storage[PROJECT_CONTEXT_STORAGE_KEY]).toBe(PROJECT_V1_STATE);
+    expect(storageSet).not.toHaveBeenCalled();
   });
 
-  it('preserves saved-items legacy arrays and v1 while exposing future-version downgrade', () => {
+  it('preserves all legal saved-items shapes exactly and rejects future/corrupt values', async () => {
     expect(SAVED_ITEMS_SCHEMA_VERSION).toBe(1);
     expect(SAVED_ITEMS_STORAGE_KEY).toBe('deepseek_pp_saved_items');
-    expect(normalizeSavedItemsState(LEGACY_SAVED_ITEMS_ARRAY)).toEqual(SAVED_ITEMS_V1_STATE);
-    expect(normalizeSavedItemsState(SAVED_ITEMS_V1_STATE)).toEqual(SAVED_ITEMS_V1_STATE);
-    expect(normalizeSavedItemsState(SAVED_ITEMS_FUTURE_VERSION_GAP.input))
-      .toEqual(SAVED_ITEMS_FUTURE_VERSION_GAP.currentOutput);
-    expect(SAVED_ITEMS_FUTURE_VERSION_GAP.target).toBe('reject-without-overwrite-after-T3.3');
+    expect(decodeSavedItemsState(LEGACY_SAVED_ITEMS_ARRAY)).toEqual(SAVED_ITEMS_V1_STATE);
+    expect(decodeSavedItemsState(SAVED_ITEMS_V1_STATE)).toEqual(SAVED_ITEMS_V1_STATE);
+    expect(decodeSavedItemsState(SAVED_ITEMS_VERSIONLESS_STATE)).toEqual({
+      ...SAVED_ITEMS_VERSIONLESS_STATE,
+      schemaVersion: 1,
+    });
+
+    for (const raw of Object.values(SAVED_ITEMS_REJECTED_STATES)) {
+      storage[SAVED_ITEMS_STORAGE_KEY] = raw;
+      await expect(getSavedItemsState()).rejects.toThrow();
+      expect(storage[SAVED_ITEMS_STORAGE_KEY]).toBe(raw);
+    }
+    expect(storageSet).not.toHaveBeenCalled();
   });
 
-  it('merges released scenario storage and records the broad read fallback as a current gap', async () => {
+  it('merges released scenario arrays while surfacing read and schema failures', async () => {
     expect(SCENARIO_STORAGE_KEY).toBe('scenarioConfigs');
     storage[SCENARIO_STORAGE_KEY] = SCENARIO_STORAGE;
 
@@ -188,18 +283,41 @@ describe('persistence and sync compatibility contract', () => {
       template: 'Custom summary template: {text}',
       builtIn: true,
       enabled: false,
+      additiveField: { preserve: true },
     });
     expect(scenarios.find((scenario) => scenario.id === 'custom_contract'))
       .toEqual(SCENARIO_STORAGE[1]);
 
     storageGet.mockRejectedValueOnce(new Error('storage unavailable'));
-    await expect(getAllScenarios()).resolves.toEqual(getDefaultScenarios());
-    expect(SCENARIO_CURRENT_GAP.target)
-      .toBe('surface-read-failure-without-overwrite-after-T3.3');
+    await expect(getAllScenarios()).rejects.toThrow('storage unavailable');
+
+    for (const raw of Object.values(SCENARIO_REJECTED_STATES)) {
+      storage[SCENARIO_STORAGE_KEY] = raw;
+      await expect(getAllScenarios()).rejects.toThrow();
+      expect(storage[SCENARIO_STORAGE_KEY]).toBe(raw);
+    }
+    expect(storageSet).not.toHaveBeenCalled();
   });
 
   it('preserves fixed sync and configuration keys and decodes all six JSON files', () => {
     expect(SYNC_CONFIG_STORAGE_KEY).toBe('deepseek_pp_sync_config');
+    expect(decodeStoredSyncConfig(SYNC_CONFIG_STORAGE_FIXTURES.providerlessWebdavV0))
+      .toMatchObject({
+        revision: 0,
+        config: {
+          provider: 'webdav',
+          schemaVersion: 1,
+          revision: 0,
+          additiveField: { preserve: true },
+        },
+      });
+    expect(decodeStoredSyncConfig(SYNC_CONFIG_STORAGE_FIXTURES.gdriveV1))
+      .toEqual({
+        revision: 9,
+        config: SYNC_CONFIG_STORAGE_FIXTURES.gdriveV1,
+      });
+    expect(() => decodeStoredSyncConfig(SYNC_CONFIG_STORAGE_FIXTURES.future))
+      .toThrow('Sync configuration schema is not supported');
     expect(Object.values(SYNC_FILE_KEYS)).toEqual(SYNC_JSON_FIXTURES.map((fixture) => fixture.key));
     expect(REQUIRED_SYNC_FILE_KEYS).toEqual(
       SYNC_JSON_FIXTURES.filter((fixture) => fixture.required).map((fixture) => fixture.key),
@@ -227,16 +345,16 @@ describe('persistence and sync compatibility contract', () => {
     expect(parseValidatedJson(
       SYNC_FILE_KEYS.projectContext,
       syncFixture(SYNC_FILE_KEYS.projectContext),
-      validateProjectContextState,
+      decodeProjectContextState,
     )).toEqual(PROJECT_V2_STATE);
     expect(parseValidatedJson(
       SYNC_FILE_KEYS.savedItems,
       syncFixture(SYNC_FILE_KEYS.savedItems),
-      validateSavedItemsState,
+      decodeSavedItemsState,
     )).toEqual(SAVED_ITEMS_V1_STATE);
-    expect(validateProjectContextState(SYNC_LEGACY_JSON_FIXTURES.projectContextWithoutVersion))
+    expect(decodeProjectContextState(SYNC_LEGACY_JSON_FIXTURES.projectContextWithoutVersion))
       .toEqual(PROJECT_V2_STATE);
-    expect(validateSavedItemsState(SYNC_LEGACY_JSON_FIXTURES.savedItemsWithoutVersion))
+    expect(decodeSavedItemsState(SYNC_LEGACY_JSON_FIXTURES.savedItemsWithoutVersion))
       .toEqual(SAVED_ITEMS_V1_STATE);
   });
 
@@ -256,23 +374,32 @@ describe('persistence and sync compatibility contract', () => {
     });
   });
 
-  it('keeps remaining sync migration failures out of the legal contract', () => {
-    expect(() => parseValidatedJson(
+  it('migrates released sync state and rejects unsupported future versions', () => {
+    expect(parseValidatedJson(
       SYNC_FILE_KEYS.projectContext,
-      SYNC_CURRENT_GAPS[0].content,
-      validateProjectContextState,
-    )).toThrow('project-context.json.schemaVersion is not supported');
+      SYNC_VERSIONING_FIXTURES[0].content,
+      decodeProjectContextState,
+    )).toEqual(PROJECT_V1_MIGRATED_STATE);
     expect(() => parseValidatedJson(
       SYNC_FILE_KEYS.savedItems,
-      SYNC_CURRENT_GAPS[1].content,
-      validateSavedItemsState,
+      SYNC_VERSIONING_FIXTURES[1].content,
+      decodeSavedItemsState,
     )).toThrow('saved-items.json.schemaVersion is not supported');
     expect(() => parseValidatedJson('memories.json', '{bad json}', (value) => value))
       .toThrow('云端 memories.json 不是有效 JSON，已停止下载');
-    expect(SYNC_CURRENT_GAPS.map((gap) => gap.target)).toEqual([
-      'migrate-v1-without-overwrite-after-T3.3',
-      'unify-future-version-rejection-after-T3.3',
+    expect(SYNC_VERSIONING_FIXTURES.map((fixture) => fixture.expected)).toEqual([
+      'lossless-migration',
+      'reject-without-overwrite',
     ]);
+  });
+
+  it('rejects future and corrupt Project states without overwriting their raw values', async () => {
+    for (const raw of Object.values(PROJECT_REJECTED_STATES)) {
+      storage[PROJECT_CONTEXT_STORAGE_KEY] = raw;
+      await expect(getProjectContextState()).rejects.toThrow();
+      expect(storage[PROJECT_CONTEXT_STORAGE_KEY]).toBe(raw);
+    }
+    expect(storageSet).not.toHaveBeenCalled();
   });
 });
 

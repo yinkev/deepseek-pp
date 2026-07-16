@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { homedir, platform, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,9 @@ const HOST_SCRIPT = resolve(__dirname, 'shell-mcp-host.mjs');
 const PROJECT_ROOT = resolve(__dirname, '..');
 const LOCAL_BIN_DIR = resolve(PROJECT_ROOT, 'node_modules', '.bin');
 const USER_LOCAL_BIN_DIR = resolve(homedir(), '.local', 'bin');
+const SHELL_PACKAGE_VERSION = JSON.parse(
+  readFileSync(resolve(PROJECT_ROOT, 'packages', 'shell-host', 'package.json'), 'utf8'),
+).version;
 
 let passed = 0;
 let failed = 0;
@@ -119,6 +123,7 @@ await testMethod('initialize', 'initialize', {
   assert(res.result, 'expected result');
   assert(res.result.protocolVersion === '2025-06-18', 'expected protocol version');
   assert(res.result.serverInfo.name === 'deepseek-pp-shell', 'expected server name');
+  assert(res.result.serverInfo.version === SHELL_PACKAGE_VERSION, `expected server version ${SHELL_PACKAGE_VERSION}`);
 });
 
 await testMethod('tools/list', 'tools/list', undefined, (res) => {
@@ -139,10 +144,8 @@ await testMethod('tools/list', 'tools/list', undefined, (res) => {
     'shell_session_exec',
     'shell_session_end',
   ];
-  assert(res.result.tools.length >= requiredTools.length, `expected at least ${requiredTools.length} tools, got ${res.result.tools.length}`);
-  for (const tool of requiredTools) {
-    assert(names.includes(tool), `expected ${tool}`);
-  }
+  assert(res.result.tools.length === requiredTools.length, `expected exactly ${requiredTools.length} tools, got ${res.result.tools.length}`);
+  assert(JSON.stringify(names) === JSON.stringify(requiredTools), `unexpected tool order: ${names.join(', ')}`);
 });
 
 await testMethod('tools/call shell_status', 'tools/call', {

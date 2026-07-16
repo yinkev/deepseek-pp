@@ -11,11 +11,12 @@ import {
 } from '../../../core/messaging/runtime-boundary';
 import {
   extractHistoryItems,
-  normalizeHistoryOrganizerState,
   parseSessionId,
   type HistoryItem,
 } from './history-organizer';
+import { createEmptyHistoryOrganizerState } from '../../../core/history-organizer/codec';
 import { injectInjectedThemeStyles } from '../../../core/ui/injected-theme';
+import { decodeProjectContextState } from '../../../core/project/codec';
 import { isUsableProjectConversationTitle } from '../../../core/project/title';
 
 export interface ProjectSidebarOrganizerController {
@@ -47,13 +48,12 @@ export interface ProjectSidebarOrganizerLabels {
   age: (timestamp: number) => string;
 }
 
-const PROJECT_CONTEXT_SCHEMA_VERSION = 2;
 const PROJECT_SECTION_ID = 'dpp-project-sidebar';
 const PROJECT_STYLE_ID = 'dpp-project-sidebar-css';
 const PROJECT_HIDDEN_ATTR = 'data-dpp-project-sidebar-hidden';
 const NATIVE_MENU_ENHANCER_ATTR = 'data-dpp-project-native-menu';
 const PROJECT_LIMIT = 5;
-const EMPTY_HISTORY_STATE = normalizeHistoryOrganizerState(null);
+const EMPTY_HISTORY_STATE = createEmptyHistoryOrganizerState();
 const NATIVE_MENU_TEXT = {
   delete: [0x5220, 0x9664],
   rename: [0x91cd, 0x547d, 0x540d],
@@ -102,8 +102,7 @@ export function startDeepSeekProjectSidebarOrganizer(
   const loadState = async () => {
     try {
       const response = await chrome.runtime.sendMessage({ type: 'GET_PROJECT_CONTEXT_STATE' });
-      if (!isProjectContextState(response)) throw new Error('Invalid project context state.');
-      applyState(response);
+      applyState(decodeProjectContextState(response, 'projectSidebarState'));
     } catch (error) {
       statusMessage = getLabels().operationFailed(getErrorMessage(error));
       console.error('DeepSeek++ failed to load project sidebar state', error);
@@ -262,8 +261,14 @@ export function startDeepSeekProjectSidebarOrganizer(
     } catch {
       return;
     }
-    if (msg.type === 'PROJECT_CONTEXT_UPDATED' && isProjectContextState(msg.state)) {
-      applyState(msg.state);
+    if (msg.type === 'PROJECT_CONTEXT_UPDATED') {
+      try {
+        applyState(decodeProjectContextState(msg.state, 'projectSidebarUpdate'));
+      } catch (error) {
+        statusMessage = getLabels().operationFailed(getErrorMessage(error));
+        console.error('DeepSeek++ failed to apply project sidebar update', error);
+        schedule();
+      }
     }
   };
 
@@ -304,8 +309,6 @@ export function startDeepSeekProjectSidebarOrganizer(
   observer.observe(document.body, { childList: true, subtree: true });
   chrome.runtime.onMessage.addListener(messageHandler);
   document.addEventListener('click', clickCaptureHandler, true);
-  window.addEventListener('popstate', navigationHandler);
-  window.addEventListener('hashchange', navigationHandler);
   window.addEventListener('dpp:navigation', navigationHandler);
   schedule();
 
@@ -318,11 +321,10 @@ export function startDeepSeekProjectSidebarOrganizer(
       observer.disconnect();
       chrome.runtime.onMessage.removeListener(messageHandler);
       document.removeEventListener('click', clickCaptureHandler, true);
-      window.removeEventListener('popstate', navigationHandler);
-      window.removeEventListener('hashchange', navigationHandler);
       window.removeEventListener('dpp:navigation', navigationHandler);
       if (timer) clearTimeout(timer);
       document.getElementById(PROJECT_SECTION_ID)?.remove();
+      document.getElementById(PROJECT_STYLE_ID)?.remove();
       removeNativeMenuEnhancements(document);
       restoreProjectHiddenRows(document);
     },
@@ -1037,15 +1039,6 @@ function normalizeConversationHrefForSession(sessionId: string, url: string): st
 function shouldOpenProjectConversationFromEvent(event: Event): boolean {
   if (!(event instanceof MouseEvent)) return true;
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
-}
-
-function isProjectContextState(value: unknown): value is ProjectContextState {
-  if (!value || typeof value !== 'object') return false;
-  const state = value as ProjectContextState;
-  return state.schemaVersion === PROJECT_CONTEXT_SCHEMA_VERSION &&
-    Array.isArray(state.projects) &&
-    Array.isArray(state.conversations) &&
-    (state.pendingProjectId === null || typeof state.pendingProjectId === 'string');
 }
 
 function getErrorMessage(error: unknown): string {

@@ -1,14 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { LocaleMessageKey, MessageParams, SupportedLocale } from '../../../core/i18n';
 import type { GitHubSkillSource, GitHubSkillUpdatePreview, Skill, SkillImportSource } from '../../../core/types';
+import { decodeSkillLibrary, decodeSkillSourceCollection } from '../../../core/skill/codec';
 import GitHubSkillImportPanel from '../components/GitHubSkillImportPanel';
 import LocalSkillImportPanel from '../components/LocalSkillImportPanel';
 import PageIntro from '../components/PageIntro';
 import SkillCard from '../components/SkillCard';
 import SkillForm from '../components/SkillForm';
-import { SkeletonList, useConfirm } from '../components/settings/primitives';
+import { SkeletonList, useBanner, useConfirm } from '../components/settings/primitives';
 import { requestGitHubApiPermission } from '../github-permission';
 import { useI18n } from '../i18n';
+import { createRequestGenerationFence } from '../async-state';
+import { getRuntimeErrorMessage } from '../runtime-response';
+import { sidepanelRuntimeClient } from '../runtime-client';
 
 interface SkillSectionProps {
   title: string;
@@ -42,9 +46,9 @@ function SkillSection({ title, skills, onEdit, onDelete, onToggleEnabled }: Skil
       <h3 className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
         {title}
       </h3>
-      {skills.map((s) => (
+      {skills.map((s, index) => (
         <SkillCard
-          key={s.name}
+          key={`${s.source}:${s.name}:${index}`}
           skill={s}
           onEdit={onEdit ? () => onEdit(s) : undefined}
           onDelete={onDelete ? () => onDelete(s.name) : undefined}
@@ -65,19 +69,53 @@ export default function SkillPage() {
   const [sourceActions, setSourceActions] = useState<Record<string, SourceActionState>>({});
   const [expandedThirdPartyGroups, setExpandedThirdPartyGroups] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadFence = useRef(createRequestGenerationFence());
+  const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
 
-  const load = async () => {
-    const [list, sources]: [Skill[], SkillImportSource[]] = await Promise.all([
-      chrome.runtime.sendMessage({ type: 'GET_SKILL_LIBRARY' }),
-      chrome.runtime.sendMessage({ type: 'GET_SKILL_SOURCES' }),
-    ]);
-    setSkills(list ?? []);
-    setSkillSources(sources ?? []);
-    setLoading(false);
+  const showOperationError = (error: unknown) => {
+    banner.show('error', t('sidepanel.skillPage.operationFailed', {
+      error: getRuntimeErrorMessage(error),
+    }));
   };
 
-  useEffect(() => { load(); }, [locale]);
+  const load = async () => {
+    const generation = loadFence.current.begin();
+    try {
+      const [list, sources] = await Promise.all([
+        sidepanelRuntimeClient.request(
+          { type: 'GET_SKILL_LIBRARY' },
+          {
+            unavailableMessage: t('sidepanel.skillPage.backendUnavailable'),
+            decode: (value) => decodeSkillLibrary(value, 'skillLibraryResponse'),
+          },
+        ),
+        sidepanelRuntimeClient.request(
+          { type: 'GET_SKILL_SOURCES' },
+          {
+            unavailableMessage: t('sidepanel.skillPage.backendUnavailable'),
+            decode: (value) => decodeSkillSourceCollection(value, 'skillSourceResponse'),
+          },
+        ),
+      ]);
+      if (!loadFence.current.isCurrent(generation)) return;
+      setSkills(list);
+      setSkillSources(sources);
+      setLoadFailed(false);
+    } catch (error) {
+      if (!loadFence.current.isCurrent(generation)) return;
+      setLoadFailed(true);
+      showOperationError(error);
+    } finally {
+      if (loadFence.current.isCurrent(generation)) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void load();
+    return () => loadFence.current.invalidate();
+  }, [locale]);
 
   const closeForm = () => {
     setShowForm(false);
@@ -102,28 +140,52 @@ export default function SkillPage() {
   };
 
   const handleDelete = async (name: string) => {
-    await chrome.runtime.sendMessage({ type: 'DELETE_SKILL', payload: { name } });
-    if (editingSkill?.name === name) closeForm();
-    await load();
+    try {
+      banner.clear();
+      await sidepanelRuntimeClient.request(
+        { type: 'DELETE_SKILL', payload: { name } },
+        { unavailableMessage: t('sidepanel.skillPage.backendUnavailable') },
+      );
+      if (editingSkill?.name === name) closeForm();
+      await load();
+    } catch (error) {
+      showOperationError(error);
+    }
   };
 
   const handleToggleEnabled = async (skill: Skill) => {
-    await chrome.runtime.sendMessage({
-      type: 'SET_SKILL_ENABLED',
-      payload: { name: skill.name, enabled: skill.enabled === false },
-    });
-    await load();
+    try {
+      banner.clear();
+      await sidepanelRuntimeClient.request(
+        {
+          type: 'SET_SKILL_ENABLED',
+          payload: { name: skill.name, enabled: skill.enabled === false },
+        },
+        { unavailableMessage: t('sidepanel.skillPage.backendUnavailable') },
+      );
+      await load();
+    } catch (error) {
+      showOperationError(error);
+    }
   };
 
   const handleToggleGroupEnabled = async (group: ThirdPartySkillGroup) => {
     const shouldEnable = group.skills.some((skill) => skill.enabled === false);
-    await chrome.runtime.sendMessage({
-      type: 'SET_SKILLS_ENABLED',
-      payload: {
-        updates: group.skills.map((skill) => ({ name: skill.name, enabled: shouldEnable })),
-      },
-    });
-    await load();
+    try {
+      banner.clear();
+      await sidepanelRuntimeClient.request(
+        {
+          type: 'SET_SKILLS_ENABLED',
+          payload: {
+            updates: group.skills.map((skill) => ({ name: skill.name, enabled: shouldEnable })),
+          },
+        },
+        { unavailableMessage: t('sidepanel.skillPage.backendUnavailable') },
+      );
+      await load();
+    } catch (error) {
+      showOperationError(error);
+    }
   };
 
   const handleToggleThirdPartyGroup = (groupId: string) => {
@@ -134,12 +196,20 @@ export default function SkillPage() {
   };
 
   const handleSave = async (skill: Skill) => {
-    await chrome.runtime.sendMessage({
-      type: 'SAVE_SKILL',
-      payload: editingSkill ? { skill, previousName: editingSkill.name } : skill,
-    });
-    closeForm();
-    await load();
+    try {
+      banner.clear();
+      await sidepanelRuntimeClient.request(
+        {
+          type: 'SAVE_SKILL',
+          payload: editingSkill ? { skill, previousName: editingSkill.name } : skill,
+        },
+        { unavailableMessage: t('sidepanel.skillPage.backendUnavailable') },
+      );
+      closeForm();
+      await load();
+    } catch (error) {
+      showOperationError(error);
+    }
   };
 
   const handleCheckSource = async (source: GitHubSkillSource) => {
@@ -150,12 +220,10 @@ export default function SkillPage() {
     try {
       const granted = await requestGitHubApiPermission();
       if (!granted) throw new Error(t('sidepanel.skillPage.checkPermissionError'));
-      const response = await chrome.runtime.sendMessage({
-        type: 'CHECK_GITHUB_SKILL_SOURCE_UPDATES',
-        payload: { sourceId: source.id },
-      });
-      if (response?.ok === false) throw new Error(response.error ?? t('sidepanel.skillPage.checkFailed'));
-      const update = response as GitHubSkillUpdatePreview;
+      const update = await sidepanelRuntimeClient.request({
+          type: 'CHECK_GITHUB_SKILL_SOURCE_UPDATES',
+          payload: { sourceId: source.id },
+        }, { unavailableMessage: t('sidepanel.skillPage.checkFailed') });
       setSourceActions((current) => ({
         ...current,
         [source.id]: {
@@ -184,17 +252,16 @@ export default function SkillPage() {
     try {
       const granted = await requestGitHubApiPermission();
       if (!granted) throw new Error(t('sidepanel.skillPage.syncPermissionError'));
-      const response = await chrome.runtime.sendMessage({
-        type: 'UPDATE_GITHUB_SKILL_SOURCE',
-        payload: { sourceId: source.id },
-      });
-      if (response?.ok === false) throw new Error(response.error ?? t('sidepanel.skillPage.syncFailed'));
+      const response = await sidepanelRuntimeClient.request({
+          type: 'UPDATE_GITHUB_SKILL_SOURCE',
+          payload: { sourceId: source.id },
+        }, { unavailableMessage: t('sidepanel.skillPage.syncFailed') });
       setSourceActions((current) => ({
         ...current,
         [source.id]: {
           status: 'success',
           message: t('sidepanel.skillPage.syncedSkills', {
-            count: (response?.imported as Skill[] | undefined)?.length ?? source.skillPaths.length,
+            count: response.imported.length,
           }),
         },
       }));
@@ -222,16 +289,24 @@ export default function SkillPage() {
       cancelLabel: t('common.cancel'),
     });
     if (!ok) return;
-    await chrome.runtime.sendMessage({
-      type: 'DELETE_GITHUB_SKILL_SOURCE',
-      payload: { sourceId: source.id },
-    });
-    setSourceActions((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
-    await load();
+    try {
+      banner.clear();
+      await sidepanelRuntimeClient.request(
+        {
+          type: 'DELETE_GITHUB_SKILL_SOURCE',
+          payload: { sourceId: source.id },
+        },
+        { unavailableMessage: t('sidepanel.skillPage.backendUnavailable') },
+      );
+      setSourceActions((current) => {
+        const next = { ...current };
+        delete next[source.id];
+        return next;
+      });
+      await load();
+    } catch (error) {
+      showOperationError(error);
+    }
   };
 
   const builtin = skills.filter((s) => s.source === 'builtin');
@@ -285,6 +360,7 @@ export default function SkillPage() {
       />
 
       {confirmNode}
+      {banner.node}
 
       {importMode === 'github' && (
         <div className="animate-slide-down">
@@ -306,7 +382,7 @@ export default function SkillPage() {
 
       {loading ? (
         <SkeletonList rows={3} />
-      ) : (
+      ) : loadFailed && skills.length === 0 && skillSources.length === 0 ? null : (
         <>
       {githubSources.length > 0 && (
         <GitHubSourceSection
@@ -449,9 +525,9 @@ function ThirdPartySkillSection({ groups, expandedGroups, onToggleGroup, onToggl
                 className="space-y-2 p-3 pt-2 animate-slide-down"
                 style={{ borderTop: '1px solid var(--ds-border)' }}
               >
-                {group.skills.map((skill) => (
+                {group.skills.map((skill, index) => (
                   <SkillCard
-                    key={skill.name}
+                    key={`${group.id}:${skill.name}:${index}`}
                     skill={skill}
                     onDelete={skill.source === 'remote' ? () => onDelete(skill.name) : undefined}
                     onToggleEnabled={() => onToggleEnabled(skill)}
@@ -480,9 +556,9 @@ function GitHubSourceSection({ sources, actions, onCheck, onUpdate, onDelete }: 
       <h3 className="text-[11px] font-medium uppercase tracking-wider" style={{ color: 'var(--ds-text-tertiary)' }}>
         {t('sidepanel.skillPage.githubSourceTitle')}
       </h3>
-      {sources.map((source) => (
+      {sources.map((source, index) => (
         <GitHubSourceCard
-          key={source.id}
+          key={`${source.id}:${index}`}
           source={source}
           action={actions[source.id]}
           onCheck={() => onCheck(source)}

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import * as ts from 'typescript';
+import * as t from '@babel/types';
 import { describe, expect, it } from 'vitest';
 import {
   authorizeRuntimeMessage,
@@ -12,6 +12,7 @@ import {
   RUNTIME_BOUNDARY_ERROR_CODES,
   type RuntimeMessageSenderLike,
 } from '../core/messaging/runtime-boundary';
+import { parseTypeScriptSource, walkSourceAst } from './helpers/typescript-source';
 
 const POLICY = {
   runtimeId: 'runtime-contract',
@@ -200,33 +201,40 @@ function expectInOrder(source: string, fragments: string[]): void {
 
 function extractContentRuntimeCommands(path: string): string[] {
   const source = readFileSync(path, 'utf8');
-  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const program = parseTypeScriptSource(path, source);
   const commands: string[] = [];
 
-  const inspect = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && isContentRuntimeSend(node.expression, sourceFile)) {
+  walkSourceAst(program, (node) => {
+    if (t.isCallExpression(node) && isContentRuntimeSend(node.callee)) {
       const [message] = node.arguments;
-      if (message && ts.isObjectLiteralExpression(message)) {
-        const typeProperty = message.properties.find((property): property is ts.PropertyAssignment =>
-          ts.isPropertyAssignment(property) && property.name.getText(sourceFile) === 'type',
-        );
-        if (typeProperty && ts.isStringLiteral(typeProperty.initializer)) {
-          commands.push(typeProperty.initializer.text);
+      if (t.isObjectExpression(message)) {
+        for (const property of message.properties) {
+          if (
+            t.isObjectProperty(property)
+            && !property.computed
+            && t.isIdentifier(property.key, { name: 'type' })
+            && t.isStringLiteral(property.value)
+          ) {
+            commands.push(property.value.value);
+          }
         }
       }
     }
-    ts.forEachChild(node, inspect);
-  };
-  inspect(sourceFile);
+  });
   return commands;
 }
 
-function isContentRuntimeSend(expression: ts.LeftHandSideExpression, sourceFile: ts.SourceFile): boolean {
-  if (ts.isIdentifier(expression)) {
-    return expression.text === 'sendRuntimeMessage' ||
-      expression.text === 'sendRuntimeMessageStrict' ||
-      expression.text === 'sendMessage';
+function isContentRuntimeSend(expression: t.CallExpression['callee']): boolean {
+  if (t.isIdentifier(expression)) {
+    return expression.name === 'sendRuntimeMessage' ||
+      expression.name === 'sendRuntimeMessageStrict' ||
+      expression.name === 'sendMessage';
   }
-  return ts.isPropertyAccessExpression(expression) &&
-    expression.getText(sourceFile) === 'chrome.runtime.sendMessage';
+  return t.isMemberExpression(expression)
+    && !expression.computed
+    && t.isIdentifier(expression.property, { name: 'sendMessage' })
+    && t.isMemberExpression(expression.object)
+    && !expression.object.computed
+    && t.isIdentifier(expression.object.property, { name: 'runtime' })
+    && t.isIdentifier(expression.object.object, { name: 'chrome' });
 }

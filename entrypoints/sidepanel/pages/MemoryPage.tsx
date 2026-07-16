@@ -1,49 +1,34 @@
-import { useEffect, useState } from 'react';
-import type { Memory, MemoryType, NewMemory } from '../../../core/types';
+import { useState } from 'react';
+import type { MemoryType } from '../../../core/types';
 import MemoryCard from '../components/MemoryCard';
 import MemoryForm from '../components/MemoryForm';
 import PageIntro from '../components/PageIntro';
-import { SegmentedControl, SkeletonList, useConfirm } from '../components/settings/primitives';
+import { SegmentedControl, SkeletonList, useBanner, useConfirm } from '../components/settings/primitives';
 import { MEMORY_TYPE_CONFIG } from '../constants';
+import { useMemoryPageController } from '../controllers/useMemoryPageController';
 import { useI18n } from '../i18n';
 
 export default function MemoryPage() {
   const { t } = useI18n();
-  const [memories, setMemories] = useState<Memory[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<MemoryType | 'all'>('all');
-  const [showForm, setShowForm] = useState(false);
-  const [editingMemory, setEditingMemory] = useState<Memory | null>(null);
+  const banner = useBanner();
   const { confirm, node: confirmNode } = useConfirm();
-
-  const load = async () => {
-    const list: Memory[] = await chrome.runtime.sendMessage({ type: 'GET_MEMORIES' });
-    setMemories((list ?? []).filter((memory) => memory.scope !== 'project'));
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    void load();
-
-    const handleStateUpdate = (message: { type?: string; memories?: Memory[] }) => {
-      if (message.type === 'STATE_UPDATED' && Array.isArray(message.memories)) {
-        setMemories(message.memories.filter((memory) => memory.scope !== 'project'));
-      }
-    };
-    const refreshWhenVisible = () => {
-      if (!document.hidden) void load();
-    };
-
-    chrome.runtime.onMessage.addListener(handleStateUpdate);
-    document.addEventListener('visibilitychange', refreshWhenVisible);
-    window.addEventListener('focus', refreshWhenVisible);
-
-    return () => {
-      chrome.runtime.onMessage.removeListener(handleStateUpdate);
-      document.removeEventListener('visibilitychange', refreshWhenVisible);
-      window.removeEventListener('focus', refreshWhenVisible);
-    };
-  }, []);
+  const {
+    memories,
+    loading,
+    loadFailed,
+    showForm,
+    editingMemory,
+    toggleCreateForm,
+    edit,
+    cancelEdit,
+    remove,
+    save,
+    togglePin,
+  } = useMemoryPageController(t, confirm, {
+    clear: banner.clear,
+    error: (message) => banner.show('error', message),
+  });
 
   const filtered = filter === 'all' ? memories : memories.filter((m) => m.type === filter);
   const filterTypes = [
@@ -53,45 +38,6 @@ export default function MemoryPage() {
       label: t(typeConfig.labelKey),
     })),
   ];
-
-  const handleDelete = async (id: number) => {
-    const ok = await confirm({
-      title: t('sidepanel.memoryPage.deleteConfirm'),
-      message: t('sidepanel.memoryPage.deleteConfirm'),
-      confirmLabel: t('common.delete'),
-      cancelLabel: t('common.cancel'),
-    });
-    if (!ok) return;
-    await chrome.runtime.sendMessage({ type: 'DELETE_MEMORY', payload: { id } });
-    load();
-  };
-
-  const handleSave = async (mem: NewMemory) => {
-    if (editingMemory?.id) {
-      await chrome.runtime.sendMessage({
-        type: 'UPDATE_MEMORY',
-        payload: { ...editingMemory, ...mem, updatedAt: Date.now() },
-      });
-    } else {
-      await chrome.runtime.sendMessage({ type: 'SAVE_MEMORY', payload: mem });
-    }
-    setShowForm(false);
-    setEditingMemory(null);
-    load();
-  };
-
-  const handleEdit = (mem: Memory) => {
-    setEditingMemory(mem);
-    setShowForm(true);
-  };
-
-  const handleTogglePin = async (mem: Memory) => {
-    await chrome.runtime.sendMessage({
-      type: 'UPDATE_MEMORY',
-      payload: { ...mem, pinned: !mem.pinned },
-    });
-    load();
-  };
 
   return (
     <div className="p-4 space-y-3">
@@ -110,7 +56,7 @@ export default function MemoryPage() {
           size="sm"
         />
         <button
-          onClick={() => { setEditingMemory(null); setShowForm(!showForm); }}
+          onClick={toggleCreateForm}
           className="ds-btn-primary px-3 py-1.5 text-xs font-medium text-white rounded-lg transition-all duration-150 flex items-center gap-1"
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -121,20 +67,21 @@ export default function MemoryPage() {
       </div>
 
       {confirmNode}
+      {banner.node}
 
       {showForm && (
         <div className="animate-slide-down">
           <MemoryForm
             initial={editingMemory}
-            onSave={handleSave}
-            onCancel={() => { setShowForm(false); setEditingMemory(null); }}
+            onSave={save}
+            onCancel={cancelEdit}
           />
         </div>
       )}
 
       {loading ? (
         <SkeletonList rows={3} />
-      ) : filtered.length === 0 ? (
+      ) : !loadFailed && filtered.length === 0 ? (
         <div className="ds-empty-state">
           <div className="ds-empty-state-icon">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
@@ -156,9 +103,9 @@ export default function MemoryPage() {
             <MemoryCard
               key={m.id}
               memory={m}
-              onDelete={() => handleDelete(m.id!)}
-              onEdit={() => handleEdit(m)}
-              onTogglePin={() => handleTogglePin(m)}
+              onDelete={() => remove(m.id!)}
+              onEdit={() => edit(m)}
+              onTogglePin={() => togglePin(m)}
             />
           ))}
         </div>

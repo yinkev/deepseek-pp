@@ -156,12 +156,6 @@ export interface AutomationRun {
   updatedAt: number;
 }
 
-export type AutomationRunCreateInput = Pick<
-  AutomationRun,
-  'automationId' | 'trigger' | 'scheduledFor' | 'request'
-> &
-  Partial<Pick<AutomationRun, 'id' | 'attempt'>>;
-
 export type AutomationRunUpdateInput = Partial<
   Pick<
     AutomationRun,
@@ -173,19 +167,3 @@ export interface AutomationRunListOptions {
   automationId: AutomationId;
   limit?: number;
 }
-
-export interface AutomationBridgeRunMessage {
-  type: 'DPP_AUTOMATION_CONTENT_RUN';
-  payload: AutomationRunnerRequest;
-}
-
-export interface AutomationBridgeResultMessage {
-  type: 'DPP_AUTOMATION_WINDOW_RUN_RESULT';
-  payload: {
-    runId: AutomationRunId;
-    automationId: AutomationId;
-    result: AutomationRunnerResult;
-  };
-}
-
-export type AutomationBridgeMessage = AutomationBridgeRunMessage | AutomationBridgeResultMessage;

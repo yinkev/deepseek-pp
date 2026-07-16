@@ -29,7 +29,7 @@
   <a href="#功能速览">功能速览</a> ·
   <a href="#适合场景">适合场景</a> ·
   <a href="#安装">安装</a> ·
-  <a href="#1100-变更回顾">1.10.0 变更</a>
+  <a href="#1110-变更回顾">1.11.0 变更</a>
 </p>
 
 ## 产品定位
@@ -46,7 +46,7 @@ DeepSeek++ 是面向 [DeepSeek](https://chat.deepseek.com) 网页版的开源浏
 - [功能速览](#功能速览)
 - [适合场景](#适合场景)
 - [核心功能](#核心功能)
-- [1.10.0 变更回顾](#1100-变更回顾)
+- [1.11.0 变更回顾](#1110-变更回顾)
 - [安装](#安装)
 - [友情链接](#友情链接)
 
@@ -299,7 +299,26 @@ npm run shell:install -- --browser chrome --extension-id <扩展ID>
   <img src="assets/screenshot-sidepanel-automation.png" width="300" alt="自动化任务侧边栏">
 </p>
 
-## 1.10.0 变更回顾
+## 1.11.0 变更回顾
+
+1.11.0 完成一轮面向 PC 浏览器的稳定性与兼容性重构，重点改善长期使用中的数据安全、同步恢复、自动化可靠性、聊天与工具运行稳定性，以及日常加载性能。
+
+| 方向 | 主要变化 |
+|------|----------|
+| PC 浏览器支持 | 当前正式支持 Chrome、Edge 和 Firefox；Android 模板、构建脚本和移动端支持入口已移除，不再提供 Android 安装包。 |
+| 数据与升级兼容 | 记忆、Skill、预设、项目、保存项、MCP、自动化、用量和工具历史增加明确的版本与校验规则，同时保留现有存储标识；损坏数据或未知未来版本会明确报错，不会静默覆盖原始内容。 |
+| 同步与自动化恢复 | 同步上传采用完整代次发布，下载先暂存并支持失败回滚；自动化任务补强取消、执行租约和重复触发防护。 |
+| 聊天与工具稳定性 | 收紧运行时消息、DeepSeek 请求、流式工具调用、MCP 传输和 Native Host 的输入边界，插件更新或页面重载后的状态和错误反馈更可预测。 |
+| 日常运行性能 | 合并高频存储写入，集中管理页面监听与生命周期，并按需加载侧边栏页面、内置 Skill 资源和 Python 运行时；首个 Chat 页面构建体积约下降 23%，Chat 路由约下降 84%。 |
+| 权限变化 | Chrome 和 Edge 的权限集合不变；Firefox 增加 `identity`，仅用于用户主动启用 Google Drive 或 OneDrive 同步时的 OAuth 登录。 |
+
+<details>
+<summary>展开历史版本变更回顾（1.10.0 - 0.2.0）</summary>
+
+<details>
+<summary>展开 1.10.0 变更回顾</summary>
+
+### 1.10.0 变更回顾
 
 1.10.0 改进本地 Skill 的资源导入与按需读取体验，让大型 Skill 的文件状态、读取条件和失败修复更清楚，同时提升 MCP 代理工具的参数准确性。
 
@@ -313,8 +332,7 @@ npm run shell:install -- --browser chrome --extension-id <扩展ID>
 
 感谢 [@zhangweildlh](https://github.com/zhangweildlh) 反馈本地 Skill 资源说明问题并提供复现材料。
 
-<details>
-<summary>展开历史版本变更回顾（1.0.9 - 0.2.0）</summary>
+</details>
 
 <details>
 <summary>展开 1.0.9 变更回顾</summary>

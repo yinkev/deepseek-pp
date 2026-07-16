@@ -13,7 +13,7 @@ import {
   ensureMcpServerOriginPermission,
   fetchWithTimeout,
   getMcpEndpointUrl,
-  normalizeJsonRpcResponse,
+  parseJsonRpcSseMessage,
 } from './common';
 
 export function createMcpSseTransport(server: McpServerConfig): McpProtocolTransport {
@@ -158,10 +158,8 @@ async function readSseResponseFromReader<TResult>(
     buffer = drained.remainder;
     for (const event of drained.events) {
       if (event.event !== 'message') continue;
-      const parsed = tryParseJson(event.data);
-      if (!parsed) continue;
-      const normalized = normalizeJsonRpcResponse<TResult>(parsed, expectedRequest);
-      if (normalized.id === expectedRequest.id) return normalized;
+      const response = parseJsonRpcSseMessage<TResult>(event.data, expectedRequest);
+      if (response) return response;
     }
   }
 
@@ -172,12 +170,4 @@ function throwIfSignalAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
   if (signal.reason instanceof Error) throw signal.reason;
   throw new DOMException('MCP SSE request was aborted.', 'AbortError');
-}
-
-function tryParseJson(value: string): unknown | null {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
 }

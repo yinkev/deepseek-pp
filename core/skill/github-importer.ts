@@ -8,12 +8,14 @@ import type {
   RemoteSkillFile,
   Skill,
 } from '../types';
+import type { LocalStateMutationRunner } from '../persistence/local-state-mutation';
 import {
   getAllSkillSources,
   getGitHubSkillSourceById,
-  getSkillLibrary,
-  saveGitHubSkillSource,
-  upsertGitHubSkillSource,
+  getSkillCollisionCandidates,
+  stageUpsertGitHubSkillSourceAlreadyLocked,
+  updateGitHubSkillSourceLastCheckedAt,
+  type SkillCollisionCandidate,
 } from './registry';
 
 const GITHUB_API_BASE = 'https://api.github.com';
@@ -105,6 +107,8 @@ export async function previewGitHubSkillSource(url: string): Promise<GitHubSkill
 
 export async function importGitHubSkillSource(
   request: GitHubSkillImportRequest,
+  deps: LocalStateMutationRunner,
+  options: { expectedSkillPaths?: readonly string[] } = {},
 ): Promise<GitHubSkillImportResult> {
   if (request.selectedPaths.length === 0) {
     throw new Error('至少选择一个 Skill 后再导入');
@@ -138,7 +142,13 @@ export async function importGitHubSkillSource(
       lastCheckedAt: now,
     } : undefined,
   }));
-  const result = await upsertGitHubSkillSource(source, incomingSkills);
+  const result = await deps.runLocalStateMutation(() => (
+    stageUpsertGitHubSkillSourceAlreadyLocked(
+      source,
+      incomingSkills,
+      options.expectedSkillPaths,
+    )
+  ));
 
   return {
     ok: true,
@@ -168,13 +178,10 @@ export async function checkGitHubSkillSourceUpdates(sourceId: string): Promise<G
   const hasCommitUpdates = loaded.preview.source.commitSha !== source.commitSha;
   const latestVersion = loaded.preview.source.packageVersion;
   const checkedAt = Date.now();
-  await saveGitHubSkillSource({ ...source, lastCheckedAt: checkedAt });
+  const checkedSource = await updateGitHubSkillSourceLastCheckedAt(source.id, checkedAt);
 
   return {
-    source: {
-      ...source,
-      lastCheckedAt: checkedAt,
-    },
+    source: checkedSource,
     latestCommitSha: loaded.preview.source.commitSha,
     latestVersion,
     hasUpdates: hasCommitUpdates || missingPaths.length > 0 || newPaths.length > 0 || latestVersion !== source.packageVersion,
@@ -186,7 +193,10 @@ export async function checkGitHubSkillSourceUpdates(sourceId: string): Promise<G
   };
 }
 
-export async function updateGitHubSkillSource(sourceId: string): Promise<GitHubSkillImportResult> {
+export async function updateGitHubSkillSource(
+  sourceId: string,
+  deps: LocalStateMutationRunner,
+): Promise<GitHubSkillImportResult> {
   const source = await getGitHubSkillSourceById(sourceId);
   if (!source) throw new Error('找不到 GitHub Skill 源');
 
@@ -196,7 +206,11 @@ export async function updateGitHubSkillSource(sourceId: string): Promise<GitHubS
   if (selectedPaths.length === 0) {
     throw new Error('上游已不包含这个源当前导入的 Skill，已停止更新以避免清空本地内容');
   }
-  return importGitHubSkillSource({ url: source.url, selectedPaths });
+  return importGitHubSkillSource(
+    { url: source.url, selectedPaths },
+    deps,
+    { expectedSkillPaths: source.skillPaths },
+  );
 }
 
 async function loadGitHubSkillSource(url: string, selectedPaths?: Set<string>): Promise<LoadedGitHubSource> {
@@ -367,19 +381,19 @@ async function loadGitHubSkill(
 
 interface ExistingSkillContext {
   occupiedNames: Set<string>;
-  byName: Map<string, Skill>;
-  bySourcePath: Map<string, Skill>;
+  byName: Map<string, SkillCollisionCandidate>;
+  bySourcePath: Map<string, SkillCollisionCandidate>;
 }
 
 async function createExistingSkillContext(sourceId: string): Promise<ExistingSkillContext> {
   const [skills, sources] = await Promise.all([
-    getSkillLibrary(),
+    getSkillCollisionCandidates(),
     getAllSkillSources(),
   ]);
   const validSourceIds = new Set(sources.map((source) => source.id));
   validSourceIds.add(sourceId);
   const byName = new Map(skills.map((skill) => [skill.name, skill]));
-  const bySourcePath = new Map<string, Skill>();
+  const bySourcePath = new Map<string, SkillCollisionCandidate>();
   for (const skill of skills) {
     if (skill.source === 'remote' && skill.remote && validSourceIds.has(skill.remote.sourceId)) {
       bySourcePath.set(`${skill.remote.sourceId}:${skill.remote.path}`, skill);

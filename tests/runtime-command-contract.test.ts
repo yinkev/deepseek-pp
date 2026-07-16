@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import * as ts from 'typescript';
+import * as t from '@babel/types';
 import { describe, expect, it } from 'vitest';
 import { createBackgroundErrorResponse } from '../core/messaging/background-error';
 import {
@@ -10,7 +10,6 @@ import {
 } from '../core/messaging/runtime-command-contracts';
 import {
   CLIENT_ONLY_RUNTIME_COMMAND_TYPES,
-  LEGACY_RUNTIME_COMMAND_TYPES,
   TYPED_RUNTIME_COMMAND_TYPES,
   createUnknownRuntimeCommandResponse,
   getRuntimeCommandOwner,
@@ -27,6 +26,7 @@ import {
   RUNTIME_TAB_RPC_TYPES,
   RUNTIME_TOPOLOGY,
 } from './fixtures/runtime-contract/runtime';
+import { findTypeAliasDeclaration, parseTypeScriptSource } from './helpers/typescript-source';
 
 const backgroundSource = readFileSync('entrypoints/background.ts', 'utf8');
 const typesSource = readFileSync('core/types.ts', 'utf8');
@@ -34,22 +34,27 @@ const inventorySource = readFileSync('docs/compatibility/runtime-command-invento
 const CUTOVER_LEDGER_SECTIONS = [
   ['R3.1 / #351 — Typed seam bootstrap (2)', 2],
   ['R4.1 / #360 — Persistence, library, and local preferences (57)', 57],
-  ['R4.2 / #361 — MCP, tool, browser control, and sandbox (30)', 30],
-  ['R4.3 / #362 — DeepSeek, chat, multimodal, and export (19)', 19],
+  ['R4.2 / #361 — MCP, tool, browser control, and sandbox (29)', 29],
+  ['R4.3 / #362 — DeepSeek, chat, multimodal, and export (16)', 16],
   ['R4.4 / #363 — Sync, automation, usage, scenario, and lifecycle closure (17)', 17],
+  ['Fork provider and Cursor typed handlers (4)', 4],
 ] as const;
 
 describe('runtime command compatibility contract', () => {
   it('matches the live router, MessageAction union, and checked-in human inventory', () => {
-    const legacyContracts = extractLegacyMessageContracts(backgroundSource);
-    const typedContracts: RuntimeCaseContract[] = TYPED_RUNTIME_COMMAND_TYPES.map((type) => ({
-      type,
-      readsPayload: false,
-      directPayloadCast: false,
-      requestAccess: 'none',
-      error: 'background-error',
-    }));
-    const liveContracts = [...legacyContracts, ...typedContracts];
+    const typedContracts: RuntimeCaseContract[] = TYPED_RUNTIME_COMMAND_TYPES.map((type) => {
+      const registered = RUNTIME_COMMAND_CONTRACTS[
+        type as keyof typeof RUNTIME_COMMAND_CONTRACTS
+      ];
+      return {
+        type,
+        readsPayload: registered.request.access !== 'none',
+        directPayloadCast: false,
+        requestAccess: registered.request.access,
+        error: registered.error,
+      };
+    });
+    const liveContracts = typedContracts;
     const live = liveContracts.map((contract) => contract.type);
     const declaredContracts = extractMessageActionContracts(typesSource);
     const declared = declaredContracts.map((contract) => contract.type);
@@ -70,7 +75,6 @@ describe('runtime command compatibility contract', () => {
     expectSortedEqual(declaredOnly, readInventoryList('Declared Only'));
     expectSortedEqual(registryLive, live);
     expectSortedEqual(registryDeclared, declared);
-    expectSortedEqual(legacyContracts.map((contract) => contract.type), LEGACY_RUNTIME_COMMAND_TYPES);
     expectSortedEqual(typedContracts.map((contract) => contract.type), TYPED_RUNTIME_COMMAND_TYPES);
     expectSortedEqual(declaredOnly, CLIENT_ONLY_RUNTIME_COMMAND_TYPES);
     const cutoverLedger = CUTOVER_LEDGER_SECTIONS.flatMap(([heading, count]) => {
@@ -101,6 +105,12 @@ describe('runtime command compatibility contract', () => {
       readsPayload: liveContracts.filter((contract) => contract.readsPayload).length,
       ignoresPayload: liveContracts.filter((contract) => !contract.readsPayload).length,
       directPayloadCasts: liveContracts.filter((contract) => contract.directPayloadCast).length,
+      decodedPayloads: liveContracts.filter((contract) => (
+        contract.requestAccess === 'payload-decoded'
+      )).length,
+      delegatedPayloads: liveContracts.filter((contract) => (
+        contract.requestAccess === 'payload-delegated'
+      )).length,
     }).toEqual(RUNTIME_TOPOLOGY);
     expect(new Set(live).size).toBe(live.length);
     expect(new Set(declared).size).toBe(declared.length);
@@ -130,6 +140,7 @@ describe('runtime command compatibility contract', () => {
       'tool-result',
       'domain-error',
       'status-or-domain-error',
+      'status-or-domain-error-or-tool-result',
       'value-or-domain-error',
     ]));
     const responseFixtureFamilies = new Set(RUNTIME_RESPONSE_FIXTURES.map((fixture) => fixture.family));
@@ -151,11 +162,10 @@ describe('runtime command compatibility contract', () => {
       .toEqual(generic.response);
   });
 
-  it('characterizes the remaining payload-decoding gap and resolved routing behavior', () => {
-    expect(RUNTIME_CURRENT_GAPS.map((gap) => gap.target)).toEqual([
-      'decoded-command-contract-during-R4.1-R4.4',
-    ]);
-    expect(extractLegacyDefaultThrows(backgroundSource)).toBe(true);
+  it('closes the payload-decoding and legacy-router gaps', () => {
+    expect(RUNTIME_CURRENT_GAPS).toEqual([]);
+    expect(backgroundSource).not.toContain('handleLegacyMessage');
+    expect(backgroundSource).not.toContain('handleLegacy:');
     for (const resolved of RUNTIME_RESOLVED_ROUTING_CASES) {
       expect(resolved.target).toBe('explicit-rejection-at-R3.1-registry');
       expect(createUnknownRuntimeCommandResponse()).toEqual(resolved.response);
@@ -167,6 +177,12 @@ describe('runtime command compatibility contract', () => {
       expect(resolved.target).toBe('explicit-rejection-at-T2.1-boundary');
       expect(() => decodeRuntimeMessageEnvelope(resolved.input)).toThrow();
     }
+  });
+
+  it('classifies nullable typed responses consistently with their exact contracts', () => {
+    expect(RUNTIME_COMMAND_CONTRACTS.GET_DEEPSEEK_THEME.response).toBe('nullable-value');
+    expect(RUNTIME_COMMAND_CONTRACTS.GET_MODEL_TYPE.response).toBe('nullable-value');
+    expect(RUNTIME_COMMAND_CONTRACTS.GET_BACKGROUND.response).toBe('nullable-value');
   });
 
   it('freezes all runtime notifications and tab RPC names', () => {
@@ -193,99 +209,49 @@ interface RuntimeCaseContract {
   error: RuntimeErrorFamily;
 }
 
-function extractLegacyMessageContracts(source: string): RuntimeCaseContract[] {
-  const sourceFile = ts.createSourceFile('background.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  let handleLegacyMessage: ts.FunctionDeclaration | undefined;
-
-  sourceFile.forEachChild((node) => {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleLegacyMessage') {
-      handleLegacyMessage = node;
-    }
-  });
-  if (!handleLegacyMessage?.body) throw new Error('handleLegacyMessage function not found');
-
-  const switchStatement = handleLegacyMessage.body.statements.find(ts.isSwitchStatement);
-  if (!switchStatement) throw new Error('handleLegacyMessage switch not found');
-
-  return switchStatement.caseBlock.clauses.flatMap((clause) => {
-    if (!ts.isCaseClause(clause) || !ts.isStringLiteral(clause.expression)) return [];
-    let readsPayload = false;
-    let directPayloadCast = false;
-    const inspect = (node: ts.Node) => {
-      if (isMessagePayloadAccess(node)) readsPayload = true;
-      if (ts.isAsExpression(node) && isMessagePayloadAccess(node.expression)) directPayloadCast = true;
-      ts.forEachChild(node, inspect);
-    };
-    clause.statements.forEach(inspect);
-    const type = clause.expression.text;
-    return [{
-      type,
-      readsPayload,
-      directPayloadCast,
-      requestAccess: readsPayload ? directPayloadCast ? 'payload-cast' : 'payload-delegated' : 'none',
-      error: type === 'EXECUTE_TOOL_CALL' ? 'tool-error' : 'background-error',
-    }];
-  });
-}
-
 interface MessageActionContract {
   type: string;
   payloadPresence: RuntimePayloadPresence;
 }
 
 function extractMessageActionContracts(source: string): MessageActionContract[] {
-  const sourceFile = ts.createSourceFile('types.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  let actionAlias: ts.TypeAliasDeclaration | undefined;
-
-  sourceFile.forEachChild((node) => {
-    if (ts.isTypeAliasDeclaration(node) && node.name.text === 'MessageAction') {
-      actionAlias = node;
-    }
-  });
-  if (!actionAlias || !ts.isUnionTypeNode(actionAlias.type)) {
+  const actionAlias = findTypeAliasDeclaration(
+    parseTypeScriptSource('types.ts', source),
+    'MessageAction',
+  );
+  if (!actionAlias || !t.isTSUnionType(actionAlias.typeAnnotation)) {
     throw new Error('MessageAction union not found');
   }
 
-  return actionAlias.type.types.map((member) => {
-    if (!ts.isTypeLiteralNode(member)) throw new Error('MessageAction member is not a type literal');
-    const typeProperty = member.members.find((candidate): candidate is ts.PropertySignature =>
-      ts.isPropertySignature(candidate) && candidate.name.getText(sourceFile) === 'type',
+  return actionAlias.typeAnnotation.types.map((member) => {
+    if (!t.isTSTypeLiteral(member)) throw new Error('MessageAction member is not a type literal');
+    const typeProperty = member.members.find((candidate): candidate is t.TSPropertySignature =>
+      isNamedTypeProperty(candidate, 'type'),
     );
-    const literal = typeProperty?.type;
-    if (!literal || !ts.isLiteralTypeNode(literal) || !ts.isStringLiteral(literal.literal)) {
+    const literal = typeProperty?.typeAnnotation?.typeAnnotation;
+    if (!literal || !t.isTSLiteralType(literal) || !t.isStringLiteral(literal.literal)) {
       throw new Error('MessageAction member has no string-literal type');
     }
-    const payloadProperty = member.members.find((candidate): candidate is ts.PropertySignature =>
-      ts.isPropertySignature(candidate) && candidate.name.getText(sourceFile) === 'payload',
+    const payloadProperty = member.members.find((candidate): candidate is t.TSPropertySignature =>
+      isNamedTypeProperty(candidate, 'payload'),
     );
     return {
-      type: literal.literal.text,
-      payloadPresence: payloadProperty ? payloadProperty.questionToken ? 'optional' : 'required' : 'none',
+      type: literal.literal.value,
+      payloadPresence: payloadProperty ? payloadProperty.optional ? 'optional' : 'required' : 'none',
     };
   });
 }
 
-function extractLegacyDefaultThrows(source: string): boolean {
-  const sourceFile = ts.createSourceFile('background.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  let throws = false;
-  const inspect = (node: ts.Node) => {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'handleLegacyMessage' && node.body) {
-      const switchStatement = node.body.statements.find(ts.isSwitchStatement);
-      const defaultClause = switchStatement?.caseBlock.clauses.find(ts.isDefaultClause);
-      throws = Boolean(defaultClause?.statements.some(ts.isThrowStatement));
-      return;
-    }
-    ts.forEachChild(node, inspect);
-  };
-  inspect(sourceFile);
-  return throws;
-}
-
-function isMessagePayloadAccess(node: ts.Node): node is ts.PropertyAccessExpression {
-  return ts.isPropertyAccessExpression(node) &&
-    ts.isIdentifier(node.expression) &&
-    node.expression.text === 'message' &&
-    node.name.text === 'payload';
+function isNamedTypeProperty(
+  candidate: t.TSTypeElement,
+  name: string,
+): candidate is t.TSPropertySignature {
+  return t.isTSPropertySignature(candidate)
+    && !candidate.computed
+    && (
+      t.isIdentifier(candidate.key, { name })
+      || t.isStringLiteral(candidate.key, { value: name })
+    );
 }
 
 function readInventoryList(heading: string, level = 2): string[] {

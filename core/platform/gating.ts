@@ -3,7 +3,7 @@ import type { PlatformEnvironment } from './capabilities';
 import { isCapabilitySupported } from './capabilities';
 
 export function isShellNativeHostSupported(environment: PlatformEnvironment | null | undefined): boolean {
-  if (!environment) return true;
+  if (!environment) return false;
   return isCapabilitySupported(environment, 'nativeMessaging');
 }
 

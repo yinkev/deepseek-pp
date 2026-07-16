@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MCP_PROTOCOL_VERSION,
-  createMcpNotification,
   createMcpRequest,
   createMcpTransport,
   createMcpStreamableHttpTransport,
+  initializeMcpServer,
   type McpServerConfig,
 } from '../core/mcp';
 import { McpTransportError, readJsonRpcResponse } from '../core/mcp/transports/common';
@@ -26,6 +26,25 @@ describe('MCP transport response limits', () => {
       .toMatchObject({ code: 'mcp_response_too_large' } satisfies Partial<McpTransportError>);
   });
 
+  it('rejects empty, malformed, and mismatched JSON-RPC HTTP responses', async () => {
+    const request = { jsonrpc: '2.0', id: 'expected', method: 'test' } as const;
+    const responses = [
+      new Response('', { status: 200, headers: { 'content-type': 'application/json' } }),
+      new Response('{bad json}', { status: 200, headers: { 'content-type': 'application/json' } }),
+      new Response(JSON.stringify({ jsonrpc: '2.0', id: 'other', result: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ];
+
+    for (const response of responses) {
+      await expect(readJsonRpcResponse(response, request)).rejects.toMatchObject({
+        code: 'mcp_response_invalid',
+        retryable: false,
+      } satisfies Partial<McpTransportError>);
+    }
+  });
+
   it('persists Streamable HTTP session ids after initialize', async () => {
     const requests: Array<{ method: string; headers: Headers }> = [];
     vi.stubGlobal('chrome', {
@@ -33,6 +52,7 @@ describe('MCP transport response limits', () => {
         contains: vi.fn(async () => true),
         request: vi.fn(async () => true),
       },
+      runtime: { getManifest: () => ({ version: '1.10.0' }) },
     });
     vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
@@ -41,22 +61,21 @@ describe('MCP transport response limits', () => {
 
       const responseHeaders = new Headers({ 'content-type': 'application/json' });
       if (body.method === 'initialize') responseHeaders.set('Mcp-Session-Id', 'session-254');
+      if (body.method === 'notifications/initialized') {
+        return new Response(null, { status: 202 });
+      }
       return new Response(JSON.stringify({
         jsonrpc: '2.0',
-        id: body.id ?? null,
+        id: body.id,
         result: body.method === 'tools/list'
           ? { tools: [] }
           : { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: {} } },
       }), { status: 200, headers: responseHeaders });
     }));
 
-    const transport = createMcpStreamableHttpTransport(createServerConfig());
-    await transport.request(createMcpRequest('initialize', {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: { tools: {} },
-      clientInfo: { name: 'test', version: '0.0.0' },
-    }));
-    await transport.notify?.(createMcpNotification('notifications/initialized'));
+    const server = createServerConfig();
+    const transport = createMcpStreamableHttpTransport(server);
+    await initializeMcpServer(server, transport);
     await transport.request(createMcpRequest('tools/list'));
 
     expect(requests.map((request) => request.method)).toEqual([
@@ -70,6 +89,91 @@ describe('MCP transport response limits', () => {
     expect(requests[0].headers.get('MCP-Protocol-Version')).toBeNull();
     expect(requests[1].headers.get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
     expect(requests[2].headers.get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
+  });
+
+  it('accepts a 202 empty acknowledgement for Streamable HTTP notifications', async () => {
+    vi.stubGlobal('chrome', {
+      permissions: {
+        contains: vi.fn(async () => true),
+        request: vi.fn(async () => true),
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 202 })));
+
+    const transport = createMcpStreamableHttpTransport(createServerConfig());
+
+    await expect(transport.notify?.({
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+    })).resolves.toBeUndefined();
+  });
+
+  it('skips valid server notifications and requests before the matching Streamable HTTP SSE response', async () => {
+    const request = { jsonrpc: '2.0', id: 'expected', method: 'tools/list' } as const;
+    const body = [
+      'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}\n\n',
+      'data: {"jsonrpc":"2.0","id":"server-request","method":"sampling/createMessage","params":{}}\n\n',
+      'data: {"jsonrpc":"2.0","id":"expected","result":{"tools":[]}}\n\n',
+    ].join('');
+    const response = new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    });
+
+    await expect(readJsonRpcResponse(response, request)).resolves.toEqual({
+      jsonrpc: '2.0',
+      id: 'expected',
+      result: { tools: [] },
+    });
+  });
+
+  it('does not reuse a rejected Streamable HTTP protocol or session on retry', async () => {
+    const requests: Array<{ method: string; headers: Headers }> = [];
+    let initializeCount = 0;
+    vi.stubGlobal('chrome', {
+      permissions: {
+        contains: vi.fn(async () => true),
+        request: vi.fn(async () => true),
+      },
+      runtime: { getManifest: () => ({ version: '1.10.0' }) },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const headers = new Headers(init?.headers as HeadersInit);
+      requests.push({ method: body.method, headers });
+      if (body.method === 'initialize') initializeCount += 1;
+      const future = body.method === 'initialize' && initializeCount === 1;
+      const responseHeaders = new Headers({
+        'content-type': 'application/json',
+        'Mcp-Session-Id': future ? 'future-session' : 'current-session',
+      });
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        id: body.id ?? null,
+        result: body.method === 'initialize'
+          ? {
+              protocolVersion: future ? '2099-12-31' : MCP_PROTOCOL_VERSION,
+              capabilities: { tools: {} },
+            }
+          : { tools: [] },
+      }), { status: 200, headers: responseHeaders });
+    }));
+
+    const server = createServerConfig();
+    const transport = createMcpStreamableHttpTransport(server);
+    await expect(initializeMcpServer(server, transport)).rejects.toMatchObject({
+      code: 'mcp_protocol_version_unsupported',
+    });
+    await expect(initializeMcpServer(server, transport)).resolves.toMatchObject({
+      protocolVersion: MCP_PROTOCOL_VERSION,
+    });
+    await transport.request(createMcpRequest('tools/list'));
+
+    expect(requests[1].headers.get('MCP-Protocol-Version')).toBeNull();
+    expect(requests[1].headers.get('Mcp-Session-Id')).toBeNull();
+    expect(requests[2].headers.get('MCP-Protocol-Version')).toBe(MCP_PROTOCOL_VERSION);
+    expect(requests[2].headers.get('Mcp-Session-Id')).toBe('current-session');
+    expect(requests[3].headers.get('Mcp-Session-Id')).toBe('current-session');
   });
 
   it('sends raw JSON-RPC to stdio bridge HTTP services', async () => {

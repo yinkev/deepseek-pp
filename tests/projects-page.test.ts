@@ -86,6 +86,86 @@ describe('ProjectsPage', () => {
     expect(container.textContent).not.toContain('0 个对话，0 条项目记忆');
   });
 
+  it('surfaces corrupt project repository values instead of accepting shallow shapes', async () => {
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_PROJECT_CONTEXT_STATE') {
+        return {
+          schemaVersion: 2,
+          projects: [{ id: 'incomplete-project' }],
+          conversations: [],
+          pendingProjectId: null,
+        };
+      }
+      if (message.type === 'GET_MEMORIES') return [];
+      if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') return { ok: false };
+      return { ok: true };
+    });
+
+    await renderProjectsPage(sendMessage);
+
+    expect(container.textContent)
+      .toContain('项目操作失败：projectContextResponse.projects[0].name must be a non-empty string');
+  });
+
+  it('surfaces an initial corrupt Memory snapshot without committing Project or empty state', async () => {
+    const state: ProjectContextState = {
+      ...EMPTY_PROJECT_STATE,
+      projects: [createProject('project-1', 'Must not commit')],
+    };
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_PROJECT_CONTEXT_STATE') return state;
+      if (message.type === 'GET_MEMORIES') return [{ name: 'corrupt' }];
+      if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') return { ok: false };
+      return { ok: true };
+    });
+
+    await renderProjectsPage(sendMessage);
+
+    expect(container.textContent).toContain(
+      '项目操作失败：memoryResponse[0].id must be a positive safe integer',
+    );
+    expect(container.textContent).not.toContain('Must not commit');
+    expect(container.textContent).not.toContain('暂无项目');
+    expect(container.querySelector('.ds-skeleton')).toBeNull();
+  });
+
+  it('retains the last valid Project and Memory snapshot when a reload Memory is corrupt', async () => {
+    let state: ProjectContextState = {
+      ...EMPTY_PROJECT_STATE,
+      projects: [createProject('project-1', 'Alpha')],
+    };
+    let memoryResponse: unknown = [createProjectMemory('memory-1', 'Alpha memory')];
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_PROJECT_CONTEXT_STATE') return state;
+      if (message.type === 'GET_MEMORIES') return memoryResponse;
+      if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') {
+        return { ok: true, conversation: CURRENT_CONVERSATION };
+      }
+      if (message.type === 'UPDATE_PROJECT_CONTEXT') {
+        state = {
+          ...state,
+          projects: [createProject('project-1', 'Beta must not commit')],
+        };
+        memoryResponse = [{ name: 'corrupt' }];
+        return { ok: true };
+      }
+      return { ok: true };
+    });
+
+    await renderProjectsPage(sendMessage);
+    expect(container.textContent).toContain('Alpha');
+    expect(container.textContent).toContain('Alpha memory');
+
+    await clickButton('保存更改');
+
+    expect(container.textContent).toContain('Alpha');
+    expect(container.textContent).toContain('Alpha memory');
+    expect(container.textContent).not.toContain('Beta must not commit');
+    expect(container.textContent).toContain(
+      '项目操作失败：memoryResponse[0].id must be a positive safe integer',
+    );
+  });
+
   it('adds the current DeepSeek conversation to the selected project', async () => {
     const project = createProject('project-1', 'Alpha');
     let state: ProjectContextState = {
@@ -142,6 +222,40 @@ describe('ProjectsPage', () => {
     await clickButton('保存更改');
 
     expect(container.textContent).toContain('update failed');
+  });
+
+  it('does not let an older read replace a newer runtime invalidation reload', async () => {
+    const stale = deferred<unknown>();
+    const newestState: ProjectContextState = {
+      ...EMPTY_PROJECT_STATE,
+      projects: [createProject('project-newest', 'Newest project')],
+    };
+    let projectReads = 0;
+    const sendMessage = vi.fn(async (message: { type: string }) => {
+      if (message.type === 'GET_PROJECT_CONTEXT_STATE') {
+        projectReads += 1;
+        return projectReads === 1 ? stale.promise : newestState;
+      }
+      if (message.type === 'GET_MEMORIES') return [];
+      if (message.type === 'GET_CURRENT_DEEPSEEK_CONVERSATION') return { ok: false, error: 'none' };
+      return { ok: true };
+    });
+
+    await renderProjectsPage(sendMessage);
+    await act(async () => {
+      runtimeListeners.forEach((listener) => listener({ type: 'PROJECT_CONTEXT_UPDATED' }));
+    });
+    await settle();
+    expect(container.textContent).toContain('Newest project');
+
+    stale.resolve({
+      ...EMPTY_PROJECT_STATE,
+      projects: [createProject('project-stale', 'Stale project')],
+    });
+    await settle();
+
+    expect(container.textContent).toContain('Newest project');
+    expect(container.textContent).not.toContain('Stale project');
   });
 });
 
@@ -211,4 +325,39 @@ function createProject(id: string, name: string): ProjectContext {
     createdAt: 1,
     updatedAt: 1,
   };
+}
+
+function createProjectMemory(id: string, name: string) {
+  return {
+    id: 1,
+    syncId: id,
+    scope: 'project',
+    projectId: 'project-1',
+    type: 'topic',
+    name,
+    content: 'content',
+    description: '',
+    tags: [],
+    pinned: false,
+    createdAt: 1,
+    updatedAt: 1,
+    accessCount: 0,
+    lastAccessedAt: 1,
+  };
+}
+
+async function settle() {
+  for (let index = 0; index < 5; index += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }

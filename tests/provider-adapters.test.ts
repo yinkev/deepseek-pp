@@ -119,6 +119,73 @@ describe('chat provider adapters', () => {
     expect(turn.session.parentCursor).toBe('42');
   });
 
+  it('propagates one turn signal through provider session and DeepSeek PoW work', async () => {
+    const signal = new AbortController().signal;
+    const createSession = vi.fn(async () => 'deepseek-chat-1');
+    const createPow = vi.fn(async () => ({ 'X-DS-PoW-Response': 'pow' }));
+    const submitStreaming = vi.fn(async () => ({
+      assistantText: 'done',
+      responseMessageId: 1,
+      requestMessageId: null,
+      finished: true,
+    }));
+    const deepSeek = createDeepSeekWebProviderAdapter({
+      loadClientHeaders: async () => ({ Authorization: 'Bearer token' }),
+      createSession,
+      createPow,
+      submitStreaming,
+    });
+    const deepSeekModel = {
+      providerId: 'deepseek-web',
+      modelId: 'deepseek-web',
+    } as const;
+    const session = await deepSeek.createSession(deepSeekModel, signal);
+    await deepSeek.streamTurn({
+      model: deepSeekModel,
+      session,
+      prompt: 'continue',
+      thinkingEnabled: false,
+      signal,
+    }, {});
+
+    expect(createSession).toHaveBeenCalledWith(
+      { Authorization: 'Bearer token' },
+      signal,
+    );
+    expect(createPow).toHaveBeenCalledWith(
+      { Authorization: 'Bearer token' },
+      undefined,
+      signal,
+    );
+    expect(submitStreaming).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      signal,
+    );
+
+    const qwenCreateSession = vi.fn(async () => ({
+      chatId: 'qwen-chat-1',
+      parentId: null,
+    }));
+    const qwen = createQwenWebProviderAdapter({
+      getStatus: async () => ({ available: true }),
+      transport: {
+        createSession: qwenCreateSession,
+        streamTurn: vi.fn(async () => ({
+          assistantText: 'done',
+          thinkingText: '',
+          responseId: 'response-1',
+          finished: true,
+        })),
+      },
+    });
+    await qwen.createSession({
+      providerId: 'qwen-web',
+      modelId: 'qwen3.7-plus',
+    }, signal);
+    expect(qwenCreateSession).toHaveBeenCalledWith('qwen3.7-plus', signal);
+  });
+
   it('preserves official DeepSeek API history behind the same DeepSeek provider model', async () => {
     const submit = vi.fn(async (input, callbacks) => {
       const answer = `answer-${submit.mock.calls.length}`;
@@ -142,6 +209,11 @@ describe('chat provider adapters', () => {
       session,
       prompt: 'first',
       thinkingEnabled: true,
+      officialApiConfig: {
+        model: 'deepseek-v4-flash',
+        thinking: 'disabled',
+        reasoningEffort: 'high',
+      },
     }, {});
     const second = await adapter.streamTurn({
       model,
@@ -152,7 +224,7 @@ describe('chat provider adapters', () => {
 
     expect(submit.mock.calls[0][0]).toMatchObject({
       apiKey: 'api-key',
-      config: { model: 'deepseek-v4-pro', thinking: 'enabled', reasoningEffort: 'max' },
+      config: { model: 'deepseek-v4-flash', thinking: 'disabled', reasoningEffort: 'high' },
       messages: [{ role: 'user', content: 'first' }],
     });
     expect(submit.mock.calls[1][0].messages).toEqual([

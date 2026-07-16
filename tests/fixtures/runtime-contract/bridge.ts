@@ -67,6 +67,11 @@ export const LEGAL_BRIDGE_CASES = {
       skillPopupCopy: { hint: 'Type a Skill name.' },
     },
   }],
+  SYNC_HOOK_STATE_REQUEST: [{
+    name: 'main requests an authoritative hook-state resynchronization',
+    expectedSource: MAIN,
+    message: { source: MAIN, type: 'SYNC_HOOK_STATE_REQUEST' },
+  }],
   AUGMENT_REQUEST_BODY: [{
     name: 'main requests body augmentation',
     expectedSource: MAIN,
@@ -224,6 +229,11 @@ export const LEGAL_BRIDGE_CASES = {
     expectedSource: MAIN,
     message: { source: MAIN, type: 'HEADERS_CAPTURED', headers: null },
   }],
+  NAVIGATION_CHANGED: [{
+    name: 'main reports a document navigation',
+    expectedSource: MAIN,
+    message: { source: MAIN, type: 'NAVIGATION_CHANGED' },
+  }],
   DPP_BRIDGE_READY: [{
     name: 'main acknowledges the transferred port',
     expectedSource: MAIN,
@@ -262,6 +272,12 @@ export const MALFORMED_BRIDGE_PAYLOAD_CASES = {
     name: 'hook state has invalid descriptor and Skill collections',
     expectedSource: CONTENT,
     message: { source: CONTENT, type: 'SYNC_HOOK_STATE', toolDescriptors: {}, skillSummaries: 'invalid' },
+    target: 'reject-at-T2.1-boundary',
+  }],
+  SYNC_HOOK_STATE_REQUEST: [{
+    name: 'hook-state resync request travels in the wrong direction',
+    expectedSource: CONTENT,
+    message: { source: CONTENT, type: 'SYNC_HOOK_STATE_REQUEST' },
     target: 'reject-at-T2.1-boundary',
   }],
   AUGMENT_REQUEST_BODY: [{
@@ -347,6 +363,12 @@ export const MALFORMED_BRIDGE_PAYLOAD_CASES = {
     message: { source: MAIN, type: 'HEADERS_CAPTURED', headers: ['Authorization'] },
     target: 'reject-at-T2.1-boundary',
   }],
+  NAVIGATION_CHANGED: [{
+    name: 'navigation event travels in the wrong direction',
+    expectedSource: CONTENT,
+    message: { source: CONTENT, type: 'NAVIGATION_CHANGED' },
+    target: 'reject-at-T2.1-boundary',
+  }],
   DPP_BRIDGE_READY: [{
     name: 'ready acknowledgement travels in the wrong direction',
     expectedSource: CONTENT,
@@ -379,6 +401,34 @@ export const BRIDGE_HANDSHAKE_CONTRACT = {
         alreadyConnected: false,
         requireTransferredPort: true,
         transferredPortCount: 1,
+      },
+    },
+    {
+      name: 'main accepts a same-origin content disconnect for its active port',
+      check: {
+        value: { source: CONTENT, type: 'DPP_BRIDGE_DISCONNECT' },
+        actualOrigin: 'https://chat.deepseek.com',
+        expectedOrigin: 'https://chat.deepseek.com',
+        expectedSource: CONTENT,
+        expectedType: 'DPP_BRIDGE_DISCONNECT',
+        alreadyConnected: true,
+        allowWhileConnected: true,
+        forbidTransferredPorts: true,
+        transferredPortCount: 0,
+      },
+    },
+    {
+      name: 'content accepts a same-origin MAIN disconnect for its active port',
+      check: {
+        value: { source: MAIN, type: 'DPP_BRIDGE_DISCONNECT' },
+        actualOrigin: 'https://chat.deepseek.com',
+        expectedOrigin: 'https://chat.deepseek.com',
+        expectedSource: MAIN,
+        expectedType: 'DPP_BRIDGE_DISCONNECT',
+        alreadyConnected: true,
+        allowWhileConnected: true,
+        forbidTransferredPorts: true,
+        transferredPortCount: 0,
       },
     },
   ],
@@ -440,6 +490,20 @@ export const BRIDGE_HANDSHAKE_CONTRACT = {
         alreadyConnected: true,
       },
     },
+    {
+      name: 'disconnect carrying a transferred port',
+      check: {
+        value: { source: CONTENT, type: 'DPP_BRIDGE_DISCONNECT' },
+        actualOrigin: 'https://chat.deepseek.com',
+        expectedOrigin: 'https://chat.deepseek.com',
+        expectedSource: CONTENT,
+        expectedType: 'DPP_BRIDGE_DISCONNECT',
+        alreadyConnected: true,
+        allowWhileConnected: true,
+        forbidTransferredPorts: true,
+        transferredPortCount: 1,
+      },
+    },
   ],
   mainWorldTrustPolicy: {
     name: 'same-origin page code still shares MAIN world identity after transport hardening',
@@ -455,6 +519,7 @@ export const BRIDGE_HANDSHAKE_CONTRACT = {
   },
   request: { source: MAIN, type: 'DPP_BRIDGE_REQUEST' },
   init: { source: CONTENT, type: 'DPP_BRIDGE_INIT' },
+  disconnect: { type: 'DPP_BRIDGE_DISCONNECT' },
   ready: { source: MAIN, type: 'DPP_BRIDGE_READY' },
   originPolicy: 'window.location.origin',
   retry: { intervalMs: 50, maxAttempts: 100 },

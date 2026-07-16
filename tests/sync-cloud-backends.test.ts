@@ -3,8 +3,11 @@ import type { GDriveSyncConfig, OneDriveSyncConfig, WebdavSyncConfig } from '../
 import { createStorageBackend } from '../core/sync/backend-factory';
 import {
   getAccessToken,
+  getOptionalRedirectUri,
+  getRedirectUri,
   invalidateToken,
   authedFetch,
+  runAuthCodeFlow,
 } from '../core/sync/oauth-client';
 import { createGDriveBackend } from '../core/sync/gdrive-client';
 import { createOneDriveBackend } from '../core/sync/onedrive-client';
@@ -12,10 +15,13 @@ import type { LocaleMessageKey, MessageParams } from '../core/i18n';
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
-// chrome.identity is read lazily via getRedirectUri(); stub it so imports work.
 beforeEach(() => {
   vi.stubGlobal('chrome', {
-    identity: { getRedirectURL: () => 'https://test-ext.chromiumapp.org/' },
+    runtime: { getManifest: () => ({ permissions: ['identity'] }) },
+    identity: {
+      getRedirectURL: () => 'https://test-ext.chromiumapp.org/',
+      launchWebAuthFlow: vi.fn(),
+    },
   });
 });
 
@@ -55,6 +61,45 @@ describe('oauth token management', () => {
     invalidateToken('test-key');
   });
 
+  it('fails closed when identity is not declared by the active manifest', async () => {
+    const launchWebAuthFlow = vi.fn(async () => 'https://test-ext.chromiumapp.org/#code=ignored');
+    vi.stubGlobal('chrome', {
+      runtime: { getManifest: () => ({ permissions: [] }) },
+      identity: {
+        getRedirectURL: () => 'https://test-ext.chromiumapp.org/',
+        launchWebAuthFlow,
+      },
+    });
+
+    expect(getOptionalRedirectUri()).toBeNull();
+    expect(() => getRedirectUri(testT))
+      .toThrow('translated:background.sync.identityUnavailable');
+    await expect(runAuthCodeFlow('https://accounts.example.test/auth', testT))
+      .rejects.toThrow('translated:background.sync.identityUnavailable');
+    expect(launchWebAuthFlow).not.toHaveBeenCalled();
+  });
+
+  it('runs OAuth through the sync-owned identity port when permission and APIs exist', async () => {
+    const launchWebAuthFlow = vi.fn(async () => (
+      'https://test-ext.chromiumapp.org/#code=authorization-code'
+    ));
+    vi.stubGlobal('chrome', {
+      runtime: { getManifest: () => ({ permissions: ['identity'] }) },
+      identity: {
+        getRedirectURL: () => 'https://test-ext.chromiumapp.org/',
+        launchWebAuthFlow,
+      },
+    });
+
+    expect(getOptionalRedirectUri()).toBe('https://test-ext.chromiumapp.org/');
+    await expect(runAuthCodeFlow('https://accounts.example.test/auth', testT))
+      .resolves.toBe('authorization-code');
+    expect(launchWebAuthFlow).toHaveBeenCalledWith({
+      url: 'https://accounts.example.test/auth',
+      interactive: true,
+    });
+  });
+
   it('caches access tokens and reuses them until expiry', async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ access_token: 'token-1', expires_in: 3600 }),
@@ -79,6 +124,24 @@ describe('oauth token management', () => {
     await getAccessToken('test-key', 'refresh', REFRESH_URL, { client_id: 'c' });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse an access token for a different refresh-token identity', async () => {
+    let tokenCall = 0;
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      tokenCall += 1;
+      return jsonResponse({ access_token: `token-${tokenCall}`, expires_in: 3600 });
+    });
+    vi.stubGlobal('fetch', fetchImpl);
+
+    const first = await getAccessToken('test-key', 'refresh-account-a', REFRESH_URL, { client_id: 'c' });
+    const second = await getAccessToken('test-key', 'refresh-account-b', REFRESH_URL, { client_id: 'c' });
+
+    expect(first).toBe('token-1');
+    expect(second).toBe('token-2');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const secondBody = fetchImpl.mock.calls[1][1]?.body as URLSearchParams;
+    expect(secondBody.get('refresh_token')).toBe('refresh-account-b');
   });
 
   it('uses the injected translator for token refresh failures', async () => {

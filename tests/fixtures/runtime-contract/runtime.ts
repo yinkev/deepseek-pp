@@ -4,9 +4,11 @@ export const RUNTIME_TOPOLOGY = {
   shared: 89,
   liveOnly: 36,
   declaredOnly: 2,
-  readsPayload: 79,
-  ignoresPayload: 46,
-  directPayloadCasts: 72,
+  readsPayload: 82,
+  ignoresPayload: 43,
+  directPayloadCasts: 0,
+  decodedPayloads: 82,
+  delegatedPayloads: 0,
 } as const;
 
 export const RUNTIME_REQUEST_FIXTURES = [
@@ -19,6 +21,26 @@ export const RUNTIME_REQUEST_FIXTURES = [
     name: 'command with required payload',
     family: 'required',
     message: { type: 'GET_MEMORY_BY_ID', payload: { id: 7 } },
+  },
+  {
+    name: 'sync command with confirmed target',
+    family: 'required',
+    message: {
+      type: 'WEBDAV_UPLOAD_LOCAL',
+      payload: {
+        config: {
+          provider: 'webdav',
+          url: 'https://dav.contract.test/root',
+          username: 'contract-user',
+          password: 'contract-password',
+          remotePath: 'DeepSeekPP',
+          lastSyncAt: null,
+          schemaVersion: 1,
+          revision: 7,
+        },
+        expectedRevision: 7,
+      },
+    },
   },
   {
     name: 'command with optional payload',
@@ -83,6 +105,23 @@ export const RUNTIME_RESPONSE_FIXTURES = [
     ],
   },
   {
+    name: 'status, domain rejection, or tool rejection',
+    family: 'status-or-domain-error-or-tool-result',
+    response: [
+      { ok: true },
+      { ok: false, error: 'invalid_external_payload_chunk' },
+      {
+        ok: false,
+        summary: 'Tool authorization rejected',
+        error: {
+          code: 'tool_authorization_missing',
+          message: 'Tool authorization is missing or closed.',
+          retryable: false,
+        },
+      },
+    ],
+  },
+  {
     name: 'domain value or rejection',
     family: 'value-or-domain-error',
     response: [
@@ -119,13 +158,7 @@ export const RUNTIME_ERROR_FIXTURES = {
   },
 } as const;
 
-export const RUNTIME_CURRENT_GAPS = [
-  {
-    name: 'direct payload casts do not decode external input',
-    current: { type: 'GET_MEMORY_BY_ID', payload: {} },
-    target: 'decoded-command-contract-during-R4.1-R4.4',
-  },
-] as const;
+export const RUNTIME_CURRENT_GAPS = [] as const;
 
 export const RUNTIME_RESOLVED_ROUTING_CASES = [
   {

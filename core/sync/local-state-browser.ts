@@ -9,13 +9,14 @@ import {
   clearActivePresetForSyncApply,
   replacePresetCollectionForSyncApply,
 } from '../preset/store';
+import { decodeActivePresetId } from '../preset/codec';
 import {
   PROJECT_CONTEXT_STORAGE_KEY,
   saveProjectContextStateForSyncApply,
 } from '../project/store';
 import {
   SAVED_ITEMS_STORAGE_KEY,
-  replaceAllSavedItemsForSyncApply,
+  replaceSavedItemsStateForSyncApply,
 } from '../saved-items/store';
 import {
   SKILLS_STORAGE_KEY,
@@ -24,6 +25,7 @@ import {
   replaceAllSkillSourcesForSyncApply,
 } from '../skill/registry';
 import type { Memory } from '../types';
+import { decodePersistedMemoryRecord } from '../memory/codec';
 import type { SyncDataSnapshot } from './snapshot';
 import type {
   OpaqueStoragePreimage,
@@ -78,8 +80,7 @@ export function stageSyncLocalApply(
   const memories = assignStableMemoryIds(snapshot.memories, before.memoryRecords);
   const applySteps: SyncApplyStep[] = ['memories', 'skills', 'skillSources', 'presets'];
   const activePresetId = before.storage.activePreset.present
-    && typeof before.storage.activePreset.value === 'string'
-    ? before.storage.activePreset.value
+    ? decodeActivePresetId(before.storage.activePreset.value, 'activePresetId')
     : null;
   const clearActivePreset = activePresetId !== null
     && !snapshot.presets.some((preset) => preset.id === activePresetId);
@@ -117,7 +118,7 @@ async function applyStep(step: SyncApplyStep, plan: SyncLocalApplyPlan): Promise
       return;
     case 'savedItems':
       if (!snapshot.savedItems) throw new Error('Saved items apply step was not staged');
-      await replaceAllSavedItemsForSyncApply(snapshot.savedItems.items);
+      await replaceSavedItemsStateForSyncApply(snapshot.savedItems);
       return;
   }
 }
@@ -154,28 +155,54 @@ function assignStableMemoryIds(
   incoming: SyncDataSnapshot['memories'],
   before: readonly Record<string, unknown>[],
 ): Memory[] {
-  const idsBySyncId = new Map<string, number[]>();
+  const recordsBySyncId = new Map<string, Memory[]>();
   let nextId = 1;
 
-  for (const record of before) {
-    const id = record.id;
-    if (Number.isSafeInteger(id) && (id as number) > 0) {
-      nextId = Math.max(nextId, (id as number) + 1);
-    }
-    if (typeof record.syncId !== 'string' || !Number.isSafeInteger(id) || (id as number) <= 0) continue;
-    const ids = idsBySyncId.get(record.syncId) ?? [];
-    ids.push(id as number);
-    idsBySyncId.set(record.syncId, ids);
+  for (const [index, rawRecord] of before.entries()) {
+    const record = decodePersistedMemoryRecord(rawRecord, `memoryRecords[${index}]`);
+    nextId = Math.max(nextId, (record.id as number) + 1);
+    const records = recordsBySyncId.get(record.syncId) ?? [];
+    records.push(record);
+    recordsBySyncId.set(record.syncId, records);
   }
-  for (const ids of idsBySyncId.values()) ids.sort((left, right) => left - right);
+  for (const records of recordsBySyncId.values()) {
+    records.sort((left, right) => (left.id as number) - (right.id as number));
+  }
 
   const occurrenceBySyncId = new Map<string, number>();
   return incoming.map((memory) => {
     const occurrence = occurrenceBySyncId.get(memory.syncId) ?? 0;
     occurrenceBySyncId.set(memory.syncId, occurrence + 1);
-    const existingId = idsBySyncId.get(memory.syncId)?.[occurrence];
-    if (existingId !== undefined) return { ...memory, id: existingId };
+    const existing = recordsBySyncId.get(memory.syncId)?.[occurrence];
+    if (existing?.id !== undefined) {
+      return {
+        ...memoryAdditiveFields(existing),
+        ...memory,
+        id: existing.id,
+      };
+    }
     if (!Number.isSafeInteger(nextId)) throw new Error('Memory id space is exhausted');
     return { ...memory, id: nextId++ };
   });
+}
+
+function memoryAdditiveFields(memory: Memory): Record<string, unknown> {
+  const {
+    id: _id,
+    syncId: _syncId,
+    scope: _scope,
+    projectId: _projectId,
+    type: _type,
+    name: _name,
+    content: _content,
+    description: _description,
+    tags: _tags,
+    pinned: _pinned,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    accessCount: _accessCount,
+    lastAccessedAt: _lastAccessedAt,
+    ...additiveFields
+  } = memory as Memory & Record<string, unknown>;
+  return additiveFields;
 }

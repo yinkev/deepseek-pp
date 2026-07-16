@@ -6,7 +6,7 @@ import {
   submitPromptStreaming,
   uploadDeepSeekFile,
 } from '../core/deepseek/adapter';
-import type { ResponseTokenSpeedPayload } from '../core/interceptor/token-speed';
+import type { ResponseTokenSpeedPayload } from '../core/deepseek/stream-metrics';
 
 type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -103,6 +103,34 @@ describe('DeepSeek web adapter streaming', () => {
 
     expect(chunks.join('')).toBe('This is hard');
     expect(turn.assistantText).toBe('This is hard');
+  });
+
+  it('cancels a stream after headers without emitting late callbacks', async () => {
+    const caller = new AbortController();
+    const reason = new Error('stop active completion');
+    const onTextChunk = vi.fn();
+    const onFinished = vi.fn();
+    const cancel = vi.fn();
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(new ReadableStream({
+      pull() {
+        return new Promise<void>(() => undefined);
+      },
+      cancel,
+    })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const completion = submitPromptStreaming(
+      createSubmitInput(),
+      { onTextChunk, onFinished },
+      caller.signal,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    caller.abort(reason);
+
+    await expect(completion).rejects.toBe(reason);
+    expect(cancel).toHaveBeenCalledWith(reason);
+    expect(onTextChunk).not.toHaveBeenCalled();
+    expect(onFinished).not.toHaveBeenCalled();
   });
 
   it('emits token speed progress for bypass streaming requests', async () => {

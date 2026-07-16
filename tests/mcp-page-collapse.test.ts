@@ -6,26 +6,29 @@ import {
   MULTIMODAL_MCP_NATIVE_HOST,
   MULTIMODAL_MCP_SERVER_NAME,
 } from '../core/multimodal/contracts';
+import { createMcpDescriptorId, createMcpInvocationName } from '../core/mcp/descriptor-identity';
 import type { McpServerConfig, McpToolCacheEntry, ToolDescriptor } from '../core/types';
 import McpPage from '../entrypoints/sidepanel/pages/McpPage';
 
 let container: HTMLDivElement;
 let root: Root | null;
+let historyResponse: unknown;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement('div');
   document.body.append(container);
   root = null;
+  historyResponse = [];
 
   vi.stubGlobal('chrome', {
     runtime: {
       getManifest: vi.fn(() => ({ version: '0.7.5' })),
       sendMessage: vi.fn(async (message: { type?: string }) => {
         if (message.type === 'GET_MCP_SERVERS') return [multimodalServer];
-        if (message.type === 'GET_PLATFORM_CAPABILITIES') return null;
+        if (message.type === 'GET_PLATFORM_CAPABILITIES') return platformEnvironment;
         if (message.type === 'GET_MCP_TOOL_CACHE') return multimodalCache;
-        if (message.type === 'GET_TOOL_CALL_HISTORY') return [];
+        if (message.type === 'GET_TOOL_CALL_HISTORY') return historyResponse;
         return null;
       }),
       onMessage: {
@@ -61,6 +64,29 @@ describe('McpPage server row collapse', () => {
     expect(container.textContent).toContain(MULTIMODAL_MCP_SERVER_NAME);
     expect(container.textContent).not.toContain(MULTIMODAL_MCP_NATIVE_HOST);
   });
+
+  it('shows a history load failure without discarding the last confirmed history', async () => {
+    historyResponse = [toolHistoryRecord];
+    await renderMcpPage();
+
+    const recentCalls = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.includes('最近调用'),
+    );
+    expect(recentCalls).toBeTruthy();
+    await act(async () => {
+      recentCalls!.click();
+    });
+    expect(container.textContent).toContain('history_tool');
+
+    historyResponse = { ok: false, error: 'tool history storage is corrupt' };
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await settle();
+
+    expect(container.textContent).toContain('tool history storage is corrupt');
+    expect(container.textContent).toContain('history_tool');
+  });
 });
 
 async function renderMcpPage() {
@@ -88,6 +114,12 @@ function findExactText(text: string): HTMLElement {
 }
 
 const now = 1_718_000_000_000;
+
+const platformEnvironment = {
+  kind: 'browser_extension',
+  name: 'WebExtension',
+  capabilities: { nativeMessaging: true },
+};
 
 const multimodalServer: McpServerConfig = {
   version: 1,
@@ -145,9 +177,33 @@ const multimodalCache: McpToolCacheEntry = {
   },
 };
 
+const toolHistoryRecord = {
+  id: 'history-1',
+  call: {
+    id: 'call-1',
+    descriptorId: 'multimodal:history_tool',
+    provider: {
+      kind: 'mcp' as const,
+      id: multimodalServer.id,
+      displayName: MULTIMODAL_MCP_SERVER_NAME,
+      transport: 'native_messaging' as const,
+    },
+    name: 'history_tool',
+    invocationName: 'history_tool',
+    payload: {},
+    raw: '<history_tool>{}</history_tool>',
+  },
+  result: {
+    ok: true,
+    summary: 'history result',
+  },
+  source: 'manual_chat' as const,
+  createdAt: now,
+};
+
 function toolDescriptor(name: string, title: string): ToolDescriptor {
   return {
-    id: `multimodal:${name}`,
+    id: createMcpDescriptorId(multimodalServer.id, name),
     provider: {
       kind: 'mcp',
       id: multimodalServer.id,
@@ -155,7 +211,7 @@ function toolDescriptor(name: string, title: string): ToolDescriptor {
       transport: 'native_messaging',
     },
     name,
-    invocationName: name,
+    invocationName: createMcpInvocationName(multimodalServer.id, name),
     title,
     description: title,
     inputSchema: {

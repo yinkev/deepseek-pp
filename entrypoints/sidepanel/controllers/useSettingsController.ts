@@ -3,32 +3,44 @@ import {
   DEFAULT_BACKGROUND_OPACITY,
   clampBackgroundOpacity,
   normalizeBackgroundConfig,
-} from '../../../../core/background/config';
-import { getChatEnabled, setChatEnabled } from '../../../../core/chat/store';
-import { getFloatingChatEnabled, setFloatingChatEnabled } from '../../../../core/floating-chat/store';
+} from '../../../core/background/config';
+import { getChatEnabled, setChatEnabled } from '../../../core/chat/store';
+import type { FloatingChatRuntimeState } from '../../../core/floating-chat/runtime-state';
+import { decodeRuntimeConfigResponse } from '../../../core/messaging/bootstrap-client';
 import {
   DEFAULT_PET_CONFIG,
   clampPetOpacity,
   clampPetSize,
   normalizePetConfig,
-} from '../../../../core/pet/config';
+} from '../../../core/pet/config';
 import type {
   BackgroundConfig,
   GDriveSyncConfig,
-  Memory,
   ModelType,
   MultimodalSettingsStatus,
   OneDriveSyncConfig,
   PetConfig,
   PetPosition,
+  SyncCommandTarget,
   SyncConfig,
   SyncCounts,
   SyncProvider,
   WebdavSyncConfig,
-} from '../../../../core/types';
-import { validateImportedMemory } from '../../../../core/sync/schema';
-import { getOptionalRedirectUri } from '../../../../core/sync/oauth-client';
-import { createBootstrapRuntimeClient } from '../../../../core/messaging/bootstrap-client';
+} from '../../../core/types';
+import {
+  createSyncCommandTarget,
+  decodeStoredSyncConfig,
+  replaceSyncConfigProvider,
+} from '../../../core/sync/config';
+import { getOptionalRedirectUri } from '../../../core/sync/oauth-client';
+import { getRuntimeErrorMessage, isRuntimeFailure } from '../runtime-response';
+import { sidepanelRuntimeClient } from '../runtime-client';
+import {
+  floatingChatSettingsController,
+  settingsSyncRuntimeController,
+  type SyncRuntimeCommandType,
+} from './settings-controller';
+import { libraryController } from './library-controller';
 
 /**
  * Central settings state + handlers.
@@ -52,7 +64,6 @@ const DEFAULT_GDRIVE_CONFIG: GDriveSyncConfig = {
   provider: 'gdrive',
   clientId: '',
   clientSecret: '',
-  refreshToken: undefined,
   lastSyncAt: null,
 };
 
@@ -60,40 +71,37 @@ const DEFAULT_ONEDRIVE_CONFIG: OneDriveSyncConfig = {
   provider: 'onedrive',
   clientId: '',
   clientSecret: '',
-  refreshToken: undefined,
   lastSyncAt: null,
 };
 
-const bootstrapRuntimeClient = createBootstrapRuntimeClient(
-  (message) => chrome.runtime.sendMessage(message),
-);
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function requireSyncRevision(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error('Invalid sync runtime revision');
+  }
+  return value as number;
+}
+
+function requireSyncTimestamp(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error('Invalid sync runtime timestamp');
+  }
+  return value as number;
+}
+
+function requireNullableSyncTimestamp(value: unknown): number | null {
+  if (value === null) return null;
+  return requireSyncTimestamp(value);
+}
 
 function defaultConfigForProvider(provider: SyncProvider): SyncConfig {
   if (provider === 'gdrive') return { ...DEFAULT_GDRIVE_CONFIG };
   if (provider === 'onedrive') return { ...DEFAULT_ONEDRIVE_CONFIG };
-  return { ...DEFAULT_WEBDAV_CONFIG };
-}
-
-// Legacy configs saved before multi-provider support had no `provider` field.
-// Treat them as WebDAV so existing users keep working until they reconfigure.
-function normalizeLoadedConfig(raw: unknown): SyncConfig {
-  if (raw && typeof raw === 'object' && (raw as { provider?: string }).provider) {
-    return raw as SyncConfig;
-  }
-  // Pre-multi-provider WebDAV shape — backfill provider. If the user has not
-  // configured anything yet, raw may be a bare object without sync fields;
-  // fall through to the default WebDAV config in that case.
-  const legacy = raw as Partial<WebdavSyncConfig> | null;
-  if (legacy && (legacy.url || legacy.username || legacy.password || legacy.remotePath)) {
-    return {
-      provider: 'webdav',
-      url: legacy.url ?? '',
-      username: legacy.username ?? '',
-      password: legacy.password ?? '',
-      remotePath: legacy.remotePath ?? 'DeepSeekPP',
-      lastSyncAt: legacy.lastSyncAt ?? null,
-    };
-  }
   return { ...DEFAULT_WEBDAV_CONFIG };
 }
 
@@ -107,7 +115,20 @@ const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = {
 
 export type ApiKeyStatus = 'idle' | 'saving' | 'clearing' | 'success' | 'error';
 export type MultimodalStatus = 'idle' | 'saving' | 'clearing' | 'success' | 'error';
-export type SyncStatus = 'idle' | 'testing' | 'uploading' | 'downloading' | 'success' | 'error';
+export type SyncStatus = 'idle' | 'testing' | 'uploading' | 'downloading' | 'success' | 'warning' | 'error';
+type ActiveSyncStatus = Extract<SyncStatus, 'testing' | 'uploading' | 'downloading'>;
+
+class CommittedRemoteSyncWarning extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CommittedRemoteSyncWarning';
+  }
+}
+
+export interface CapturedSyncTarget {
+  command: SyncCommandTarget;
+  formVersion: number;
+}
 
 const DEFAULT_MULTIMODAL: MultimodalSettingsStatus = {
   openaiConfigured: false,
@@ -118,7 +139,14 @@ const DEFAULT_MULTIMODAL: MultimodalSettingsStatus = {
   geminiBaseUrl: 'https://generativelanguage.googleapis.com',
 };
 
-export function useSettingsState() {
+function settingsLoadFallback<T>(label: string, fallback: T): (error: unknown) => T {
+  return (error) => {
+    console.error(`[DeepSeek++] Failed to load ${label} settings.`, error);
+    return fallback;
+  };
+}
+
+export function useSettingsController() {
   // --- shared / general ---
   const [memoryCount, setMemoryCount] = useState(0);
   const [version, setVersion] = useState('');
@@ -126,7 +154,8 @@ export function useSettingsState() {
   const [chatEnabled, setChatEnabledState] = useState(false);
   // null = not yet loaded; the settings page only renders this sub-page after
   // loading completes, so the toggle never shows a stale default.
-  const [floatingChatEnabled, setFloatingChatEnabledState] = useState<boolean | null>(null);
+  const [floatingChatRuntimeState, setFloatingChatRuntimeState] = useState<FloatingChatRuntimeState | null>(null);
+  const [floatingChatMessage, setFloatingChatMessage] = useState('');
   const [loading, setLoading] = useState(true);
 
   // --- deepseek api key ---
@@ -164,13 +193,20 @@ export function useSettingsState() {
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(DEFAULT_WEBDAV_CONFIG);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('idle');
   const [syncMessage, setSyncMessage] = useState('');
+  const [activeSyncStatus, setActiveSyncStatus] = useState<ActiveSyncStatus | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bgConfigRef = useRef<BackgroundConfig>(DEFAULT_BACKGROUND_CONFIG);
   const petConfigRef = useRef<PetConfig>(DEFAULT_PET_CONFIG);
+  const syncConfigRef = useRef<SyncConfig>(DEFAULT_WEBDAV_CONFIG);
+  const syncRevisionRef = useRef<number | null>(null);
+  const syncFormVersionRef = useRef(0);
+  const syncBusyRef = useRef(false);
+  const syncOperationRef = useRef(0);
+  const petLoadGenerationRef = useRef(0);
 
   const bgPreview = bgType === 'url' ? bgUrl : bgImageData;
-  const syncBusy = syncStatus === 'testing' || syncStatus === 'uploading' || syncStatus === 'downloading';
+  const syncBusy = activeSyncStatus !== null;
 
   const syncBgState = useCallback((config: BackgroundConfig) => {
     bgConfigRef.current = config;
@@ -198,60 +234,107 @@ export function useSettingsState() {
     setGeminiBaseUrl(status.geminiBaseUrl);
   }, []);
 
+  const applySyncSnapshot = useCallback((config: SyncConfig, revision: number | null) => {
+    const next = revision === null
+      ? config
+      : { ...config, schemaVersion: 1 as const, revision };
+    syncConfigRef.current = next;
+    syncRevisionRef.current = revision;
+    syncFormVersionRef.current += 1;
+    setSyncConfig(next);
+  }, []);
+
+  const loadSyncConfigValue = useCallback((value: unknown) => {
+    if (value === null) {
+      applySyncSnapshot({ ...DEFAULT_WEBDAV_CONFIG }, null);
+      return;
+    }
+    const record = decodeStoredSyncConfig(value);
+    applySyncSnapshot(record.config, record.revision);
+  }, [applySyncSnapshot]);
+
   // --- initial load ---
   useEffect(() => {
     let cancelled = false;
+    const initialPetLoadGeneration = ++petLoadGenerationRef.current;
     (async () => {
-      const [chatOn, floatingOn, keyStatus, mmStatus, memories, cfg, syncCfg, modelType, bgCfg, petCfg] = await Promise.all([
+      const [chatOn, floatingState, keyStatus, mmStatus, memories, cfg, syncCfg, modelType, bgCfg, petCfg] = await Promise.all([
         getChatEnabled().catch((error) => {
           console.error('DeepSeek++ failed to read sidepanel chat setting', error);
           return false;
         }),
-        getFloatingChatEnabled().catch((error) => {
-          console.error('DeepSeek++ failed to read floating-chat setting', error);
-          return true;
+        floatingChatSettingsController.load().catch((error) => {
+          if (!cancelled) setFloatingChatMessage(getRuntimeErrorMessage(error));
+          return null;
         }),
-        chrome.runtime.sendMessage({ type: 'GET_DEEPSEEK_API_KEY_STATUS' }).catch(() => undefined),
-        chrome.runtime.sendMessage({ type: 'GET_MULTIMODAL_SETTINGS_STATUS' }).catch(() => undefined),
-        chrome.runtime.sendMessage({ type: 'GET_MEMORIES' }).catch(() => [] as Memory[]),
-        bootstrapRuntimeClient.getConfig().catch(() => undefined),
-        chrome.runtime.sendMessage({ type: 'GET_SYNC_CONFIG' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_MODEL_TYPE' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_BACKGROUND' }).catch(() => null),
-        chrome.runtime.sendMessage({ type: 'GET_PET' }).catch(() => null),
+        sidepanelRuntimeClient.request({ type: 'GET_DEEPSEEK_API_KEY_STATUS' })
+          .catch(settingsLoadFallback('DeepSeek API key status', undefined)),
+        sidepanelRuntimeClient.request({ type: 'GET_MULTIMODAL_SETTINGS_STATUS' })
+          .catch(settingsLoadFallback('multimodal status', undefined)),
+        libraryController.getMemories()
+          .catch(settingsLoadFallback('memory count', [])),
+        sidepanelRuntimeClient.request(
+          { type: 'GET_CONFIG' },
+          { decode: decodeRuntimeConfigResponse },
+        )
+          .catch(settingsLoadFallback('extension version', undefined)),
+        settingsSyncRuntimeController.getConfig().catch((error) => ({
+          ok: false,
+          error: getRuntimeErrorMessage(error),
+        })),
+        sidepanelRuntimeClient.request({ type: 'GET_MODEL_TYPE' })
+          .catch(settingsLoadFallback('model type', null)),
+        sidepanelRuntimeClient.request({ type: 'GET_BACKGROUND' })
+          .catch(settingsLoadFallback('background', null)),
+        sidepanelRuntimeClient.request({ type: 'GET_PET' })
+          .catch(settingsLoadFallback('pet', null)),
       ]);
       if (cancelled) return;
       setChatEnabledState(chatOn);
-      setFloatingChatEnabledState(floatingOn);
+      if (floatingState) setFloatingChatRuntimeState(floatingState);
       setApiKeyConfigured((keyStatus as { configured?: boolean } | undefined)?.configured === true);
       const mm = mmStatus as ({ ok?: boolean } & MultimodalSettingsStatus) | undefined;
       if (mm?.ok) syncMultimodalStatus(mm);
-      setMemoryCount((memories as Memory[])?.length ?? 0);
+      setMemoryCount(memories.length);
       setVersion(cfg && 'version' in cfg ? cfg.version : '');
-      if (syncCfg) setSyncConfig(normalizeLoadedConfig(syncCfg));
+      if (isRuntimeFailure(syncCfg)) {
+        setSyncStatus('error');
+        setSyncMessage(syncCfg.error ? String(syncCfg.error) : 'Failed to load sync configuration');
+      } else {
+        try {
+          loadSyncConfigValue(syncCfg);
+        } catch (error) {
+          setSyncStatus('error');
+          setSyncMessage(getRuntimeErrorMessage(error));
+        }
+      }
       setModelTypeState(modelType === 'expert' || modelType === 'vision' ? modelType : null);
       const normalizedBg = normalizeBackgroundConfig(bgCfg as BackgroundConfig | null);
       if (normalizedBg) syncBgState(normalizedBg);
-      syncPetState(normalizePetConfig(petCfg as PetConfig | null));
+      if (petLoadGenerationRef.current === initialPetLoadGeneration) {
+        syncPetState(normalizePetConfig(petCfg as PetConfig | null));
+      }
       setLoading(false);
     })();
 
     const handlePetUpdate = (message: { type?: string; config?: PetConfig | null }) => {
       if (message.type === 'PET_UPDATED') {
+        petLoadGenerationRef.current += 1;
         syncPetState(normalizePetConfig(message.config));
       }
     };
     chrome.runtime.onMessage.addListener(handlePetUpdate);
     return () => {
       cancelled = true;
+      petLoadGenerationRef.current += 1;
       chrome.runtime.onMessage.removeListener(handlePetUpdate);
     };
-  }, [syncBgState, syncPetState, syncMultimodalStatus]);
+  }, [loadSyncConfigValue, syncBgState, syncPetState, syncMultimodalStatus]);
 
   // --- webpage model mode ---
   const handleModelTypeChange = useCallback(async (nextModelType: ModelType) => {
     setModelTypeState(nextModelType);
-    await chrome.runtime.sendMessage({
+    await sidepanelRuntimeClient.request({
       type: 'SET_MODEL_TYPE',
       payload: nextModelType,
     });
@@ -265,8 +348,13 @@ export function useSettingsState() {
 
   // --- global floating chat ---
   const handleFloatingChatToggle = useCallback(async (next: boolean) => {
-    setFloatingChatEnabledState(next);
-    await setFloatingChatEnabled(next);
+    setFloatingChatMessage('');
+    try {
+      const state = await floatingChatSettingsController.setEnabled(next);
+      setFloatingChatRuntimeState(state);
+    } catch (error) {
+      setFloatingChatMessage(getRuntimeErrorMessage(error));
+    }
   }, []);
 
   // --- deepseek api key ---
@@ -285,11 +373,10 @@ export function useSettingsState() {
       setApiKeyStatus('saving');
       setApiKeyMessage('');
       try {
-        const result = await chrome.runtime.sendMessage({
+        await sidepanelRuntimeClient.request({
           type: 'SAVE_DEEPSEEK_API_KEY',
           payload: { apiKey },
         });
-        if (!result?.ok) throw new Error(result?.error || labels.saveFailed);
         if (!chatEnabled) {
           await setChatEnabled(true);
           setChatEnabledState(true);
@@ -311,8 +398,7 @@ export function useSettingsState() {
       setApiKeyStatus('clearing');
       setApiKeyMessage('');
       try {
-        const result = await chrome.runtime.sendMessage({ type: 'CLEAR_DEEPSEEK_API_KEY' });
-        if (!result?.ok) throw new Error(result?.error || clearFailed);
+        await sidepanelRuntimeClient.request({ type: 'CLEAR_DEEPSEEK_API_KEY' });
         setApiKeyConfigured(false);
         setApiKeyInput('');
         setApiKeyStatus('success');
@@ -351,11 +437,10 @@ export function useSettingsState() {
         };
         if (openaiApiKeyInput.trim()) payload.openaiApiKey = openaiApiKeyInput.trim();
         if (geminiApiKeyInput.trim()) payload.geminiApiKey = geminiApiKeyInput.trim();
-        const result = await chrome.runtime.sendMessage({
+        const result = await sidepanelRuntimeClient.request({
           type: 'SAVE_MULTIMODAL_SETTINGS',
           payload,
         });
-        if (!result?.ok) throw new Error(result?.error || labels.saveFailed);
         syncMultimodalStatus(result as MultimodalSettingsStatus);
         setOpenaiApiKeyInput('');
         setGeminiApiKeyInput('');
@@ -374,8 +459,7 @@ export function useSettingsState() {
       setMultimodalStatus('clearing');
       setMultimodalMessage('');
       try {
-        const result = await chrome.runtime.sendMessage({ type: 'CLEAR_MULTIMODAL_SETTINGS' });
-        if (!result?.ok) throw new Error(result?.error || labels.clearFailed);
+        const result = await sidepanelRuntimeClient.request({ type: 'CLEAR_MULTIMODAL_SETTINGS' });
         syncMultimodalStatus(result as MultimodalSettingsStatus);
         setOpenaiApiKeyInput('');
         setGeminiApiKeyInput('');
@@ -397,7 +481,7 @@ export function useSettingsState() {
     });
     if (!config) return;
     bgConfigRef.current = config;
-    await chrome.runtime.sendMessage({ type: 'SAVE_BACKGROUND', payload: config });
+    await sidepanelRuntimeClient.request({ type: 'SAVE_BACKGROUND', payload: config });
   }, []);
 
   const handleBgToggle = useCallback(
@@ -496,7 +580,7 @@ export function useSettingsState() {
     setBgImageData('');
     setBgOpacity(DEFAULT_BACKGROUND_OPACITY);
     bgConfigRef.current = DEFAULT_BACKGROUND_CONFIG;
-    await chrome.runtime.sendMessage({ type: 'CLEAR_BACKGROUND' });
+    await sidepanelRuntimeClient.request({ type: 'CLEAR_BACKGROUND' });
   }, []);
 
   // --- pet ---
@@ -506,7 +590,7 @@ export function useSettingsState() {
       ...patch,
     });
     petConfigRef.current = config;
-    await chrome.runtime.sendMessage({ type: 'SAVE_PET', payload: config });
+    await sidepanelRuntimeClient.request({ type: 'SAVE_PET', payload: config });
   }, []);
 
   const handlePetToggle = useCallback(
@@ -555,14 +639,30 @@ export function useSettingsState() {
 
   // --- sync ---
   const updateSyncField = useCallback((field: string, value: string) => {
-    setSyncConfig((prev) => ({ ...prev, [field]: value }) as SyncConfig);
+    if (syncBusyRef.current) return;
+    const next = { ...syncConfigRef.current, [field]: value } as SyncConfig;
+    syncConfigRef.current = next;
+    syncFormVersionRef.current += 1;
+    setSyncConfig(next);
   }, []);
 
   const switchSyncProvider = useCallback((provider: SyncProvider) => {
-    setSyncConfig(defaultConfigForProvider(provider));
+    if (syncBusyRef.current) return;
+    const next = replaceSyncConfigProvider(
+      syncConfigRef.current,
+      defaultConfigForProvider(provider),
+    );
+    syncConfigRef.current = next;
+    syncFormVersionRef.current += 1;
+    setSyncConfig(next);
     setSyncStatus('idle');
     setSyncMessage('');
   }, []);
+
+  const captureSyncTarget = useCallback((): CapturedSyncTarget => ({
+    command: createSyncCommandTarget(syncConfigRef.current, syncRevisionRef.current),
+    formVersion: syncFormVersionRef.current,
+  }), []);
 
   // OAuth providers don't need host permissions — launchWebAuthFlow handles auth.
   // WebDAV needs an optional host permission requested per-origin.
@@ -581,123 +681,226 @@ export function useSettingsState() {
     return Boolean(config.clientId && config.clientSecret);
   }, []);
 
+  const applyCommittedSyncTarget = useCallback((config: SyncConfig, revision: number) => {
+    const next = { ...config, schemaVersion: 1 as const, revision };
+    syncConfigRef.current = next;
+    syncRevisionRef.current = revision;
+    setSyncConfig(next);
+  }, []);
+
   const runSyncAction = useCallback(
     async (
-      status: 'testing' | 'uploading' | 'downloading',
-      action: () => Promise<void>,
-      labels: { permissionDenied: string; operationFailed: string },
+      target: CapturedSyncTarget,
+      status: ActiveSyncStatus,
+      type: SyncRuntimeCommandType,
+      labels: {
+        permissionDenied: string;
+        operationFailed: string;
+        resultFailed: string;
+        configChanged: string;
+        committedWarning: string;
+      },
+      committedConfig: (result: Record<string, unknown>) => SyncConfig,
+      onSuccess: (result: Record<string, unknown>) => void,
     ) => {
-      if (!isConfigFilled(syncConfig)) return;
-      setSyncStatus(status);
-      setSyncMessage('');
-      const granted = await ensurePermission(syncConfig);
-      if (!granted) {
+      if (syncBusyRef.current || !isConfigFilled(target.command.config)) return;
+      if (
+        target.formVersion !== syncFormVersionRef.current
+        || target.command.expectedRevision !== syncRevisionRef.current
+      ) {
         setSyncStatus('error');
-        setSyncMessage(labels.permissionDenied);
+        setSyncMessage(labels.configChanged);
         return;
       }
+
+      const operationId = syncOperationRef.current + 1;
+      syncOperationRef.current = operationId;
+      syncBusyRef.current = true;
+      setActiveSyncStatus(status);
+      setSyncStatus(status);
+      setSyncMessage('');
       try {
-        await chrome.runtime.sendMessage({ type: 'SAVE_SYNC_CONFIG', payload: syncConfig });
-        await action();
-      } catch (e) {
-        setSyncStatus('error');
-        setSyncMessage((e as Error).message || labels.operationFailed);
+        const granted = await ensurePermission(target.command.config);
+        if (!granted) throw new Error(labels.permissionDenied);
+        if (
+          target.formVersion !== syncFormVersionRef.current
+          || target.command.expectedRevision !== syncRevisionRef.current
+        ) {
+          throw new Error(labels.configChanged);
+        }
+
+        const result = await settingsSyncRuntimeController.execute(type, target.command);
+        if (isRuntimeFailure(result)) {
+          const failure = result as {
+            ok: false;
+            error?: unknown;
+            code?: unknown;
+            revision?: unknown;
+            lastSyncAt?: unknown;
+            reloadConfig?: unknown;
+            effectCompleted?: unknown;
+          };
+          const mustReloadConfig = failure.code === 'sync_config_conflict'
+            || failure.code === 'sync_config_commit_indeterminate'
+            || failure.code === 'sync_operation_effect_completed_config_persist_failed';
+          if (mustReloadConfig) {
+            try {
+              const latest = await settingsSyncRuntimeController.getConfig();
+              if (isRuntimeFailure(latest)) {
+                throw new Error(latest.error ? String(latest.error) : labels.configChanged);
+              }
+              loadSyncConfigValue(latest);
+            } catch (refreshError) {
+              const original = failure.error ? String(failure.error) : labels.configChanged;
+              throw new AggregateError(
+                [failure, refreshError],
+                `${original}; ${getRuntimeErrorMessage(refreshError)}`,
+              );
+            }
+            if (failure.code === 'sync_operation_effect_completed_config_persist_failed') {
+              const detail = failure.error ? String(failure.error) : labels.resultFailed;
+              throw new CommittedRemoteSyncWarning(`${labels.committedWarning} ${detail}`);
+            }
+          } else if (failure.code === 'sync_operation_failed_after_config_commit') {
+            const revision = requireSyncRevision(failure.revision);
+            applyCommittedSyncTarget({
+              ...target.command.config,
+              lastSyncAt: requireNullableSyncTimestamp(failure.lastSyncAt),
+            } as SyncConfig, revision);
+          }
+          throw new Error(failure.error ? String(failure.error) : labels.resultFailed);
+        }
+        if (!isPlainRecord(result) || result.ok !== true) {
+          throw new Error(labels.resultFailed);
+        }
+
+        const revision = requireSyncRevision(result.revision);
+        applyCommittedSyncTarget(committedConfig(result), revision);
+        if (syncOperationRef.current === operationId) {
+          setSyncStatus('success');
+          onSuccess(result);
+        }
+      } catch (error) {
+        if (syncOperationRef.current === operationId) {
+          setSyncStatus(error instanceof CommittedRemoteSyncWarning ? 'warning' : 'error');
+          setSyncMessage(getRuntimeErrorMessage(error) || labels.operationFailed);
+        }
+      } finally {
+        if (syncOperationRef.current === operationId) {
+          syncBusyRef.current = false;
+          setActiveSyncStatus(null);
+        }
       }
     },
-    [syncConfig, ensurePermission, isConfigFilled],
+    [applyCommittedSyncTarget, ensurePermission, isConfigFilled, loadSyncConfigValue],
   );
 
   const handleAuthorizeSync = useCallback(
-    async (labels: { success: string; failed: string }) => {
-      if (!isConfigFilled(syncConfig)) return;
-      setSyncStatus('testing');
-      setSyncMessage('');
-      try {
-        const result = await chrome.runtime.sendMessage({ type: 'SYNC_AUTHORIZE', payload: syncConfig });
-        if (!result?.ok || !result.refreshToken) {
-          throw new Error(result?.error || labels.failed);
-        }
-        // Persist the refresh token immediately so a background restart before
-        // the next sync doesn't lose authorization.
-        const authorized = { ...syncConfig, refreshToken: result.refreshToken } as SyncConfig;
-        setSyncConfig(authorized);
-        await chrome.runtime.sendMessage({ type: 'SAVE_SYNC_CONFIG', payload: authorized });
-        setSyncStatus('success');
-        setSyncMessage(labels.success);
-      } catch (e) {
-        setSyncStatus('error');
-        setSyncMessage((e as Error).message || labels.failed);
-      }
+    (target: CapturedSyncTarget, labels: {
+      success: string;
+      failed: string;
+      configChanged: string;
+      committedWarning: string;
+    }) => {
+      void runSyncAction(
+        target,
+        'testing',
+        'SYNC_AUTHORIZE',
+        {
+          permissionDenied: labels.failed,
+          operationFailed: labels.failed,
+          resultFailed: labels.failed,
+          configChanged: labels.configChanged,
+          committedWarning: labels.committedWarning,
+        },
+        (result) => {
+          if (typeof result.refreshToken !== 'string' || !result.refreshToken) {
+            throw new Error(labels.failed);
+          }
+          return { ...target.command.config, refreshToken: result.refreshToken } as SyncConfig;
+        },
+        () => setSyncMessage(labels.success),
+      );
     },
-    [syncConfig, isConfigFilled],
+    [runSyncAction],
   );
 
   const handleTestSync = useCallback(
-    (labels: {
+    (target: CapturedSyncTarget, labels: {
       permissionDenied: string;
       operationFailed: string;
+      configChanged: string;
       success: string;
       failed: string;
+      committedWarning: string;
     }) => {
-      void runSyncAction('testing', async () => {
-        const result = await chrome.runtime.sendMessage({ type: 'WEBDAV_TEST', payload: syncConfig });
-        if (result?.ok) {
-          setSyncStatus('success');
-          setSyncMessage(labels.success);
-        } else {
-          throw new Error(result?.error || labels.failed);
-        }
-      }, labels);
+      void runSyncAction(
+        target,
+        'testing',
+        'WEBDAV_TEST',
+        { ...labels, resultFailed: labels.failed },
+        () => target.command.config,
+        () => setSyncMessage(labels.success),
+      );
     },
-    [runSyncAction, syncConfig],
+    [runSyncAction],
   );
 
   const handleUploadSync = useCallback(
-    (labels: {
+    (target: CapturedSyncTarget, labels: {
       permissionDenied: string;
       operationFailed: string;
+      configChanged: string;
       failed: string;
+      committedWarning: string;
       success: (counts?: SyncCounts) => string;
     }) => {
-      void runSyncAction('uploading', async () => {
-        const result = await chrome.runtime.sendMessage({ type: 'WEBDAV_UPLOAD_LOCAL' });
-        if (result?.ok) {
-          setSyncConfig((prev) => ({ ...prev, lastSyncAt: result.lastSyncAt }) as SyncConfig);
-          setSyncStatus('success');
-          setSyncMessage(labels.success(result.counts));
-        } else {
-          throw new Error(result?.error || labels.failed);
-        }
-      }, labels);
+      void runSyncAction(
+        target,
+        'uploading',
+        'WEBDAV_UPLOAD_LOCAL',
+        { ...labels, resultFailed: labels.failed },
+        (result) => ({
+          ...target.command.config,
+          lastSyncAt: requireSyncTimestamp(result.lastSyncAt),
+        } as SyncConfig),
+        (result) => setSyncMessage(labels.success(result.counts as SyncCounts | undefined)),
+      );
     },
     [runSyncAction],
   );
 
   const handleDownloadSync = useCallback(
-    (labels: {
+    (target: CapturedSyncTarget, labels: {
       permissionDenied: string;
       operationFailed: string;
+      configChanged: string;
       failed: string;
+      committedWarning: string;
       success: (counts?: SyncCounts) => string;
     }) => {
-      void runSyncAction('downloading', async () => {
-        const result = await chrome.runtime.sendMessage({ type: 'WEBDAV_DOWNLOAD_REMOTE' });
-        if (result?.ok) {
-          setSyncConfig((prev) => ({ ...prev, lastSyncAt: result.lastSyncAt }) as SyncConfig);
-          setSyncStatus('success');
-          setSyncMessage(labels.success(result.counts));
-          setMemoryCount(result.counts?.memories ?? 0);
-        } else {
-          throw new Error(result?.error || labels.failed);
-        }
-      }, labels);
+      void runSyncAction(
+        target,
+        'downloading',
+        'WEBDAV_DOWNLOAD_REMOTE',
+        { ...labels, resultFailed: labels.failed },
+        (result) => ({
+          ...target.command.config,
+          lastSyncAt: requireSyncTimestamp(result.lastSyncAt),
+        } as SyncConfig),
+        (result) => {
+          const counts = result.counts as SyncCounts | undefined;
+          setSyncMessage(labels.success(counts));
+          setMemoryCount(counts?.memories ?? 0);
+        },
+      );
     },
     [runSyncAction],
   );
 
   // --- data ---
   const handleExport = useCallback(async () => {
-    const memories: Memory[] = await chrome.runtime.sendMessage({ type: 'GET_MEMORIES' });
+    const memories = await libraryController.getMemories();
     const blob = new Blob([JSON.stringify(memories, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -724,12 +927,16 @@ export function useSettingsState() {
           if (!Array.isArray(parsed)) {
             throw new Error(labels.arrayError);
           }
-          const memories = parsed.map((mem, index) => validateImportedMemory(mem, `memories[${index}]`));
-          for (const memory of memories) {
-            await chrome.runtime.sendMessage({ type: 'SAVE_MEMORY', payload: memory });
+          const result = await sidepanelRuntimeClient.request({
+            type: 'IMPORT_MEMORY_DRAFTS',
+            payload: { memories: parsed },
+          });
+          if (!result?.ok) {
+            throw new Error(result?.error || labels.jsonError);
           }
-          setMemoryCount((c) => c + memories.length);
-          onResult?.({ ok: true, imported: memories.length });
+          const imported = typeof result.count === 'number' ? result.count : parsed.length;
+          setMemoryCount((count) => count + imported);
+          onResult?.({ ok: true, imported });
         } catch (error) {
           onResult?.({ ok: false, error: error instanceof Error ? error.message : labels.jsonError });
         }
@@ -740,9 +947,13 @@ export function useSettingsState() {
   );
 
   const handleClearAllMemories = useCallback(async () => {
-    const memories: Memory[] = await chrome.runtime.sendMessage({ type: 'GET_MEMORIES' });
+    const memories = await libraryController.getMemories();
     for (const mem of memories) {
-      await chrome.runtime.sendMessage({ type: 'DELETE_MEMORY', payload: { id: mem.id } });
+      const id = mem.id;
+      if (typeof id !== 'number' || !Number.isSafeInteger(id)) {
+        throw new Error('Memory id is missing.');
+      }
+      await libraryController.deleteMemory(id);
     }
     setMemoryCount(0);
   }, []);
@@ -756,7 +967,9 @@ export function useSettingsState() {
     chatEnabled,
     handleModelTypeChange,
     handleChatToggle,
-    floatingChatEnabled,
+    floatingChatEnabled: floatingChatRuntimeState?.kind === 'ready',
+    floatingChatRuntimeState,
+    floatingChatMessage,
     handleFloatingChatToggle,
     // deepseek api key
     apiKeyConfigured,
@@ -811,6 +1024,7 @@ export function useSettingsState() {
     handlePetMotionToggle,
     // sync
     syncConfig,
+    captureSyncTarget,
     updateSyncField,
     switchSyncProvider,
     syncRedirectUri: getOptionalRedirectUri(),
@@ -828,4 +1042,4 @@ export function useSettingsState() {
   };
 }
 
-export type SettingsState = ReturnType<typeof useSettingsState>;
+export type SettingsState = ReturnType<typeof useSettingsController>;

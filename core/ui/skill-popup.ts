@@ -17,6 +17,7 @@ let filtered: SkillPopupItem[] = [];
 let activeIdx = 0;
 let textarea: HTMLTextAreaElement | null = null;
 let copy: SkillPopupCopy = DEFAULT_COPY;
+let textareaObserver: MutationObserver | null = null;
 
 let initialized = false;
 
@@ -32,29 +33,46 @@ export function initSkillPopup(initialSkills: SkillPopupItem[], nextCopy: Partia
   document.addEventListener('mousedown', onClickOutside);
 }
 
+export function stopSkillPopup() {
+  if (!initialized) return;
+  initialized = false;
+  textareaObserver?.disconnect();
+  textareaObserver = null;
+  textarea?.removeEventListener('input', onInput);
+  textarea = null;
+  document.removeEventListener('keydown', onKeydown, true);
+  document.removeEventListener('mousedown', onClickOutside);
+  popupEl?.remove();
+  popupEl = null;
+  document.getElementById('dpp-skill-popup-css')?.remove();
+  skills = [];
+  filtered = [];
+  activeIdx = 0;
+  copy = DEFAULT_COPY;
+}
+
 function watchTextarea() {
   tryAttach();
-  const startObserver = (root: Node) => {
-    new MutationObserver(() => {
-      if (!textarea || !document.contains(textarea)) {
-        textarea = null;
-        tryAttach();
-      }
-    }).observe(root, { childList: true, subtree: true });
-  };
+  textareaObserver?.disconnect();
+  textareaObserver = new MutationObserver(() => {
+    if (!textarea || !document.contains(textarea)) {
+      textarea?.removeEventListener('input', onInput);
+      textarea = null;
+      tryAttach();
+    }
+  });
 
   // Main-world scripts can run before <body> exists. MutationObserver.observe(null) throws
   // "parameter 1 is not of type Node" and can abort the rest of the content pipeline.
-  if (document.body) {
-    startObserver(document.body);
-    return;
-  }
-  if (document.documentElement) {
-    startObserver(document.documentElement);
+  const root = document.body ?? document.documentElement;
+  if (root) {
+    textareaObserver.observe(root, { childList: true, subtree: true });
     return;
   }
   document.addEventListener('DOMContentLoaded', () => {
-    if (document.body) startObserver(document.body);
+    if (initialized && document.body) {
+      textareaObserver?.observe(document.body, { childList: true, subtree: true });
+    }
   }, { once: true });
 }
 
